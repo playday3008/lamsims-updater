@@ -124,6 +124,10 @@ namespace sims4_updater.Models
             Sims4DLCs.Add(new Sims4DLC { Code = "SP81", Name = "The Sims 4 Prairie Dreams Set", Url = "https://minio.lamonski.pl/sims4dlcs/My_Private_Stuff_SP81_Prairie_Dreams_Kit.zip", Installed = false });
             Sims4DLCs.Add(new Sims4DLC { Code = "SP75", Name = "The Sims 4 Wonderland Playroom Kit", Url = "https://minio.lamonski.pl/sims4dlcs/My_Private_Stuff_SP75_Wonderland_Playroom_Kit.zip", Installed = false });
             Sims4DLCs.Add(new Sims4DLC { Code = "SP82", Name = "The Sims 4 Yard Charm (Creator) Kit", Url = "https://minio.lamonski.pl/sims4dlcs/My_Private_Stuff_SP82_Yard_Charm_Kit.zip", Installed = false });
+            Sims4DLCs.Add(new Sims4DLC { Code = "SP78", Name = "The Sims 4 Lady Bridgerton’s Masquerade Ball Fashion Kit", Url = "https://minio.lamonski.pl/sims4dlcs/My_Private_Stuff_SP78_Lady Bridgerton’s Masquerade Ball Fashion Kit.zip", Installed = false });
+            Sims4DLCs.Add(new Sims4DLC { Code = "SP79", Name = "The Sims 4 Lady Bridgerton’s Masquerade Ballroom Kit", Url = "https://minio.lamonski.pl/sims4dlcs/My_Private_Stuff_SP79_Lady Bridgerton’s Masquerade Ballroom Kit.zip", Installed = false });
+
+
         }
 
 

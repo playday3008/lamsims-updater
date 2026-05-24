@@ -885,7 +885,7 @@ namespace sims4_updater.Models
             ; if you want to disable a DLC - add ; before IID
 
             [config]
-            CNT=147
+            CNT=155
 
             NAM1=Life of the Party Digital Content
             IID1=SIMS4.OFF.SOLP.0x0000000000008E14
@@ -1553,221 +1553,270 @@ namespace sims4_updater.Models
             GRP111=THESIMS4PC
             TYP111=DEFAULT
 
-            NAM112=The Sims™ 4 Life & Death
-            IID112=SIMS4.OFF.SOLP.0x0000000000069DFF
-            ETG112=EP17_LifeAndDeath_0x0000000000069DFF:433663
+            NAM112=The Sims™ 4 Life & Death Expansion Pack
+            IID112=SIMS4.OFF.SOLP.0x0000000000065F8E
+            ETG112=EP17_LifeAndDeath_0x0000000000065F8E:417678
             GRP112=THESIMS4PC
             TYP112=DEFAULT
 
-            NAM113=The Sims™ 4 Sweet Slumber Party Kit
-            IID113=SIMS4.OFF.SOLP.0x000000000006E7DF
-            ETG113=SP56_SweetSlumberPartyKit_0x000000000006E7DF:452575
+            NAM113=The Sims™ 4 Life & Death Expansion Pack
+            IID113=SIMS4.OFF.SOLP.0x0000000000069DFF
+            ETG113=EP17_PrePurchase_0x0000000000069DFF:433663
             GRP113=THESIMS4PC
             TYP113=DEFAULT
 
-            NAM114=The Sims™ 4 Cozy Kitsch Kit
-            IID114=SIMS4.OFF.SOLP.0x000000000006E7E0
-            ETG114=SP57_CozyKitschKit_0x000000000006E7E0:452576
+            NAM114=The Sims™ 4 Macabre Mementos Digital Content
+            IID114=SIMS4.OFF.SOLP.0x0000000000069D25
+            ETG114=EP17_IncentiveItems_0x0000000000069D25:433445
             GRP114=THESIMS4PC
             TYP114=DEFAULT
 
-            NAM115=The Sims™ 4 Comfy Gamer Kit
-            IID115=SIMS4.OFF.SOLP.0x000000000006E828
-            ETG115=SP58_CozyGamerClutter_0x000000000006E828:452648
+            NAM115=The Sims™ 4 Sweet Slumber Party Kit
+            IID115=SIMS4.OFF.SOLP.0x000000000006E7DF
+            ETG115=SP56_SweetSlumberPartyKit_0x000000000006E7DF:452575
             GRP115=THESIMS4PC
             TYP115=DEFAULT
 
-            NAM116=The Sims™ 4 Secret Sanctuary Kit
-            IID116=SIMS4.OFF.SOLP.0x000000000006F575
-            ETG116=SP59_SecretSanctuaryKit_0x000000000006F575:456053
+            NAM116=The Sims™ 4 Cozy Kitsch Kit
+            IID116=SIMS4.OFF.SOLP.0x000000000006E7E0
+            ETG116=SP57_CozyKitschKit_0x000000000006E7E0:452576
             GRP116=THESIMS4PC
             TYP116=DEFAULT
 
-            NAM117=The Sims™ 4 Casanova Cave Kit
-            IID117=SIMS4.OFF.SOLP.0x000000000006F576
-            ETG117=SP60_CasanovaCaveKit_0x000000000006F576:456054
+            NAM117=The Sims™ 4 Comfy Gamer Kit
+            IID117=SIMS4.OFF.SOLP.0x000000000006E828
+            ETG117=SP58_CozyGamerClutter_0x000000000006E828:452648
             GRP117=THESIMS4PC
             TYP117=DEFAULT
 
-            NAM118=The Sims™ 4 Refined Living Room Kit
-            IID118=SIMS4.OFF.SOLP.0x0000000000070A7F
-            ETG118=SP61_RefinedLivingRoom_0x0000000000070A7F:461439
+            NAM118=The Sims™ 4 Secret Sanctuary Kit
+            IID118=SIMS4.OFF.SOLP.0x000000000006F575
+            ETG118=SP59_SecretSanctuaryKit_0x000000000006F575:456053
             GRP118=THESIMS4PC
             TYP118=DEFAULT
 
-            NAM119=The Sims™ 4 Business Chic Kit
-            IID119=SIMS4.OFF.SOLP.0x0000000000070A80
-            ETG119=SP62_BusinessChic_0x0000000000070A80:461440
+            NAM119=The Sims™ 4 Casanova Cave Kit
+            IID119=SIMS4.OFF.SOLP.0x000000000006F576
+            ETG119=SP60_CasanovaCaveKit_0x000000000006F576:456054
             GRP119=THESIMS4PC
             TYP119=DEFAULT
 
-            NAM120=The Sims™ 4 Businesses & Hobbies (normal)
-            IID120=SIMS4.OFF.SOLP.0x0000000000064E47
-            ETG120=EP18_BusinessesAndHobbies_0x0000000000064E47:413255
+            NAM120=The Sims™ 4 Refined Living Room Kit
+            IID120=SIMS4.OFF.SOLP.0x0000000000070A7F
+            ETG120=SP61_RefinedLivingRoom_0x0000000000070A7F:461439
             GRP120=THESIMS4PC
             TYP120=DEFAULT
 
-            NAM121=The Sims™ 4 Businesses & Hobbies (preorder)
-            IID121=SIMS4.OFF.SOLP.0x000000000006A9D8
-            ETG121=EP18_PrePurchase_0x000000000006A9D8:436696
+            NAM121=The Sims™ 4 Business Chic Kit
+            IID121=SIMS4.OFF.SOLP.0x0000000000070A80
+            ETG121=SP62_BusinessChic_0x0000000000070A80:461440
             GRP121=THESIMS4PC
             TYP121=DEFAULT
 
-            NAM122=The Sims™ 4 Businesses & Hobbies (bonuses only)
-            IID122=SIMS4.OFF.SOLP.0x000000000006A9D7
-            ETG122=EP18_IncentiveItems_0x000000000006A9D7:436695
+            NAM122=The Sims™ 4 Businesses & Hobbies (normal)
+            IID122=SIMS4.OFF.SOLP.0x0000000000064E47
+            ETG122=EP18_BusinessesAndHobbies_0x0000000000064E47:413255
             GRP122=THESIMS4PC
             TYP122=DEFAULT
 
-            NAM123=The Sims™ 4 Sleek Bathroom Kit
-            IID123=SIMS4.OFF.SOLP.0x00000000000718AF
-            ETG123=SP63_SleekBathroomKit_0x00000000000718AF:465071
+            NAM123=The Sims™ 4 Businesses & Hobbies (preorder)
+            IID123=SIMS4.OFF.SOLP.0x000000000006A9D8
+            ETG123=EP18_PrePurchase_0x000000000006A9D8:436696
             GRP123=THESIMS4PC
             TYP123=DEFAULT
 
-            NAM124=The Sims™ 4 Sweet Allure Kit
-            IID124=SIMS4.OFF.SOLP.0x00000000000718B0
-            ETG124=SP64_SweetAllureKit_0x00000000000718B0:465072
+            NAM124=The Sims™ 4 Businesses & Hobbies (bonuses only)
+            IID124=SIMS4.OFF.SOLP.0x000000000006A9D7
+            ETG124=EP18_IncentiveItems_0x000000000006A9D7:436695
             GRP124=THESIMS4PC
             TYP124=DEFAULT
 
-            NAM125=The Sims™ 4 Restoration Workshop Kit
-            IID125=SIMS4.OFF.SOLP.0x0000000000073489
-            ETG125=SP65_RestorationWorkshopKit_0x0000000000073489:472201
+            NAM125=The Sims™ 4 Sleek Bathroom Kit
+            IID125=SIMS4.OFF.SOLP.0x00000000000718AF
+            ETG125=SP63_SleekBathroomKit_0x00000000000718AF:465071
             GRP125=THESIMS4PC
             TYP125=DEFAULT
 
-            NAM126=The Sims™ 4 Kitchen Clutter Kit
-            IID126=SIMS4.OFF.SOLP.0x000000000007348B
-            ETG126=SP67_KitchenClutterKit_0x000000000007348B:472203
+            NAM126=The Sims™ 4 Sweet Allure Kit
+            IID126=SIMS4.OFF.SOLP.0x00000000000718B0
+            ETG126=SP64_SweetAllureKit_0x00000000000718B0:465072
             GRP126=THESIMS4PC
             TYP126=DEFAULT
 
-            NAM127=The Sims™ 4 Golden Years Kit
-            IID127=SIMS4.OFF.SOLP.0x000000000007348A
-            ETG127=SP66_GoldenYearsKit_0x000000000007348A:472202
+            NAM127=The Sims™ 4 Restoration Workshop Kit
+            IID127=SIMS4.OFF.SOLP.0x0000000000073489
+            ETG127=SP65_RestorationWorkshopKit_0x0000000000073489:472201
             GRP127=THESIMS4PC
             TYP127=DEFAULT
 
-            NAM128=The Sims™ 4 Fairy Garden Digital Content
-            IID128=SIMS4.OFF.SOLP.0x0000000000073122
-            ETG128=EP19_IncentiveItems_0x0000000000073122:471330
+            NAM128=The Sims™ 4 Kitchen Clutter Kit
+            IID128=SIMS4.OFF.SOLP.0x000000000007348B
+            ETG128=SP67_KitchenClutterKit_0x000000000007348B:472203
             GRP128=THESIMS4PC
             TYP128=DEFAULT
 
-            NAM129=The Sims™ 4 Enchanted by Nature Expansion Pack
-            IID129=SIMS4.OFF.SOLP.0x0000000000073123
-            ETG129=EP19_PrePurchase_0x0000000000073123:471331
+            NAM129=The Sims™ 4 Golden Years Kit
+            IID129=SIMS4.OFF.SOLP.0x000000000007348A
+            ETG129=SP66_GoldenYearsKit_0x000000000007348A:472202
             GRP129=THESIMS4PC
             TYP129=DEFAULT
 
-            NAM130=The Sims™ 4 Essential Glam Kit
-            IID130=SIMS4.OFF.SOLP.0x0000000000076F8B
-            ETG130=SP72_EssentialGlam_0x0000000000076F8B:487307
+            NAM130=The Sims™ 4 Fairy Garden Digital Content
+            IID130=SIMS4.OFF.SOLP.0x000000000006FE41
+            ETG130=EP19_NatureExpansionPack_0x000000000006FE41:458305
             GRP130=THESIMS4PC
             TYP130=DEFAULT
 
-            NAM131=The Sims™ 4 Grange Mudroom Kit
-            IID131=SIMS4.OFF.SOLP.0x0000000000076F8A
-            ETG131=SP71_GrangeMudroom_0x0000000000076F8A:487306
+            NAM131=The Sims™ 4 Fairy Garden Digital Content
+            IID131=SIMS4.OFF.SOLP.0x0000000000073122
+            ETG131=EP19_IncentiveItems_0x0000000000073122:471330
             GRP131=THESIMS4PC
             TYP131=DEFAULT
 
-            NAM132=The Sims™ 4  Warm & Cozy Digital Content
-            IID132=SIMS4.OFF.SOLP.0x000000000007789A
-            ETG132=EP20_IncentiveItems_0x000000000007789A:489626
+            NAM132=The Sims™ 4 Enchanted by Nature Expansion Pack
+            IID132=SIMS4.OFF.SOLP.0x0000000000073123
+            ETG132=EP19_PrePurchase_0x0000000000073123:471331
             GRP132=THESIMS4PC
             TYP132=DEFAULT
 
-            NAM133=The Sims™ 4 Adventure Awaits Expansion Pack
-            IID133=SIMS4.OFF.SOLP.0x000000000007789B
-            ETG133=EP20_PrePurchase_0x000000000007789B:489627
+            NAM133=The Sims™ 4 Essential Glam Kit
+            IID133=SIMS4.OFF.SOLP.0x0000000000076F8B
+            ETG133=SP72_EssentialGlam_0x0000000000076F8B:487307
             GRP133=THESIMS4PC
             TYP133=DEFAULT
 
-            NAM134=The Sims™ 4 Autumn Apparel Kit
-            IID134=SIMS4.OFF.SOLP.0x0000000000078094
-            ETG134=SP69_AutumnApparel_0x0000000000078094:491668
+            NAM134=The Sims™ 4 Grange Mudroom Kit
+            IID134=SIMS4.OFF.SOLP.0x0000000000076F8A
+            ETG134=SP71_GrangeMudroom_0x0000000000076F8A:487306
             GRP134=THESIMS4PC
             TYP134=DEFAULT
 
-            NAM135=The Sims™ 4 Modern Retreat Kit
-            IID135=SIMS4.OFF.SOLP.0x000000000007D6AF
-            ETG135=SP73_ModernRetreat_0x000000000007D6AF:513711
+            NAM135=The Sims™ 4  Adventure Awaits Expansion Pack
+            IID135=SIMS4.OFF.SOLP.0x0000000000076EDE
+            ETG135=EP20_AdventureAwaits_0x0000000000076EDE:487134
             GRP135=THESIMS4PC
             TYP135=DEFAULT
 
-            NAM136=The Sims™ 4 Garden to Table Kit
-            IID136=SIMS4.OFF.SOLP.0x000000000007D390
-            ETG136=SP74_GardentoTable_0x000000000007D390:512912
+            NAM136=The Sims™ 4  Warm & Cozy Digital Content
+            IID136=SIMS4.OFF.SOLP.0x000000000007789A
+            ETG136=EP20_IncentiveItems_0x000000000007789A:489626
             GRP136=THESIMS4PC
             TYP136=DEFAULT
 
-            NAM137=The Sims™ 4 SpongeBob’s House Kit
-            IID137=SIMS4.OFF.SOLP.0x000000000007AD3F
-            ETG137=SP68_SpongeBobsHouse_0x000000000007AD3F:503103
+            NAM137=The Sims™ 4 Adventure Awaits Expansion Pack
+            IID137=SIMS4.OFF.SOLP.0x000000000007789B
+            ETG137=EP20_PrePurchase_0x000000000007789B:489627
             GRP137=THESIMS4PC
             TYP137=DEFAULT
 
-            NAM138=The Sims™ 4 SpongeBob’s House Kit Bonus Items
-            IID138=SIMS4.OFF.SOLP.0x000000000007B590
-            ETG138=SP68_BonusItems_0x000000000007B590:505232
+            NAM138=The Sims™ 4 Autumn Apparel Kit
+            IID138=SIMS4.OFF.SOLP.0x0000000000078094
+            ETG138=SP69_AutumnApparel_0x0000000000078094:491668
             GRP138=THESIMS4PC
             TYP138=DEFAULT
 
-            NAM139=The Sims™ 4 SpongeBob Kid’s Room Kit
-            IID139=SIMS4.OFF.SOLP.0x000000000007AD40
-            ETG139=SP70_SpongeBobKidsRoom_0x000000000007AD40:503104
+            NAM139=The Sims™ 4 Modern Retreat Kit
+            IID139=SIMS4.OFF.SOLP.0x000000000007D6AF
+            ETG139=SP73_ModernRetreat_0x000000000007D6AF:513711
             GRP139=THESIMS4PC
             TYP139=DEFAULT
 
-            NAM140=The Sims™ 4 SpongeBob Kid’s Room Kit Bonus Items
-            IID140=SIMS4.OFF.SOLP.0x000000000007B5A4
-            ETG140=SP70_BonusItems_0x000000000007B5A4:505252
+            NAM140=The Sims™ 4 Garden to Table Kit
+            IID140=SIMS4.OFF.SOLP.0x000000000007D390
+            ETG140=SP74_GardentoTable_0x000000000007D390:512912
             GRP140=THESIMS4PC
             TYP140=DEFAULT
 
-            NAM141=The Sims™ 4 Prairie Dreams Kit
-            IID141=SIMS4.OFF.SOLP.0x000000000007EFF9
-            ETG141=SP81_PrairieDreams_0x000000000007EFF9:520185
+            NAM141=The Sims™ 4 SpongeBob’s House Kit
+            IID141=SIMS4.OFF.SOLP.0x000000000007AD3F
+            ETG141=SP68_SpongeBobsHouse_0x000000000007AD3F:503103
             GRP141=THESIMS4PC
             TYP141=DEFAULT
 
-            NAM142=The Sims™ 4  Silver Screen Style Kit
-            IID142=SIMS4.OFF.SOLP.0x000000000007F617
-            ETG142=SP76_SilverScreenStyle_0x000000000007F617:521751
+            NAM142=The Sims™ 4 SpongeBob’s House Kit Bonus Items
+            IID142=SIMS4.OFF.SOLP.0x000000000007B590
+            ETG142=SP68_BonusItems_0x000000000007B590:505232
             GRP142=THESIMS4PC
             TYP142=DEFAULT
 
-            NAM143=The Sims™ 4 Tea Time Solarium Kit
-            IID143=SIMS4.OFF.SOLP.0x000000000007F618
-            ETG143=SP77_TeaTimeSolarium_0x000000000007F618:521752
+            NAM143=The Sims™ 4 SpongeBob Kid’s Room Kit
+            IID143=SIMS4.OFF.SOLP.0x000000000007AD40
+            ETG143=SP70_SpongeBobKidsRoom_0x000000000007AD40:503104
             GRP143=THESIMS4PC
             TYP143=DEFAULT
 
-            NAM144=The Sims™ 4  Regal Treasures Digital Content
-            IID144=SIMS4.OFF.SOLP.0x000000000007B9F0
-            ETG144=EP21_IncentiveItems_0x000000000007B9F0:506352
+            NAM144=The Sims™ 4 SpongeBob Kid’s Room Kit Bonus Items
+            IID144=SIMS4.OFF.SOLP.0x000000000007B5A4
+            ETG144=SP70_BonusItems_0x000000000007B5A4:505252
             GRP144=THESIMS4PC
             TYP144=DEFAULT
 
-            NAM145=The Sims™ 4 Royalty & Legacy Expansion Pack
-            IID145=SIMS4.OFF.SOLP.0x000000000007B9F1
-            ETG145=EP21_PrePurchase_0x000000000007B9F1:506353
+            NAM145=The Sims™ 4 Prairie Dreams Kit
+            IID145=SIMS4.OFF.SOLP.0x000000000007EFF9
+            ETG145=SP81_PrairieDreams_0x000000000007EFF9:520185
             GRP145=THESIMS4PC
             TYP145=DEFAULT
-            
-            NAM146=The Sims™ 4 Wonderland Playroom Kit
-            IID146=SIMS4.OFF.SOLP.0x000000000007F616
-            ETG146=SP75_WonderlandPlayroom_0x000000000007F616:521750
+
+            NAM146=The Sims™ 4 Royalty & Legacy Grand Bundle
+            IID146=SIMS4.OFF.SOLP.0x0000000000077ECC
+            ETG146=EP21_RoyaltyAndLegacy_0x0000000000077ECC:491212
             GRP146=THESIMS4PC
             TYP146=DEFAULT
 
-            NAM147=The Sims™ 4 Yard Charm (Creator) Kit
-            IID147=SIMS4.OFF.SOLP.0x00000000000810FE
-            ETG147=SP82_YardCharm_0x00000000000810FE:528638
+            NAM147=The Sims™ 4 Regal Treasures Digital Content
+            IID147=SIMS4.OFF.SOLP.0x000000000007B9F0
+            ETG147=EP21_IncentiveItems_0x000000000007B9F0:506352
             GRP147=THESIMS4PC
             TYP147=DEFAULT
+
+            NAM148=The Sims™ 4 Royalty & Legacy Grand Bundle
+            IID148=SIMS4.OFF.SOLP.0x000000000007B9F1
+            ETG148=EP21_PrePurchase_0x000000000007B9F1:506353
+            GRP148=THESIMS4PC
+            TYP148=DEFAULT
+
+            NAM149=The Sims™ 4 Silver Screen Style Kit
+            IID149=SIMS4.OFF.SOLP.0x000000000007F617
+            ETG149=SP76_SilverScreenStyle_0x000000000007F617:521751
+            GRP149=THESIMS4PC
+            TYP149=DEFAULT
+
+            NAM150=The Sims™ 4 Tea Time Solarium Kit
+            IID150=SIMS4.OFF.SOLP.0x000000000007F618
+            ETG150=SP77_TeaTimeSolarium_0x000000000007F618:521752
+            GRP150=THESIMS4PC
+            TYP150=DEFAULT
+
+            NAM151=The Sims™ 4 Wonderland Playroom Kit
+            IID151=SIMS4.OFF.SOLP.0x000000000007F616
+            ETG151=SP75_WonderlandPlayroom_0x000000000007F616:521750
+            GRP151=THESIMS4PC
+            TYP151=DEFAULT
+
+            NAM152=The Sims™ 4 Yard Charm (Creator) Kit
+            IID152=SIMS4.OFF.SOLP.0x00000000000810FE
+            ETG152=SP82_YardCharm_0x00000000000810FE:528638
+            GRP152=THESIMS4PC
+            TYP152=DEFAULT
+
+            NAM153=The Sims™ 4 Lady Bridgerton’s Masquerade Ballroom Kit
+            IID153=SIMS4.OFF.SOLP.0x0000000000081DFE
+            ETG153=SP79_LadyBMasqBallroomKit_0x0000000000081DFE:531966
+            GRP153=THESIMS4PC
+            TYP153=DEFAULT
+
+            NAM154=The Sims™ 4 Lady Bridgerton’s Masquerade Ball Digital Content
+            IID154=SIMS4.OFF.SOLP.0x000000000008200E
+            ETG154=SP79_BonusItems_0x000000000008200E:532494
+            GRP154=THESIMS4PC
+            TYP154=DEFAULT
+
+            NAM155=The Sims™ 4 Lady Bridgerton’s Masquerade Ball Fashion Kit
+            IID155=SIMS4.OFF.SOLP.0x0000000000081DFD
+            ETG155=SP78_LadyBMasqBallFashionKit_0x0000000000081DFD:531965
+            GRP155=THESIMS4PC
+            TYP155=DEFAULT
+            
             
             """;
 
