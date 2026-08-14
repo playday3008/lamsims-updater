@@ -1,0 +1,301 @@
+using System.Collections.Concurrent;
+using System.Runtime.ExceptionServices;
+using Microsoft.Win32.SafeHandles;
+
+namespace LamSims.Core.Downloading;
+
+public sealed class SizeMismatchException : Exception
+{
+    public SizeMismatchException(long expectedSize, long actualSize)
+        : base($"The catalog lists {expectedSize} bytes but the server reports {actualSize}.")
+    {
+        ExpectedSize = expectedSize;
+        ActualSize = actualSize;
+    }
+
+    public long ExpectedSize { get; }
+    public long ActualSize { get; }
+}
+
+/// <summary>
+/// Downloads one archive over several connections, resuming from a sidecar when one
+/// exists, and gates completion on SHA-256. One archive downloads at a time; the
+/// connection budget belongs to that archive.
+/// </summary>
+public sealed class SegmentedDownloader
+{
+    private readonly HttpClient _client;
+    private readonly DownloadPaths _paths;
+    private readonly DownloadOptions _options;
+    private readonly RetryOptions _retry;
+    private readonly IDelayProvider _delay;
+
+    public SegmentedDownloader(
+        HttpClient client, DownloadPaths paths, DownloadOptions options, RetryOptions retry, IDelayProvider delay)
+    {
+        _client = client;
+        _paths = paths;
+        _options = options;
+        _retry = retry;
+        _delay = delay;
+    }
+
+    public async Task<DownloadResult> DownloadAsync(
+        DownloadRequest request, IProgress<DownloadProgress>? progress, CancellationToken ct)
+    {
+        var state = new PartStateStore(_paths.StateFile(request.Code));
+
+        try
+        {
+            _paths.EnsureCreated();
+
+            // Only the bytes not already on disk need room. Charging for the whole archive
+            // would refuse a resume that is nearly finished on a disk with little left, even
+            // though those bytes are already written. Checked before any request goes out, so
+            // a hopeless download costs nothing.
+            var partFile = _paths.PartFile(request.Code);
+            var alreadyOnDisk = File.Exists(partFile) ? new FileInfo(partFile).Length : 0;
+            DiskSpace.EnsureAvailable(_paths.Root, request.Size - Math.Min(alreadyOnDisk, request.Size));
+
+            var (mirrors, rangeLess) = await ProbeMirrorsAsync(request, ct);
+
+            // A ranged mirror is always preferred; the fallback runs only when no mirror
+            // honours ranges at all.
+            if (mirrors.Count == 0)
+                return await new SingleStreamDownloader(_client, _paths, _retry, _delay)
+                    .DownloadAsync(request, rangeLess[0], progress, ct);
+
+            var chunks = ChunkPlan.Create(request.Size, _options.ChunkSize);
+
+            // Carried-over completions keep the mirror they were attributed to. The sidecar
+            // is read once here and never re-read, so the two views cannot disagree.
+            var carried = ResumableChunks(state, request, mirrors, chunks.Count);
+            var resumable = carried.Select(c => c.Index).ToHashSet();
+
+            var pending = chunks.Where(c => !resumable.Contains(c.Index)).ToList();
+            var completedBytes = chunks.Where(c => resumable.Contains(c.Index)).Sum(c => c.Length);
+
+            var tracker = new ProgressTracker(request.Code, request.Size, completedBytes);
+            Preallocate(partFile, request.Size);
+
+            var done = carried.ToDictionary(c => c.Index);
+
+            using (var handle = File.OpenHandle(
+                partFile, FileMode.Open, FileAccess.Write, FileShare.ReadWrite, FileOptions.Asynchronous))
+            {
+                await RunWorkersAsync(request, mirrors, pending, handle, state, done, tracker, progress, ct);
+            }
+
+            return await new ArchiveFinalizer(_paths)
+                .FinalizeAsync(request.Code, request.Sha256, state, usedSingleStream: false, ct);
+        }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested)
+        {
+            // The partial file and its sidecar are retained so the transfer resumes rather
+            // than restarting. The filter keeps an OperationCanceledException the caller did
+            // not ask for out of this path, where it would read as a pause.
+            return DownloadResult.Cancelled();
+        }
+        catch (Exception e) when (e is HttpRequestException or IOException
+                                       or UnauthorizedAccessException
+                                       or SizeMismatchException or ValidatorMismatchException)
+        {
+            // UnauthorizedAccessException does not derive from IOException, and every
+            // filesystem call here can raise it — a read-only download root, an SELinux
+            // denial, a file held by a scanner. This method always returns a DownloadResult.
+            return DownloadResult.Failed(e.Message);
+        }
+    }
+
+    private async Task<(IReadOnlyList<MirrorSource> Ranged, IReadOnlyList<Uri> RangeLess)> ProbeMirrorsAsync(
+        DownloadRequest request, CancellationToken ct)
+    {
+        var probe = new RangeProbe(_client, _retry.HeaderTimeout);
+        var ranged = new List<MirrorSource>();
+        var rangeLess = new List<Uri>();
+        Exception? lastError = null;
+
+        foreach (var url in request.Urls)
+        {
+            try
+            {
+                var result = await probe.ProbeAsync(url, ct);
+
+                if (result.TotalSize != request.Size)
+                    throw new SizeMismatchException(request.Size, result.TotalSize);
+
+                if (result.RangeSupport == RangeSupport.Supported)
+                    ranged.Add(new MirrorSource(url, result.Validator));
+                else
+                    rangeLess.Add(url);
+            }
+            catch (Exception e) when (e is HttpRequestException or IOException)
+            {
+                lastError = e;
+            }
+        }
+
+        if (ranged.Count == 0 && rangeLess.Count == 0)
+            throw lastError ?? new HttpRequestException($"No mirror for {request.Code} could be reached.");
+
+        return (ranged, rangeLess);
+    }
+
+    /// <summary>
+    /// Which chunks may be trusted from a previous run, with the mirror each was attributed
+    /// to. A sidecar that is absent, unreadable, structurally inconsistent, or describes a
+    /// different download yields none. Otherwise each completed chunk survives only when the
+    /// mirror that served it is still present and still reports the same validator, so a
+    /// changed entity invalidates that mirror's work and nobody else's.
+    /// </summary>
+    private IReadOnlyList<CompletedChunk> ResumableChunks(
+        PartStateStore store, DownloadRequest request, IReadOnlyList<MirrorSource> mirrors,
+        int chunkCount)
+    {
+        // A sidecar whose partial file is absent, or the wrong length, describes chunks that
+        // are not on disk. Preallocation would then zero-fill the gap and those chunks would
+        // be skipped as complete. Checked before Preallocate runs, which is what makes the
+        // length comparison meaningful.
+        var partFile = _paths.PartFile(request.Code);
+        if (!File.Exists(partFile) || new FileInfo(partFile).Length != request.Size)
+            return Array.Empty<CompletedChunk>();
+
+        var saved = store.TryLoad();
+
+        if (saved is null
+            || saved.Code != request.Code
+            || saved.TotalSize != request.Size
+            || saved.ChunkSize != _options.ChunkSize
+            || !string.Equals(saved.ExpectedSha256, request.Sha256, StringComparison.OrdinalIgnoreCase))
+        {
+            return Array.Empty<CompletedChunk>();
+        }
+
+        // The sidecar is untrusted input: it is a file on disk that anything may have
+        // written. An index outside the plan or repeated twice makes the completed set
+        // incoherent, and reading it as a dictionary would throw rather than resume. Any such
+        // sidecar is treated as absent, which costs a restart and never a wrong result.
+        var indices = saved.CompletedChunks.Select(c => c.Index).ToArray();
+        if (indices.Any(i => i < 0 || i >= chunkCount) || indices.Distinct().Count() != indices.Length)
+            return Array.Empty<CompletedChunk>();
+
+        var trustedMirrors = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var mirror in mirrors)
+        {
+            var previous = saved.Mirrors.FirstOrDefault(m => m.Url == mirror.Url.ToString());
+            if (previous is not null && previous.Matches(mirror.Validator))
+                trustedMirrors.Add(mirror.Url.ToString());
+        }
+
+        return saved.CompletedChunks.Where(c => trustedMirrors.Contains(c.MirrorUrl)).ToArray();
+    }
+
+    private static void Preallocate(string path, long size)
+    {
+        using var handle = File.OpenHandle(path, FileMode.OpenOrCreate, FileAccess.Write, FileShare.ReadWrite);
+        if (RandomAccess.GetLength(handle) != size)
+            RandomAccess.SetLength(handle, size);
+    }
+
+    private async Task RunWorkersAsync(
+        DownloadRequest request,
+        IReadOnlyList<MirrorSource> mirrors,
+        IReadOnlyList<Chunk> pending,
+        SafeFileHandle handle,
+        PartStateStore state,
+        Dictionary<int, CompletedChunk> done,
+        ProgressTracker tracker,
+        IProgress<DownloadProgress>? progress,
+        CancellationToken ct)
+    {
+        var queue = new ChunkQueue(pending);
+        var fetcher = new ChunkFetcher(_client, _retry, _delay);
+        var errors = new ConcurrentQueue<Exception>();
+        var workerCount = Math.Min(_options.Connections, Math.Max(pending.Count, 1));
+
+        // Held across the done-set mutation AND the sidecar write, so snapshots persist in
+        // the order they were built. Building under a lock and saving outside it would let
+        // two workers' saves land out of order, so a stale snapshot overwrites a newer one
+        // and a completed chunk disappears from the record.
+        using var bookkeeping = new SemaphoreSlim(1, 1);
+
+        // A failing worker cancels its siblings. Without this the remaining workers keep
+        // transferring the rest of an archive whose download has already failed.
+        using var failure = CancellationTokenSource.CreateLinkedTokenSource(ct);
+
+        var workers = Enumerable.Range(0, workerCount).Select(worker => Task.Run(async () =>
+        {
+            try
+            {
+                while (queue.TryTake(out var chunk))
+                {
+                    failure.Token.ThrowIfCancellationRequested();
+
+                    var servedBy = await fetcher.FetchAsync(
+                        chunk!, mirrors, worker % mirrors.Count, handle, failure.Token);
+
+                    // Data must reach disk before the chunk is flagged complete: otherwise a
+                    // power loss can leave a "done" chunk whose bytes never left the page
+                    // cache, and resume would skip it.
+                    RandomAccess.FlushToDisk(handle);
+
+                    DownloadProgress snapshot;
+
+                    await bookkeeping.WaitAsync(failure.Token);
+                    try
+                    {
+                        done[chunk!.Index] = new CompletedChunk(chunk.Index, servedBy.Url.ToString());
+
+                        await state.SaveAsync(
+                            new PartState(
+                                request.Code, request.Size, request.Sha256, _options.ChunkSize,
+                                done.Values.OrderBy(c => c.Index).ToArray(),
+                                mirrors.Select(m => m.Validator).ToArray()),
+                            failure.Token);
+
+                        tracker.Add(chunk.Length);
+                        snapshot = tracker.Snapshot();
+                    }
+                    finally
+                    {
+                        bookkeeping.Release();
+                    }
+
+                    // Delivered after the release: a caller-supplied handler that blocks would
+                    // otherwise hold the lock every other worker needs, and no token can
+                    // interrupt code running inside it. ProgressTracker.Deliver drops a
+                    // snapshot that a faster worker has already overtaken.
+                    tracker.Deliver(progress, snapshot);
+                }
+            }
+            catch (Exception e)
+            {
+                errors.Enqueue(e);
+                if (!ct.IsCancellationRequested) failure.Cancel();
+                throw;
+            }
+            // Task.Run takes no token: one already cancelled would create the task
+            // pre-cancelled and never run the delegate. Cancellation is observed inside the
+            // loop instead, where it reaches `errors`.
+        })).ToArray();
+
+        try
+        {
+            await Task.WhenAll(workers);
+        }
+        catch
+        {
+            // Task.WhenAll rethrows only the first exception; every worker's is in `errors`.
+        }
+
+        // Prefer a genuine failure over the cancellations it caused in its siblings.
+        var primary = errors.FirstOrDefault(e => e is not OperationCanceledException)
+            ?? errors.FirstOrDefault();
+        if (primary is not null)
+            ExceptionDispatchInfo.Capture(primary).Throw();
+
+        // Backstop: a cancellation that somehow left no recorded exception must still surface
+        // as one, or the caller would finalize a download that never finished.
+        ct.ThrowIfCancellationRequested();
+    }
+}
