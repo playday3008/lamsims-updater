@@ -1,0 +1,79 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://example.invalid/lamsims-updater/catalog.schema.json",
+  "title": "lamsims-updater pack catalog",
+  "type": "object",
+  "required": ["schemaVersion", "packs"],
+  "additionalProperties": false,
+  "properties": {
+    "schemaVersion": {
+      "description": "Catalog format version. This build reads version 1 and refuses any other.",
+      "type": "integer",
+      "const": 1
+    },
+    "updatedUtc": {
+      "description": "When the catalog was last edited. Displayed only.",
+      "type": "string",
+      "format": "date-time"
+    },
+    "packs": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["code", "name", "size", "sha256", "urls"],
+        "additionalProperties": false,
+        "properties": {
+          "code": {
+            "description": "Pack identifier. Names files on disk, so no path characters.",
+            "type": "string",
+            "minLength": 1,
+            "pattern": "^[^\\/\\\\]+$"
+          },
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "type": {
+            "description": "Absent or unrecognised values are read as an unknown type, which does not reject the entry.",
+            "type": "string",
+            "enum": ["expansion", "game", "stuff", "kit"]
+          },
+          "size": {
+            "description": "Archive length in bytes. Preallocation, the free-space precheck, and the cross-check against the server all use it.",
+            "type": "integer",
+            "minimum": 1
+          },
+          "installedSize": {
+            "description": "Extracted size in bytes. Drives the game-directory free-space precheck; falls back to size when absent.",
+            "type": "integer",
+            "minimum": 1
+          },
+          "sha256": {
+            "description": "Lowercase or uppercase hexadecimal SHA-256 of the archive.",
+            "type": "string",
+            "pattern": "^[0-9a-fA-F]{64}$"
+          },
+          "urls": {
+            "description": "One or more mirrors of the same archive. sha256 validates whichever mirror served the bytes.",
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "pattern": "^https?://"
+            }
+          },
+          "installDirs": {
+            "description": "Directory names under the game directory. Defaults to [code]. A pack counts as installed only when all are present.",
+            "type": "array",
+            "minItems": 1,
+            "items": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "^[^\\/\\\\]+$"
+            }
+          }
+        }
+      }
+    }
+  }
+}
