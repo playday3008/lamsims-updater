@@ -50,9 +50,6 @@ public sealed class SettingsStore
     public async Task SaveAsync(AppSettings settings, CancellationToken ct)
     {
         _paths.EnsureCreated();
-
-        var temp = _paths.SettingsFile + ".tmp";
-        await File.WriteAllTextAsync(temp, JsonSerializer.Serialize(settings, Format), ct);
-        File.Move(temp, _paths.SettingsFile, overwrite: true);
+        await AtomicFile.WriteAllTextAsync(_paths.SettingsFile, JsonSerializer.Serialize(settings, Format), ct);
     }
 }

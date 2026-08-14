@@ -128,11 +128,14 @@ public static class CatalogParser
         }
 
         long? installedSize = null;
-        if (element.TryGetProperty("installedSize", out var installedElement)
-            && installedElement.ValueKind == JsonValueKind.Number)
+        if (element.TryGetProperty("installedSize", out var installedElement))
         {
-            if (!installedElement.TryGetInt64(out var value) || value <= 0)
+            if (installedElement.ValueKind != JsonValueKind.Number
+                || !installedElement.TryGetInt64(out var value) || value <= 0)
+            {
                 throw new InvalidEntryException("The 'installedSize' value is not a positive number of bytes.");
+            }
+
             installedSize = value;
         }
 

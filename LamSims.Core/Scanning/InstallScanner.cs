@@ -7,6 +7,15 @@ public enum PackInstallState { NotInstalled, Partial, Installed }
 public sealed record PackScanResult(string Code, PackInstallState State, IReadOnlyList<string> MissingDirs);
 
 /// <summary>
+/// The outcome of a scan. <see cref="GameDirectoryReadable"/> is false only when the game
+/// directory is absent or enumerating it failed, never merely because it turned out to be
+/// empty. Every pack in <see cref="Packs"/> reads <see cref="PackInstallState.NotInstalled"/>
+/// in both cases, so without this flag a caller cannot tell an unreadable directory (behind
+/// a permission error) from one that is genuinely empty.
+/// </summary>
+public sealed record ScanResult(bool GameDirectoryReadable, IReadOnlyList<PackScanResult> Packs);
+
+/// <summary>
 /// Detects installed packs by comparing directory <em>names</em> under the game directory
 /// against each pack's install directories. Upstream compared each pack code against the
 /// full path as a substring, which reports SP20 as installed for a game at
@@ -14,11 +23,12 @@ public sealed record PackScanResult(string Code, PackInstallState State, IReadOn
 /// </summary>
 public static class InstallScanner
 {
-    public static IReadOnlyList<PackScanResult> Scan(string gameDirectory, IEnumerable<PackEntry> packs)
+    public static ScanResult Scan(string gameDirectory, IEnumerable<PackEntry> packs)
     {
         // Case-insensitive throughout: pack directories written by a Windows install are
         // routinely read from a case-sensitive filesystem through Wine or a shared mount.
         var present = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var readable = false;
 
         if (Directory.Exists(gameDirectory))
         {
@@ -26,6 +36,8 @@ public static class InstallScanner
             {
                 foreach (var directory in Directory.EnumerateDirectories(gameDirectory))
                     present.Add(Path.GetFileName(directory)!);
+
+                readable = true;
             }
             catch (IOException)
             {
@@ -55,6 +67,6 @@ public static class InstallScanner
             results.Add(new PackScanResult(pack.Code, state, missing));
         }
 
-        return results;
+        return new ScanResult(readable, results);
     }
 }

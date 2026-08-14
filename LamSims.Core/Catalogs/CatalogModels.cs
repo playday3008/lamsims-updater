@@ -28,6 +28,15 @@ public sealed record PackEntry(
 public sealed record Catalog(int SchemaVersion, DateTimeOffset? UpdatedUtc, IReadOnlyList<PackEntry> Packs)
 {
     public const int SupportedSchemaVersion = 1;
+
+    /// <summary>
+    /// Every pack code, compared case-insensitively to match <see cref="CatalogParser"/>'s
+    /// own de-duplication. A caller building its own set from <see cref="Packs"/> could pick
+    /// an ordinal comparer that disagrees with the parser: an orphan cleanup, for instance,
+    /// would then delete a partial download whose on-disk code differs from the catalog only
+    /// in case.
+    /// </summary>
+    public IReadOnlySet<string> KnownCodes => new HashSet<string>(Packs.Select(p => p.Code), StringComparer.OrdinalIgnoreCase);
 }
 
 /// <summary>An entry that did not load, named well enough for a user to find it.</summary>

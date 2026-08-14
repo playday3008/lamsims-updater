@@ -49,7 +49,7 @@ public class CatalogLoaderTests
 
         Assert.Equal(CatalogStatus.Loaded, resolution.Status);
         Assert.Equal(CatalogSourceKind.CommandLine, resolution.Source!.Kind);
-        Assert.Equal("EP01", Assert.Single(resolution.Catalog!.Catalog.Packs).Code);
+        Assert.Equal("EP01", Assert.Single(resolution.Load!.Catalog.Packs).Code);
     }
 
     [Fact]
@@ -61,7 +61,7 @@ public class CatalogLoaderTests
         var resolution = await Loader(temp).ResolveAsync(null, settings, CancellationToken.None);
 
         Assert.Equal(CatalogSourceKind.Settings, resolution.Source!.Kind);
-        Assert.Equal("EP02", Assert.Single(resolution.Catalog!.Catalog.Packs).Code);
+        Assert.Equal("EP02", Assert.Single(resolution.Load!.Catalog.Packs).Code);
     }
 
     [Fact]
@@ -73,7 +73,7 @@ public class CatalogLoaderTests
         var resolution = await Loader(temp).ResolveAsync(null, null, CancellationToken.None);
 
         Assert.Equal(CatalogSourceKind.BesideExecutable, resolution.Source!.Kind);
-        Assert.Equal("EP03", Assert.Single(resolution.Catalog!.Catalog.Packs).Code);
+        Assert.Equal("EP03", Assert.Single(resolution.Load!.Catalog.Packs).Code);
     }
 
     [Fact]
@@ -87,7 +87,7 @@ public class CatalogLoaderTests
         var resolution = await Loader(temp).ResolveAsync(null, null, CancellationToken.None);
 
         Assert.Equal(CatalogSourceKind.Cache, resolution.Source!.Kind);
-        Assert.Equal("EP04", Assert.Single(resolution.Catalog!.Catalog.Packs).Code);
+        Assert.Equal("EP04", Assert.Single(resolution.Load!.Catalog.Packs).Code);
     }
 
     [Fact]
@@ -99,8 +99,8 @@ public class CatalogLoaderTests
 
         Assert.Equal(CatalogStatus.Empty, resolution.Status);
         Assert.Null(resolution.Error);
-        Assert.Null(resolution.Catalog);
-        Assert.False(resolution.CachedCopyAvailable);
+        Assert.Null(resolution.Load);
+        Assert.Null(resolution.CachedCopy);
     }
 
     [Fact]
@@ -133,8 +133,8 @@ public class CatalogLoaderTests
 
         Assert.Equal(CatalogStatus.Failed, resolution.Status);
         Assert.Contains("broken.json", resolution.Error);
-        Assert.True(resolution.CachedCopyAvailable);
-        Assert.Null(resolution.Catalog);
+        Assert.NotNull(resolution.CachedCopy);
+        Assert.Null(resolution.Load);
     }
 
     [Fact]
@@ -185,9 +185,31 @@ public class CatalogLoaderTests
         var resolution = await loader.ResolveAsync(url, null, CancellationToken.None);
 
         Assert.Equal(CatalogStatus.Loaded, resolution.Status);
-        Assert.Equal("EP05", Assert.Single(resolution.Catalog!.Catalog.Packs).Code);
+        Assert.Equal("EP05", Assert.Single(resolution.Load!.Catalog.Packs).Code);
         Assert.True(File.Exists(paths.CatalogCacheFile));
         Assert.Equal(CatalogJson("EP05"), await File.ReadAllTextAsync(paths.CatalogCacheFile));
+        Assert.Empty(Directory.GetFiles(paths.Root, "*.tmp"));
+    }
+
+    [Fact]
+    public async Task Rejects_a_remote_catalog_larger_than_the_size_cap()
+    {
+        using var temp = new TempDir();
+        var oversized = new byte[1_200_000];
+        await using var server = await TestFileServer.StartAsync(oversized);
+        using var client = new HttpClient();
+
+        var paths = new AppPaths(Path.Combine(temp.Path, "appdata"));
+        var loader = new CatalogLoader(client, paths, Path.Combine(temp.Path, "bin"));
+        var url = server.FileUrl.ToString();
+
+        // A catalog is at most a few hundred KB; a body past the cap is refused before it is
+        // ever parsed, so a hostile or misconfigured URL cannot buffer without limit.
+        var resolution = await loader.ResolveAsync(url, null, CancellationToken.None);
+
+        Assert.Equal(CatalogStatus.Failed, resolution.Status);
+        Assert.Contains(url, resolution.Error);
+        Assert.False(File.Exists(paths.CatalogCacheFile));
     }
 
     [Fact]

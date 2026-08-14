@@ -71,4 +71,22 @@ public class CatalogExampleTests
             new HashSet<string?> { "code", "name", "size", "sha256", "urls" },
             required);
     }
+
+    [Fact]
+    public void The_schema_s_code_pattern_rejects_the_same_dot_values_the_parser_rejects()
+    {
+        using var schema = JsonDocument.Parse(
+            File.ReadAllText(Path.Combine(RepositoryRoot(), "catalog.schema.json")));
+
+        var pattern = schema.RootElement.GetProperty("properties").GetProperty("packs")
+            .GetProperty("items").GetProperty("properties").GetProperty("code").GetProperty("pattern").GetString()!;
+
+        var regex = new System.Text.RegularExpressions.Regex(pattern);
+
+        // CatalogParser rejects "." and ".." as a code; a schema that still accepts them
+        // would mislead an author validating against it before ever running the parser.
+        Assert.DoesNotMatch(regex, ".");
+        Assert.DoesNotMatch(regex, "..");
+        Assert.Matches(regex, "EP01");
+    }
 }

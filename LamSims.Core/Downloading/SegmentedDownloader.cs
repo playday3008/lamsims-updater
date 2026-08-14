@@ -40,6 +40,10 @@ public sealed class SegmentedDownloader
         _delay = delay;
     }
 
+    /// <summary>
+    /// Reports the caller's cancellation through the result's <c>Cancelled</c> outcome
+    /// rather than throwing <see cref="OperationCanceledException"/>.
+    /// </summary>
     public async Task<DownloadResult> DownloadAsync(
         DownloadRequest request, IProgress<DownloadProgress>? progress, CancellationToken ct)
     {

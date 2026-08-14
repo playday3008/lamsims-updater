@@ -147,4 +147,34 @@ public class PackWorkflowTests
         Assert.Equal(InstallOutcome.InsufficientSpace, result.Install!.Outcome);
         Assert.True(File.Exists(paths.ArchiveFile("EP01")));
     }
+
+    [Fact]
+    public async Task Cancelling_during_the_install_phase_reports_it_and_keeps_the_verified_archive()
+    {
+        using var temp = new TempDir();
+        var archive = ZipBuilder.Create(temp.File("source.zip"),
+            ("EP01/a.package", "one"),
+            ("EP01/b.package", "two"));
+        var bytes = File.ReadAllBytes(archive);
+
+        await using var server = await TestFileServer.StartAsync(bytes);
+        using var client = new HttpClient();
+
+        var workflow = Workflow(temp, client, out var paths);
+        paths.EnsureCreated();
+        await File.WriteAllBytesAsync(paths.ArchiveFile("EP01"), bytes);
+
+        using var cancellation = new CancellationTokenSource();
+        var installProgress = new SyncProgress<InstallProgress>(_ => cancellation.Cancel());
+
+        var result = await workflow.RunAsync(
+            Pack(bytes, server.FileUrl), Path.Combine(temp.Path, "game"),
+            null, installProgress, cancellation.Token);
+
+        Assert.Equal(PackStage.Installing, result.ReachedStage);
+        Assert.Equal(InstallOutcome.Cancelled, result.Install!.Outcome);
+
+        // The archive is already verified; a cancelled install must not force a re-download.
+        Assert.True(File.Exists(paths.ArchiveFile("EP01")));
+    }
 }

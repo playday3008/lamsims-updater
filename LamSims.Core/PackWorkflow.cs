@@ -13,8 +13,11 @@ public sealed record PackWorkflowResult(
     InstallResult? Install);
 
 /// <summary>
-/// One pack, end to end: fetch it if it is not already here, verify it, install it. The
-/// seam the user interface binds to, so a ViewModel sequences nothing itself.
+/// One pack, end to end: fetch it if it is not already here, verify it, install it.
+/// <see cref="RunAsync"/> handles exactly one pack and enforces no ordering of its own; the
+/// caller must run packs one at a time, because the connection budget belongs to a single
+/// archive. Two concurrent calls would each claim the whole connection budget and could
+/// install into the same game directory at once.
 /// </summary>
 public sealed class PackWorkflow
 {

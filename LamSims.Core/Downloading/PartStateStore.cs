@@ -35,18 +35,7 @@ public sealed class PartStateStore
         await _writeLock.WaitAsync(ct);
         try
         {
-            var tempPath = _path + ".tmp";
-            var json = JsonSerializer.Serialize(state, SerializerOptions);
-
-            await using (var stream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None))
-            await using (var writer = new StreamWriter(stream))
-            {
-                await writer.WriteAsync(json.AsMemory(), ct);
-                await writer.FlushAsync(ct);
-                stream.Flush(flushToDisk: true);
-            }
-
-            File.Move(tempPath, _path, overwrite: true);
+            await AtomicFile.WriteAllTextAsync(_path, JsonSerializer.Serialize(state, SerializerOptions), ct);
         }
         finally
         {

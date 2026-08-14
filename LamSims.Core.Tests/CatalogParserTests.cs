@@ -248,4 +248,25 @@ public class CatalogParserTests
         Assert.Empty(result.Rejected);
         Assert.Null(result.Catalog.UpdatedUtc);
     }
+
+    [Fact]
+    public void Rejects_an_installed_size_that_is_not_a_number()
+    {
+        var extra = "\"installedSize\": \"7 GB\"";
+        var result = CatalogParser.Parse(Json(Pack(extra: extra)));
+
+        Assert.Empty(result.Catalog.Packs);
+        Assert.Contains("installedSize", Assert.Single(result.Rejected).Reason, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void KnownCodes_matches_the_catalogs_packs_case_insensitively()
+    {
+        var result = CatalogParser.Parse(Json(Pack(code: "EP01") + "," + Pack(code: "EP02")));
+
+        Assert.Equal(2, result.Catalog.KnownCodes.Count);
+        Assert.Contains("EP01", result.Catalog.KnownCodes);
+        Assert.Contains("ep01", result.Catalog.KnownCodes);
+        Assert.DoesNotContain("EP99", result.Catalog.KnownCodes);
+    }
 }

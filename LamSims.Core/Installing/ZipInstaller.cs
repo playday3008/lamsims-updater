@@ -38,11 +38,22 @@ public sealed record InstallProgress(string Code, long BytesWritten, long TotalB
 /// Streams archive entries straight into the game directory. Upstream extracted to a
 /// temporary directory and then copied, needing roughly three times the pack size free;
 /// this needs one.
+///
+/// The zip-slip guard below is lexical: it resolves each entry's destination with
+/// <see cref="Path.GetFullPath(string)"/> and checks the result falls under the game
+/// directory, but that call does not resolve symlinks. A symlink already present inside the
+/// game directory and pointing outside it would pass the prefix check unchanged, and the
+/// entry would be written through it. This class defends against a hostile archive, not
+/// against a game directory that already contains a hostile symlink.
 /// </summary>
 public sealed class ZipInstaller
 {
     private const int BufferSize = 1024 * 1024;
 
+    /// <summary>
+    /// Reports the caller's cancellation through the result's <c>Cancelled</c> outcome
+    /// rather than throwing <see cref="OperationCanceledException"/>.
+    /// </summary>
     public async Task<InstallResult> InstallAsync(
         PackEntry pack, string archivePath, string gameDirectory,
         IProgress<InstallProgress>? progress, CancellationToken ct)
