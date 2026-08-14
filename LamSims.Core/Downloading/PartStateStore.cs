@@ -1,0 +1,62 @@
+using System.Text.Json;
+
+namespace LamSims.Core.Downloading;
+
+/// <summary>
+/// Persists the resume sidecar. Writes go to a temporary file and are renamed into place,
+/// so a kill mid-write cannot leave torn JSON where the state belongs. Concurrent workers
+/// report completions, so writes are serialized through one semaphore. An unreadable sidecar
+/// means "no resume state" rather than an exception.
+/// </summary>
+public sealed class PartStateStore
+{
+    private static readonly JsonSerializerOptions SerializerOptions = new() { WriteIndented = false };
+
+    private readonly string _path;
+    private readonly SemaphoreSlim _writeLock = new(1, 1);
+
+    public PartStateStore(string stateFilePath) => _path = stateFilePath;
+
+    public PartState? TryLoad()
+    {
+        try
+        {
+            if (!File.Exists(_path)) return null;
+            return JsonSerializer.Deserialize<PartState>(File.ReadAllText(_path), SerializerOptions);
+        }
+        catch (Exception e) when (e is JsonException or IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    public async Task SaveAsync(PartState state, CancellationToken ct)
+    {
+        await _writeLock.WaitAsync(ct);
+        try
+        {
+            var tempPath = _path + ".tmp";
+            var json = JsonSerializer.Serialize(state, SerializerOptions);
+
+            await using (var stream = new FileStream(tempPath, FileMode.Create, FileAccess.Write, FileShare.None))
+            await using (var writer = new StreamWriter(stream))
+            {
+                await writer.WriteAsync(json.AsMemory(), ct);
+                await writer.FlushAsync(ct);
+                stream.Flush(flushToDisk: true);
+            }
+
+            File.Move(tempPath, _path, overwrite: true);
+        }
+        finally
+        {
+            _writeLock.Release();
+        }
+    }
+
+    public void Delete()
+    {
+        try { File.Delete(_path); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+        try { File.Delete(_path + ".tmp"); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+    }
+}

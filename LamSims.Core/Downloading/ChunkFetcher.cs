@@ -1,0 +1,176 @@
+using System.Net;
+using System.Net.Http.Headers;
+using Microsoft.Win32.SafeHandles;
+
+namespace LamSims.Core.Downloading;
+
+/// <summary>Abstracts backoff so tests never sleep.</summary>
+public interface IDelayProvider
+{
+    Task DelayAsync(TimeSpan delay, CancellationToken ct);
+}
+
+public sealed class SystemDelayProvider : IDelayProvider
+{
+    public Task DelayAsync(TimeSpan delay, CancellationToken ct) => Task.Delay(delay, ct);
+}
+
+public sealed record RetryOptions(
+    int MaxAttempts, TimeSpan BaseDelay, TimeSpan MaxDelay, TimeSpan ReadTimeout,
+    TimeSpan HeaderTimeout)
+{
+    public static RetryOptions Default { get; } = new(
+        MaxAttempts: 5,
+        BaseDelay: TimeSpan.FromMilliseconds(250),
+        MaxDelay: TimeSpan.FromSeconds(10),
+        HeaderTimeout: HttpDeadline.DefaultHeaderTimeout,
+        // Bounds a single ReadAsync, not the whole transfer, so a mirror that sends its
+        // headers and then stops sending bytes fails into the retry loop.
+        ReadTimeout: TimeSpan.FromSeconds(30));
+}
+
+/// <summary>
+/// Raised when a mirror answers a conditional range request with 200, meaning its entity
+/// changed underneath the download.
+/// </summary>
+public sealed class ValidatorMismatchException : Exception
+{
+    public ValidatorMismatchException(string url)
+        : base($"'{url}' answered a conditional range request with 200: the file changed on the server.")
+        => Url = url;
+
+    public string Url { get; }
+}
+
+/// <summary>
+/// Fetches one chunk, retrying with exponential backoff and rotating mirrors between
+/// attempts. Writes land positionally on a shared handle, so workers need no lock.
+/// </summary>
+public sealed class ChunkFetcher
+{
+    private const int BufferSize = 1024 * 1024;
+
+    private readonly HttpClient _client;
+    private readonly RetryOptions _retry;
+    private readonly IDelayProvider _delay;
+
+    public ChunkFetcher(HttpClient client, RetryOptions retry, IDelayProvider delay)
+    {
+        _client = client;
+        _retry = retry;
+        _delay = delay;
+    }
+
+    /// <summary>Returns the mirror that served the chunk, for the resume sidecar.</summary>
+    public async Task<MirrorSource> FetchAsync(
+        Chunk chunk,
+        IReadOnlyList<MirrorSource> mirrors,
+        int preferredMirror,
+        SafeFileHandle target,
+        CancellationToken ct)
+    {
+        Exception? lastError = null;
+
+        for (var attempt = 0; attempt < _retry.MaxAttempts; attempt++)
+        {
+            ct.ThrowIfCancellationRequested();
+            var mirror = mirrors[(preferredMirror + attempt) % mirrors.Count];
+
+            try
+            {
+                await FetchOnceAsync(chunk, mirror, target, ct);
+                return mirror;
+            }
+            catch (ValidatorMismatchException)
+            {
+                // The entity changed; retrying the same bytes cannot help.
+                throw;
+            }
+            catch (Exception e) when (e is HttpRequestException or IOException && !ct.IsCancellationRequested)
+            {
+                lastError = e;
+                if (attempt == _retry.MaxAttempts - 1) break;
+                await _delay.DelayAsync(BackoffFor(attempt), ct);
+            }
+        }
+
+        throw lastError ?? new HttpRequestException($"Chunk {chunk.Index} could not be fetched.");
+    }
+
+    private async Task FetchOnceAsync(Chunk chunk, MirrorSource mirror, SafeFileHandle target, CancellationToken ct)
+    {
+        using var request = new HttpRequestMessage(HttpMethod.Get, mirror.Url);
+        request.Headers.Range = new RangeHeaderValue(chunk.Start, chunk.EndInclusive);
+
+        // If-Range catches an entity changing mid-download rather than hours later at the
+        // checksum. A mirror offering no usable validator omits it.
+        if (mirror.Validator.IfRangeValue is { } ifRange)
+            request.Headers.TryAddWithoutValidation("If-Range", ifRange);
+
+        using var response = await HttpDeadline.SendAsync(_client, request, _retry.HeaderTimeout, ct);
+
+        if (response.StatusCode == HttpStatusCode.OK && mirror.Validator.HasValidator)
+            throw new ValidatorMismatchException(mirror.Url.ToString());
+
+        response.EnsureSuccessStatusCode();
+
+        if (response.StatusCode != HttpStatusCode.PartialContent)
+            throw new HttpRequestException(
+                $"'{mirror.Url}' answered {(int)response.StatusCode} instead of 206 for a range request.");
+
+        // A 206 status does not prove the server served the range that was asked for. Some
+        // intermediaries answer 206 while returning the whole entity; writing that body at
+        // this chunk's offset would corrupt the archive and still be flagged complete, so the
+        // damage would only surface at the final checksum and survive every resume after it.
+        var servedRange = response.Content.Headers.ContentRange;
+        if (servedRange?.From != chunk.Start || servedRange.To != chunk.EndInclusive)
+            throw new HttpRequestException(
+                $"'{mirror.Url}' answered 206 for bytes {chunk.Start}-{chunk.EndInclusive} " +
+                $"with Content-Range '{servedRange?.ToString() ?? "(absent)"}'.");
+
+        await using var body = await response.Content.ReadAsStreamAsync(ct);
+
+        var buffer = new byte[BufferSize];
+        var offset = chunk.Start;
+        var remaining = chunk.Length;
+
+        while (remaining > 0)
+        {
+            var wanted = (int)Math.Min(buffer.Length, remaining);
+
+            // Each read gets its own deadline, rearmed after every successful read. A stall
+            // surfaces as IOException so the retry filter catches it; an
+            // OperationCanceledException would escape every filter in the engine.
+            int read;
+            using (var readDeadline = CancellationTokenSource.CreateLinkedTokenSource(ct))
+            {
+                readDeadline.CancelAfter(_retry.ReadTimeout);
+                try
+                {
+                    read = await body.ReadAsync(buffer.AsMemory(0, wanted), readDeadline.Token);
+                }
+                catch (OperationCanceledException) when (!ct.IsCancellationRequested)
+                {
+                    throw new IOException(
+                        $"'{mirror.Url}' sent no data for {_retry.ReadTimeout.TotalSeconds:0}s " +
+                        $"during chunk {chunk.Index}.");
+                }
+            }
+
+            if (read == 0)
+                throw new IOException($"Chunk {chunk.Index} ended {remaining} bytes early.");
+
+            await RandomAccess.WriteAsync(target, buffer.AsMemory(0, read), offset, ct);
+            offset += read;
+            remaining -= read;
+        }
+    }
+
+    private TimeSpan BackoffFor(int attempt)
+    {
+        var exponential = _retry.BaseDelay * Math.Pow(2, attempt);
+        var jitter = Random.Shared.NextDouble() * 0.25 + 1.0;   // 1.00x–1.25x
+        var delay = TimeSpan.FromMilliseconds(exponential.TotalMilliseconds * jitter);
+        return delay > _retry.MaxDelay ? _retry.MaxDelay : delay;
+    }
+}
