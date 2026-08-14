@@ -137,9 +137,12 @@ public sealed class ZipInstaller
                 Report(progress, new InstallProgress(pack.Code, bytes, totalBytes, entry.FullName));
             }
 
-            // Deleted only now. A failed or cancelled install keeps the verified archive so
-            // the retry needs no new download.
-            File.Delete(archivePath);
+            // Deleted only now. A failed or cancelled install keeps the verified archive so the
+            // retry needs no new download. Every entry is on disk by this point, so a scanner or
+            // a second process holding the archive open must not turn a completed install into
+            // a reported failure whose retry would re-extract everything and fail the same way.
+            // Hence its own try/catch rather than the one below.
+            TryDeleteArchive(archivePath);
             return InstallResult.Installed(written);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -153,6 +156,17 @@ public sealed class ZipInstaller
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException)
         {
             return InstallResult.Failed(e.Message, written);
+        }
+    }
+
+    private static void TryDeleteArchive(string archivePath)
+    {
+        try
+        {
+            File.Delete(archivePath);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
         }
     }
 

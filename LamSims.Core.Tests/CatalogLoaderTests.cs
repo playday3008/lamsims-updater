@@ -1,6 +1,7 @@
 using System.Net;
 using System.Text;
 using LamSims.Core.Catalogs;
+using LamSims.Core.Downloading;
 using LamSims.Core.Settings;
 
 namespace LamSims.Core.Tests;
@@ -138,6 +139,45 @@ public class CatalogLoaderTests
     }
 
     [Fact]
+    public async Task Offers_no_cached_copy_when_the_cache_is_reached_and_fails_to_parse()
+    {
+        using var temp = new TempDir();
+        var paths = new AppPaths(Path.Combine(temp.Path, "appdata"));
+        paths.EnsureCreated();
+        await File.WriteAllTextAsync(paths.CatalogCacheFile, "{ not json");
+
+        // With no other candidate the loop reaches the cache and tries to parse it.
+        var resolution = await Loader(temp).ResolveAsync(null, null, CancellationToken.None);
+
+        // The cache is a fallback nobody asked for, so its own failure is passed over rather
+        // than reported; the resolution is Empty, as if the cache did not exist.
+        Assert.Equal(CatalogStatus.Empty, resolution.Status);
+
+        // The "use the cached copy" button would otherwise point at a file this call already
+        // watched fail to parse.
+        Assert.Null(resolution.CachedCopy);
+    }
+
+    [Fact]
+    public async Task Still_offers_a_corrupt_cache_that_nothing_tried_during_this_resolution()
+    {
+        using var temp = new TempDir();
+        var paths = new AppPaths(Path.Combine(temp.Path, "appdata"));
+        paths.EnsureCreated();
+        await File.WriteAllTextAsync(paths.CatalogCacheFile, "{ not json");
+
+        var commandLine = WriteCatalog(temp, "cli/catalog.json", "EP01");
+
+        var resolution = await Loader(temp).ResolveAsync(commandLine, null, CancellationToken.None);
+
+        Assert.Equal(CatalogStatus.Loaded, resolution.Status);
+
+        // The command line succeeded outright, so the loop never touched the cache. Its
+        // validity is unknown and it is still offered; nothing pre-validates it on every call.
+        Assert.NotNull(resolution.CachedCopy);
+    }
+
+    [Fact]
     public async Task Loads_the_cache_when_it_is_chosen_explicitly_after_a_failure()
     {
         using var temp = new TempDir();
@@ -148,9 +188,24 @@ public class CatalogLoaderTests
         var loader = Loader(temp);
         var chosen = new CatalogSource(CatalogSourceKind.Cache, paths.CatalogCacheFile);
 
-        var result = await loader.LoadAsync(chosen, CancellationToken.None);
+        var resolution = await loader.LoadAsync(chosen, CancellationToken.None);
 
-        Assert.Equal("EP04", Assert.Single(result.Catalog.Packs).Code);
+        Assert.Equal(CatalogStatus.Loaded, resolution.Status);
+        Assert.Equal("EP04", Assert.Single(resolution.Load!.Catalog.Packs).Code);
+    }
+
+    [Fact]
+    public async Task Reports_a_chosen_source_that_fails_as_failed_instead_of_throwing()
+    {
+        using var temp = new TempDir();
+        var loader = Loader(temp);
+        var chosen = new CatalogSource(CatalogSourceKind.Cache, Path.Combine(temp.Path, "missing.json"));
+
+        var resolution = await loader.LoadAsync(chosen, CancellationToken.None);
+
+        Assert.Equal(CatalogStatus.Failed, resolution.Status);
+        Assert.Equal(chosen, resolution.Source);
+        Assert.Contains("missing.json", resolution.Error);
     }
 
     [Fact]
@@ -203,13 +258,34 @@ public class CatalogLoaderTests
         var loader = new CatalogLoader(client, paths, Path.Combine(temp.Path, "bin"));
         var url = server.FileUrl.ToString();
 
-        // A catalog is at most a few hundred KB; a body past the cap is refused before it is
-        // ever parsed, so a hostile or misconfigured URL cannot buffer without limit.
+        // The loader streams the response instead of letting HttpClient buffer it, so an
+        // oversized body is refused partway through rather than after it is held in full.
         var resolution = await loader.ResolveAsync(url, null, CancellationToken.None);
 
         Assert.Equal(CatalogStatus.Failed, resolution.Status);
         Assert.Contains(url, resolution.Error);
         Assert.False(File.Exists(paths.CatalogCacheFile));
+    }
+
+    [Fact]
+    public async Task Loads_a_remote_catalog_served_with_a_utf8_bom()
+    {
+        using var temp = new TempDir();
+
+        // A catalog authored on Windows (Notepad, PowerShell's Out-File default) commonly
+        // carries a leading UTF-8 BOM; the loader must strip it the same way
+        // File.ReadAllTextAsync already does for a local file.
+        var withBom = Encoding.UTF8.GetPreamble().Concat(Encoding.UTF8.GetBytes(CatalogJson("EP06"))).ToArray();
+        await using var server = await TestFileServer.StartAsync(withBom);
+        using var client = new HttpClient();
+
+        var paths = new AppPaths(Path.Combine(temp.Path, "appdata"));
+        var loader = new CatalogLoader(client, paths, Path.Combine(temp.Path, "bin"));
+
+        var resolution = await loader.ResolveAsync(server.FileUrl.ToString(), null, CancellationToken.None);
+
+        Assert.Equal(CatalogStatus.Loaded, resolution.Status);
+        Assert.Equal("EP06", Assert.Single(resolution.Load!.Catalog.Packs).Code);
     }
 
     [Fact]
@@ -258,14 +334,20 @@ public class CatalogLoaderTests
         await using var server = await TestFileServer.StartAsync(
             Encoding.UTF8.GetBytes(CatalogJson("EP05")),
             new TestFileServerOptions { StallBeforeHeaders = TimeSpan.FromSeconds(30) });
-        using var client = new HttpClient { Timeout = TimeSpan.FromMilliseconds(150) };
+
+        // HttpFactory hands out an HttpClient with an infinite Timeout because the download
+        // engine carries its own deadlines, so the loader needs a deadline of its own. The
+        // short remoteTimeout below stands in for it.
+        using var client = HttpFactory.Create(maxConnectionsPerServer: 4);
 
         var paths = new AppPaths(Path.Combine(temp.Path, "appdata"));
-        var loader = new CatalogLoader(client, paths, Path.Combine(temp.Path, "bin"));
+        var loader = new CatalogLoader(
+            client, paths, Path.Combine(temp.Path, "bin"), remoteTimeout: TimeSpan.FromMilliseconds(200));
         var url = server.FileUrl.ToString();
 
-        // HttpClient.Timeout throws TaskCanceledException, not HttpRequestException; this
-        // must still be reported as a source failure rather than escaping ResolveAsync.
+        // The loader's own deadline fires as an OperationCanceledException that does not wrap
+        // into HttpRequestException; this must still be reported as a source failure rather
+        // than escaping ResolveAsync.
         var resolution = await loader.ResolveAsync(url, null, CancellationToken.None);
 
         Assert.Equal(CatalogStatus.Failed, resolution.Status);

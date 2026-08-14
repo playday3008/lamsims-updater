@@ -45,7 +45,13 @@ public sealed class PackWorkflow
         // A .zip of exactly the catalogued length is one the engine already verified — it
         // writes that name only after the digest matched. Re-hashing several gigabytes on
         // every retry of a failed install would cost far more than it protects.
-        if (!File.Exists(archive) || new FileInfo(archive).Length != pack.Size)
+        //
+        // One FileInfo snapshot rather than a separate File.Exists check: orphan cleanup or a
+        // second instance can remove the archive between the two calls, and FileInfo.Length
+        // throws FileNotFoundException on a file that no longer exists, which would otherwise
+        // escape this result-shaped method.
+        var archiveInfo = new FileInfo(archive);
+        if (!archiveInfo.Exists || archiveInfo.Length != pack.Size)
         {
             download = await _downloader.DownloadAsync(pack.ToDownloadRequest(), downloadProgress, ct);
 

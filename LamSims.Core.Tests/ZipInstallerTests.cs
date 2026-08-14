@@ -1,3 +1,4 @@
+using System.Runtime.Versioning;
 using LamSims.Core.Catalogs;
 using LamSims.Core.Installing;
 
@@ -230,5 +231,39 @@ public class ZipInstallerTests
             Pack(), archive, Path.Combine(temp.Path, "game"), null, CancellationToken.None);
 
         Assert.Equal(InstallOutcome.Failed, result.Outcome);
+    }
+
+    [Fact]
+    [UnsupportedOSPlatform("windows")]
+    public async Task Reports_installed_when_every_entry_is_written_but_the_archive_cannot_be_deleted()
+    {
+        if (OperatingSystem.IsWindows()) return;
+
+        using var temp = new TempDir();
+        var archiveDir = Path.Combine(temp.Path, "archive-dir");
+        Directory.CreateDirectory(archiveDir);
+        var archive = ZipBuilder.Create(Path.Combine(archiveDir, "EP01.zip"), ("EP01/a.package", "one"));
+        var game = Path.Combine(temp.Path, "game");
+
+        // Deleting a file needs write permission on its *directory*, not the file itself, so
+        // this is what actually exercises "the delete fails" rather than "the file is missing".
+        var readableMode = UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute;
+        var lockedMode = UnixFileMode.UserRead | UnixFileMode.UserExecute;
+
+        try
+        {
+            File.SetUnixFileMode(archiveDir, lockedMode);
+            var result = await new ZipInstaller().InstallAsync(Pack(), archive, game, null, CancellationToken.None);
+
+            Assert.Equal(InstallOutcome.Installed, result.Outcome);
+            Assert.Equal(1, result.EntriesWritten);
+            Assert.Equal("one", await File.ReadAllTextAsync(Path.Combine(game, "EP01", "a.package")));
+            Assert.True(File.Exists(archive));
+        }
+        finally
+        {
+            // Restored so the enclosing TempDir can be deleted.
+            File.SetUnixFileMode(archiveDir, readableMode);
+        }
     }
 }

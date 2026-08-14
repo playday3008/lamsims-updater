@@ -45,10 +45,17 @@ public static class InstallScanner
                 // the existence check and enumeration. Treat it as an absent directory: every pack
                 // is NotInstalled. This keeps Scan total and handles the Wine scenario where the
                 // game directory lives on a shared mount with intermittent access.
+                //
+                // EnumerateDirectories is lazy: a failure partway through still leaves the names
+                // already yielded in the set. Clearing it is what makes every pack NotInstalled
+                // here, matching ScanResult's contract instead of reporting some packs Installed
+                // off a partial listing.
+                present.Clear();
             }
             catch (UnauthorizedAccessException)
             {
                 // Same as IOException: the directory exists but cannot be read.
+                present.Clear();
             }
         }
 
