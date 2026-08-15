@@ -36,6 +36,7 @@ public class DownloadPathsTests
         Assert.Equal(Path.Combine(temp.Path, "EP01.part.json"), paths.StateFile("EP01"));
         Assert.Equal(Path.Combine(temp.Path, "EP01.zip"), paths.ArchiveFile("EP01"));
         Assert.Equal(Path.Combine(temp.Path, "EP01.zip.bad"), paths.QuarantineFile("EP01"));
+        Assert.Equal(Path.Combine(temp.Path, "EP01.zip.json"), paths.ArchiveDigestFile("EP01"));
     }
 
     [Fact]

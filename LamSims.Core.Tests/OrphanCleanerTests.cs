@@ -56,4 +56,72 @@ public class OrphanCleanerTests
 
         Assert.Empty(cleaner.CleanOrphans(new HashSet<string>()));
     }
+
+    [Fact]
+    public void Deletes_a_digest_record_whose_code_is_unknown()
+    {
+        using var temp = new TempDir();
+        temp.Write("EP99.zip.json", "{}");
+        var cleaner = new OrphanCleaner(new DownloadPaths(temp.Path));
+
+        var deleted = cleaner.CleanOrphans(new HashSet<string> { "EP01" });
+
+        Assert.Equal(temp.File("EP99.zip.json"), Assert.Single(deleted));
+    }
+
+    [Fact]
+    public void Deletes_a_digest_record_whose_archive_is_gone()
+    {
+        // A record describing an archive that no longer exists vouches for nothing, and the
+        // next download writes a fresh one.
+        using var temp = new TempDir();
+        temp.Write("EP01.zip.json", "{}");
+        var cleaner = new OrphanCleaner(new DownloadPaths(temp.Path));
+
+        var deleted = cleaner.CleanOrphans(new HashSet<string> { "EP01" });
+
+        Assert.Equal(temp.File("EP01.zip.json"), Assert.Single(deleted));
+    }
+
+    [Fact]
+    public void Keeps_a_digest_record_that_still_describes_an_archive()
+    {
+        using var temp = new TempDir();
+        temp.Write("EP01.zip", "x");
+        temp.Write("EP01.zip.json", "{}");
+        var cleaner = new OrphanCleaner(new DownloadPaths(temp.Path));
+
+        var deleted = cleaner.CleanOrphans(new HashSet<string> { "EP01" });
+
+        Assert.Empty(deleted);
+        Assert.True(File.Exists(temp.File("EP01.zip.json")));
+    }
+
+    [Fact]
+    public void Never_deletes_a_quarantined_archive_that_still_has_a_record()
+    {
+        // The archive is gone once it is quarantined, so its record goes; the quarantined file
+        // itself is evidence and only the user removes it.
+        using var temp = new TempDir();
+        temp.Write("EP01.zip.bad", "x");
+        temp.Write("EP01.zip.json", "{}");
+        var cleaner = new OrphanCleaner(new DownloadPaths(temp.Path));
+
+        cleaner.CleanOrphans(new HashSet<string> { "EP01" });
+
+        Assert.True(File.Exists(temp.File("EP01.zip.bad")));
+        Assert.False(File.Exists(temp.File("EP01.zip.json")));
+    }
+
+    [Fact]
+    public void Ignores_a_file_that_is_nothing_but_a_suffix()
+    {
+        using var temp = new TempDir();
+        temp.Write(".zip.json", "{}");
+        temp.Write(".part", "x");
+        var cleaner = new OrphanCleaner(new DownloadPaths(temp.Path));
+
+        // A blank code cannot name an archive, and asking DownloadPaths for one throws.
+        Assert.Empty(cleaner.CleanOrphans(new HashSet<string> { "EP01" }));
+    }
 }

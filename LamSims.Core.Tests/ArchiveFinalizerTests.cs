@@ -99,4 +99,38 @@ public class ArchiveFinalizerTests
         Assert.Equal(DownloadOutcome.Failed, result.Outcome);
         Assert.False(File.Exists(paths.StateFile("EP01")));
     }
+
+    [Fact]
+    public async Task A_matching_digest_also_records_the_archive_it_promoted()
+    {
+        // A later run installs this archive off the record instead of re-hashing it.
+        using var temp = new TempDir();
+        var (paths, state) = await Prepare(temp, "abc");
+
+        await new ArchiveFinalizer(paths)
+            .FinalizeAsync("EP01", AbcSha256, state, usedSingleStream: false, CancellationToken.None);
+
+        var record = new ArchiveDigestStore(paths).TryLoad("EP01");
+        var info = new FileInfo(paths.ArchiveFile("EP01"));
+
+        Assert.NotNull(record);
+        Assert.Equal(AbcSha256, record.Sha256);
+        Assert.Equal(3, record.Length);
+
+        // Statted after the rename, so the identity recorded is what any later run will see.
+        Assert.Equal(new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero), record.LastWriteTimeUtc);
+    }
+
+    [Fact]
+    public async Task A_mismatched_digest_records_nothing()
+    {
+        using var temp = new TempDir();
+        var (paths, state) = await Prepare(temp, "abc");
+
+        await new ArchiveFinalizer(paths).FinalizeAsync(
+            "EP01", "0000000000000000000000000000000000000000000000000000000000000000",
+            state, usedSingleStream: false, CancellationToken.None);
+
+        Assert.False(File.Exists(paths.ArchiveDigestFile("EP01")));
+    }
 }

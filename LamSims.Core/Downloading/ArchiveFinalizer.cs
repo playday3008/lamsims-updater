@@ -8,8 +8,13 @@ namespace LamSims.Core.Downloading;
 public sealed class ArchiveFinalizer
 {
     private readonly DownloadPaths _paths;
+    private readonly ArchiveDigestStore _digests;
 
-    public ArchiveFinalizer(DownloadPaths paths) => _paths = paths;
+    public ArchiveFinalizer(DownloadPaths paths)
+    {
+        _paths = paths;
+        _digests = new ArchiveDigestStore(paths);
+    }
 
     public async Task<DownloadResult> FinalizeAsync(
         string code, string expectedSha256, PartStateStore state, bool usedSingleStream, CancellationToken ct)
@@ -31,6 +36,11 @@ public sealed class ArchiveFinalizer
         {
             var archive = _paths.ArchiveFile(code);
             File.Move(partFile, archive, overwrite: true);
+
+            // Statted after the rename, so the recorded identity is what a later run will see
+            // rather than what the part file happened to look like.
+            await _digests.RecordAsync(code, archive, actual);
+
             state.Delete();
             return DownloadResult.Completed(archive, actual, usedSingleStream);
         }

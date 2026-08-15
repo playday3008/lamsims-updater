@@ -21,6 +21,14 @@ public sealed class DownloadPaths
     public string ArchiveFile(string code) => Path.Combine(Root, Validate(code) + ".zip");
     public string QuarantineFile(string code) => Path.Combine(Root, Validate(code) + ".zip.bad");
 
+    /// <summary>
+    /// The verified-identity record for an archive, beside the archive itself. It lives here
+    /// rather than in a central store so it follows the archive when the download directory
+    /// setting changes or the directory is copied wholesale, and so <see cref="OrphanCleaner"/>
+    /// sweeps it with everything else.
+    /// </summary>
+    public string ArchiveDigestFile(string code) => Path.Combine(Root, Validate(code) + ".zip.json");
+
     public void EnsureCreated() => Directory.CreateDirectory(Root);
 
     private static string Validate(string code)
