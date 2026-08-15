@@ -35,7 +35,7 @@ public class PackWorkflowTests
 
         return new PackWorkflow(
             new SegmentedDownloader(client, paths, options, RetryOptions.Default, new FakeDelayProvider()),
-            new ZipInstaller(),
+            new ZipInstaller(new InstallStateStore(Path.Combine(temp.Path, "installs"))),
             paths);
     }
 

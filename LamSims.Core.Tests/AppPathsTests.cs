@@ -35,4 +35,13 @@ public class AppPathsTests
 
         Assert.True(Directory.Exists(paths.Root));
     }
+
+    [Fact]
+    public void Names_the_install_state_directory_inside_the_root()
+    {
+        using var temp = new TempDir();
+        var paths = new AppPaths(temp.Path);
+
+        Assert.Equal(Path.Combine(temp.Path, "installs"), paths.InstallStateDirectory);
+    }
 }

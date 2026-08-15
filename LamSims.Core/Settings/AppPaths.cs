@@ -27,5 +27,13 @@ public sealed class AppPaths
     public string SettingsFile => Path.Combine(Root, "settings.json");
     public string CatalogCacheFile => Path.Combine(Root, "catalog.cache.json");
 
+    /// <summary>
+    /// Where per-pack install markers live, grouped by game directory. Under the app's own
+    /// root rather than inside the game directory: the game directory belongs to EA's
+    /// installer, repair tools, mod managers and the user, all of which routinely remove
+    /// entries they do not recognise.
+    /// </summary>
+    public string InstallStateDirectory => Path.Combine(Root, "installs");
+
     public void EnsureCreated() => Directory.CreateDirectory(Root);
 }

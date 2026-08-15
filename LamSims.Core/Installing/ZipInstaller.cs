@@ -17,27 +17,34 @@ public sealed class ZipSlipException : IOException
 
 public enum InstallOutcome { Installed, InsufficientSpace, Cancelled, Failed }
 
-public sealed record InstallResult(InstallOutcome Outcome, int EntriesWritten, string? Error)
+/// <summary>
+/// The outcome of an install. <see cref="Warnings"/> carries what went wrong without failing
+/// the install, such as the install journal not being updatable. It is never null, so a caller
+/// can bind it directly.
+/// </summary>
+public sealed record InstallResult(
+    InstallOutcome Outcome, int EntriesWritten, string? Error, IReadOnlyList<string> Warnings)
 {
-    public static InstallResult Installed(int entriesWritten) =>
-        new(InstallOutcome.Installed, entriesWritten, null);
+    private static readonly IReadOnlyList<string> None = Array.Empty<string>();
+
+    public static InstallResult Installed(int entriesWritten, IReadOnlyList<string>? warnings = null) =>
+        new(InstallOutcome.Installed, entriesWritten, null, warnings ?? None);
 
     public static InstallResult InsufficientSpace(string error) =>
-        new(InstallOutcome.InsufficientSpace, 0, error);
+        new(InstallOutcome.InsufficientSpace, 0, error, None);
 
     public static InstallResult Cancelled(int entriesWritten) =>
-        new(InstallOutcome.Cancelled, entriesWritten, null);
+        new(InstallOutcome.Cancelled, entriesWritten, null, None);
 
     public static InstallResult Failed(string error, int entriesWritten = 0) =>
-        new(InstallOutcome.Failed, entriesWritten, error);
+        new(InstallOutcome.Failed, entriesWritten, error, None);
 }
 
 public sealed record InstallProgress(string Code, long BytesWritten, long TotalBytes, string CurrentEntry);
 
 /// <summary>
-/// Streams archive entries straight into the game directory. Upstream extracted to a
-/// temporary directory and then copied, needing roughly three times the pack size free;
-/// this needs one.
+/// Streams archive entries straight into the game directory, so the install needs the pack's
+/// size free rather than roughly three times it.
 ///
 /// The zip-slip guard below is lexical: it resolves each entry's destination with
 /// <see cref="Path.GetFullPath(string)"/> and checks the result falls under the game
@@ -45,10 +52,25 @@ public sealed record InstallProgress(string Code, long BytesWritten, long TotalB
 /// game directory and pointing outside it would pass the prefix check unchanged, and the
 /// entry would be written through it. This class defends against a hostile archive, not
 /// against a game directory that already contains a hostile symlink.
+///
+/// Extraction is journalled: a marker recording this pack and this game directory is written
+/// durably before the first entry and rewritten as complete after the last one. A marker still
+/// reading "installing" is what makes an interrupted install visible to the scanner, since
+/// directory presence alone cannot distinguish one from a complete install: a cancelled
+/// extraction leaves the directory it had already started filling.
+///
+/// A failed or cancelled install cleans up neither the marker nor the files. The marker is the
+/// record of the interruption, and deleting what this install wrote is not safe: entries
+/// overwrite existing files, including files in shared roots such as Delta/ that other packs
+/// also own, so a rollback without pre-images would destroy another pack's current state.
 /// </summary>
 public sealed class ZipInstaller
 {
     private const int BufferSize = 1024 * 1024;
+
+    private readonly InstallStateStore _state;
+
+    public ZipInstaller(InstallStateStore state) => _state = state;
 
     /// <summary>
     /// Reports the caller's cancellation through the result's <c>Cancelled</c> outcome
@@ -84,6 +106,12 @@ public sealed class ZipInstaller
                 ? root
                 : root + Path.DirectorySeparatorChar;
 
+            // 'root' rather than the caller's string: the recorded directory is what the
+            // scanner compares against, so it is stored already resolved.
+            var marker = new InstallMarker(
+                InstallMarker.CurrentSchemaVersion, pack.Code, root, pack.Sha256,
+                InstallMarkerStatus.Installing, DateTimeOffset.UtcNow);
+
             // The archive handle is closed before the delete below: it is opened with
             // FileShare.Read and no FileShare.Delete, so on Windows deleting it while this
             // handle is open is a sharing violation and every installed archive would be
@@ -118,6 +146,21 @@ public sealed class ZipInstaller
 
                     planned.Add((entry, destination));
                     totalBytes += entry.Length;
+                }
+
+                // Written after every destination has been resolved and checked, and before a
+                // single byte lands: everything that can fail without leaving a trace has
+                // already failed, so a refusal here cannot demote a pack that is installed.
+                try
+                {
+                    await _state.SaveAsync(marker, ct);
+                }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException or ArgumentException)
+                {
+                    // Without a journal, a cancel partway through would be indistinguishable
+                    // from a complete install for the rest of the installation's life.
+                    return InstallResult.Failed(
+                        $"The install journal for '{pack.Code}' under '{_state.Root}' could not be written: {e.Message}");
                 }
 
                 var bytes = 0L;
@@ -158,13 +201,34 @@ public sealed class ZipInstaller
                 }
             }
 
+            var warnings = new List<string>();
+
+            try
+            {
+                // CancellationToken.None: the install has already succeeded, and a racing
+                // cancel must not leave the journal claiming the extraction is still running.
+                await _state.SaveAsync(
+                    marker with { Status = InstallMarkerStatus.Installed, UpdatedUtc = DateTimeOffset.UtcNow },
+                    CancellationToken.None);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                // Not a failed install: every entry is on disk, and reporting Failed would
+                // invite the same unbounded retry loop the archive delete below avoids. But the
+                // journal now disagrees with the filesystem and the next scan will read this
+                // pack as interrupted, so the contradiction is reported rather than swallowed.
+                warnings.Add(
+                    $"'{pack.Code}' installed, but its journal under '{_state.Root}' could not be updated: {e.Message}. "
+                    + "The pack will show as incomplete until it is installed again.");
+            }
+
             // Deleted only now. A failed or cancelled install keeps the verified archive so the
             // retry needs no new download. Every entry is on disk by this point, so a scanner or
             // a second process holding the archive open must not turn a completed install into
             // a reported failure whose retry would re-extract everything and fail the same way.
             // Hence its own try/catch rather than the one below.
             TryDeleteArchive(archivePath);
-            return InstallResult.Installed(written);
+            return InstallResult.Installed(written, warnings);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
