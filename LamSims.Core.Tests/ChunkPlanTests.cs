@@ -57,4 +57,13 @@ public class ChunkPlanTests
     {
         Assert.Throws<ArgumentOutOfRangeException>(() => ChunkPlan.Create(100, 0));
     }
+
+    [Fact]
+    public void DownloadOptions_rejects_a_non_positive_chunk_size_at_the_setter()
+    {
+        // Rejected where the value is supplied, the way Connections is: reaching
+        // ChunkPlan.Create with it would throw out of DownloadAsync instead.
+        Assert.Throws<ArgumentOutOfRangeException>(() => new DownloadOptions { ChunkSize = 0 });
+        Assert.Throws<ArgumentOutOfRangeException>(() => new DownloadOptions { ChunkSize = -1 });
+    }
 }

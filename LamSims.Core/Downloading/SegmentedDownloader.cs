@@ -47,10 +47,15 @@ public sealed class SegmentedDownloader
     public async Task<DownloadResult> DownloadAsync(
         DownloadRequest request, IProgress<DownloadProgress>? progress, CancellationToken ct)
     {
-        var state = new PartStateStore(_paths.StateFile(request.Code));
+        if (string.IsNullOrWhiteSpace(_paths.Root))
+            return DownloadResult.Failed("The download directory must not be blank.");
 
         try
         {
+            // Inside the try: the pack code is untrusted enough to be rejected as a file name,
+            // and this method always returns a DownloadResult.
+            var state = new PartStateStore(_paths.StateFile(request.Code));
+
             _paths.EnsureCreated();
 
             // Only the bytes not already on disk need room. Charging for the whole archive
@@ -101,12 +106,14 @@ public sealed class SegmentedDownloader
             return DownloadResult.Cancelled();
         }
         catch (Exception e) when (e is HttpRequestException or IOException
-                                       or UnauthorizedAccessException
+                                       or UnauthorizedAccessException or ArgumentException
                                        or SizeMismatchException or ValidatorMismatchException)
         {
             // UnauthorizedAccessException does not derive from IOException, and every
-            // filesystem call here can raise it — a read-only download root, an SELinux
-            // denial, a file held by a scanner. This method always returns a DownloadResult.
+            // filesystem call here can raise it: a read-only download root, an SELinux denial,
+            // a file held by a scanner. ArgumentException covers the path APIs, which reject a
+            // name rather than failing to use it, so a UNC root on Windows and a pack code that
+            // is not a file name both land here. This method always returns a DownloadResult.
             return DownloadResult.Failed(e.Message);
         }
     }
@@ -166,7 +173,11 @@ public sealed class SegmentedDownloader
 
         var saved = store.TryLoad();
 
+        // PartState is a positional record, so a document that omits either collection — or
+        // spells it null — deserializes with that property left null.
         if (saved is null
+            || saved.CompletedChunks is null
+            || saved.Mirrors is null
             || saved.Code != request.Code
             || saved.TotalSize != request.Size
             || saved.ChunkSize != _options.ChunkSize

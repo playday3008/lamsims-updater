@@ -20,6 +20,14 @@ public class PackWorkflowTests
         return File.ReadAllBytes(path);
     }
 
+    /// <summary>The Sims 4 install directory always pre-exists; the installer requires it to.</summary>
+    private static string GameDir(TempDir temp)
+    {
+        var path = Path.Combine(temp.Path, "game");
+        Directory.CreateDirectory(path);
+        return path;
+    }
+
     private static PackWorkflow Workflow(TempDir temp, HttpClient client, out DownloadPaths paths)
     {
         paths = new DownloadPaths(Path.Combine(temp.Path, "downloads"));
@@ -41,7 +49,7 @@ public class PackWorkflowTests
         using var client = new HttpClient();
 
         var workflow = Workflow(temp, client, out var paths);
-        var game = Path.Combine(temp.Path, "game");
+        var game = GameDir(temp);
 
         var result = await workflow.RunAsync(
             Pack(archive, server.FileUrl), game, null, null, CancellationToken.None);
@@ -69,7 +77,7 @@ public class PackWorkflowTests
         };
 
         var result = await workflow.RunAsync(
-            pack, Path.Combine(temp.Path, "game"), null, null, CancellationToken.None);
+            pack, GameDir(temp), null, null, CancellationToken.None);
 
         Assert.Equal(PackStage.Downloading, result.ReachedStage);
         Assert.Equal(DownloadOutcome.ChecksumMismatch, result.Download!.Outcome);
@@ -89,7 +97,7 @@ public class PackWorkflowTests
         paths.EnsureCreated();
         await File.WriteAllBytesAsync(paths.ArchiveFile("EP01"), archive);
 
-        var game = Path.Combine(temp.Path, "game");
+        var game = GameDir(temp);
 
         var result = await workflow.RunAsync(
             Pack(archive, server.FileUrl), game, null, null, CancellationToken.None);
@@ -118,7 +126,7 @@ public class PackWorkflowTests
 
         var result = await workflow.RunAsync(
             Pack(archive, server.FileUrl),
-            Path.Combine(temp.Path, "game"), null, null, CancellationToken.None);
+            GameDir(temp), null, null, CancellationToken.None);
 
         Assert.Equal(PackStage.Done, result.ReachedStage);
         Assert.NotNull(result.Download);
@@ -141,7 +149,7 @@ public class PackWorkflowTests
         var pack = Pack(archive, server.FileUrl) with { InstalledSize = long.MaxValue };
 
         var result = await workflow.RunAsync(
-            pack, Path.Combine(temp.Path, "game"), null, null, CancellationToken.None);
+            pack, GameDir(temp), null, null, CancellationToken.None);
 
         Assert.Equal(PackStage.Installing, result.ReachedStage);
         Assert.Equal(InstallOutcome.InsufficientSpace, result.Install!.Outcome);
@@ -168,7 +176,7 @@ public class PackWorkflowTests
         var installProgress = new SyncProgress<InstallProgress>(_ => cancellation.Cancel());
 
         var result = await workflow.RunAsync(
-            Pack(bytes, server.FileUrl), Path.Combine(temp.Path, "game"),
+            Pack(bytes, server.FileUrl), GameDir(temp),
             null, installProgress, cancellation.Token);
 
         Assert.Equal(PackStage.Installing, result.ReachedStage);

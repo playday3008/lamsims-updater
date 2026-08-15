@@ -255,6 +255,39 @@ public class SegmentedDownloaderTests
     }
 
     [Fact]
+    public async Task A_sidecar_whose_collections_are_absent_restarts_the_download()
+    {
+        // PartState is a positional record, so a JSON document that omits CompletedChunks and
+        // Mirrors, or sets them to null, deserializes with both left null. The part file is
+        // exactly the archive's length, the precondition for trusting a sidecar at all.
+        var content = Payload(200_000);
+        await using var server = await TestFileServer.StartAsync(content);
+        using var temp = new TempDir();
+        var paths = new DownloadPaths(temp.Path);
+        paths.EnsureCreated();
+        using var client = HttpFactory.Create(8);
+
+        const long chunkSize = 100_000;
+        using (var fs = new FileStream(paths.PartFile("EP01"), FileMode.Create, FileAccess.Write))
+            fs.SetLength(content.LongLength);
+
+        await File.WriteAllTextAsync(
+            paths.StateFile("EP01"),
+            $$"""
+              {"Code":"EP01","TotalSize":{{content.LongLength}},
+               "ExpectedSha256":"{{Sha256Of(content)}}","ChunkSize":{{chunkSize}},
+               "CompletedChunks":null,"Mirrors":null}
+              """);
+
+        var result = await Downloader(client, paths, connections: 2, chunkSize).DownloadAsync(
+            new DownloadRequest("EP01", new[] { server.FileUrl }, content.LongLength, Sha256Of(content)),
+            progress: null, CancellationToken.None);
+
+        Assert.Equal(DownloadOutcome.Completed, result.Outcome);
+        Assert.Equal(content, await File.ReadAllBytesAsync(paths.ArchiveFile("EP01")));
+    }
+
+    [Fact]
     public async Task A_sidecar_with_incoherent_chunk_indices_restarts_the_download()
     {
         // The sidecar is a file on disk; anything may have written it. A repeated index, or one
@@ -372,8 +405,8 @@ public class SegmentedDownloaderTests
         Assert.All(snapshot, p => Assert.Equal(500_000, p.TotalBytes));
         Assert.All(snapshot, p => Assert.InRange(p.BytesCompleted, 0, 500_000));
 
-        // Reports are emitted inside the bookkeeping critical section, so they must arrive
-        // in non-decreasing order however the workers interleave.
+        // Only one worker reports at a time, and always the newest snapshot it can see, so
+        // reports arrive in non-decreasing order however the workers interleave.
         for (var i = 1; i < snapshot.Count; i++)
             Assert.True(snapshot[i].BytesCompleted >= snapshot[i - 1].BytesCompleted,
                 $"report {i} went backwards: {snapshot[i - 1].BytesCompleted} -> {snapshot[i].BytesCompleted}");
@@ -449,6 +482,42 @@ public class SegmentedDownloaderTests
         if (result.Outcome == DownloadOutcome.Completed) return;
 
         Assert.Equal(DownloadOutcome.Failed, result.Outcome);
+    }
+
+    [Fact]
+    public async Task A_blank_download_directory_is_reported_rather_than_thrown()
+    {
+        // AppSettings.DownloadDirectory is free text, and a blank one reaches
+        // Directory.CreateDirectory(""), an ArgumentException outside every filter here.
+        var content = Payload(1000);
+        await using var server = await TestFileServer.StartAsync(content);
+        using var client = HttpFactory.Create(4);
+
+        var result = await Downloader(client, new DownloadPaths("  "), connections: 2, chunkSize: 500)
+            .DownloadAsync(
+                new DownloadRequest("EP01", new[] { server.FileUrl }, content.LongLength, Sha256Of(content)),
+                progress: null, CancellationToken.None);
+
+        Assert.Equal(DownloadOutcome.Failed, result.Outcome);
+        Assert.Contains("download directory", result.Error!, StringComparison.OrdinalIgnoreCase);
+        Assert.Equal(0, server.RequestCount);
+    }
+
+    [Fact]
+    public async Task A_pack_code_that_is_not_a_file_name_is_reported_rather_than_thrown()
+    {
+        var content = Payload(1000);
+        await using var server = await TestFileServer.StartAsync(content);
+        using var temp = new TempDir();
+        using var client = HttpFactory.Create(4);
+
+        var result = await Downloader(client, new DownloadPaths(temp.Path), connections: 2, chunkSize: 500)
+            .DownloadAsync(
+                new DownloadRequest("../EP01", new[] { server.FileUrl }, content.LongLength, Sha256Of(content)),
+                progress: null, CancellationToken.None);
+
+        Assert.Equal(DownloadOutcome.Failed, result.Outcome);
+        Assert.Contains("EP01", result.Error!);
     }
 
     [Fact]

@@ -50,5 +50,14 @@ public sealed class DownloadOptions
             : throw new ArgumentOutOfRangeException(nameof(value), value, "Connections must be between 1 and 16.");
     }
 
-    public long ChunkSize { get; set; } = ChunkPlan.DefaultChunkSize;
+    private long _chunkSize = ChunkPlan.DefaultChunkSize;
+
+    /// <summary>Bytes per ranged request. Validated here so ChunkPlan.Create cannot be reached with a bad one.</summary>
+    public long ChunkSize
+    {
+        get => _chunkSize;
+        set => _chunkSize = value >= 1
+            ? value
+            : throw new ArgumentOutOfRangeException(nameof(value), value, "Chunk size must be at least 1 byte.");
+    }
 }

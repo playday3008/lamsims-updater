@@ -60,81 +60,102 @@ public sealed class ZipInstaller
     {
         var written = 0;
 
+        if (string.IsNullOrWhiteSpace(gameDirectory))
+            return InstallResult.Failed("The 'gameDirectory' argument must not be blank.");
+
+        // The game directory is where The Sims 4 is already installed, so it exists by the
+        // time anything is installed into it. Creating whatever path was supplied would
+        // silently materialise a typo and extract gigabytes into it, and the scanner already
+        // reads a missing game directory as an error rather than as something to create.
+        if (!Directory.Exists(gameDirectory))
+            return InstallResult.Failed($"The game directory '{gameDirectory}' does not exist.");
+
         try
         {
-            Directory.CreateDirectory(gameDirectory);
             DiskSpace.EnsureAvailable(gameDirectory, pack.RequiredInstallBytes);
 
             var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(gameDirectory));
 
-            using var archive = ZipFile.OpenRead(archivePath);
+            // A filesystem or drive root keeps its trailing separator, since
+            // TrimEndingDirectorySeparator never strips a root, so appending a second one would
+            // give a prefix ('//', 'D:\\') that no destination can start with, and every entry
+            // would read as an escape.
+            var inside = root.EndsWith(Path.DirectorySeparatorChar)
+                ? root
+                : root + Path.DirectorySeparatorChar;
 
-            // Every destination is resolved before a single byte is written. A hostile entry
-            // found halfway through would already have put files outside the game directory,
-            // and resolution reads only the central directory, so it costs nothing.
-            var planned = new List<(ZipArchiveEntry Entry, string Destination)>(archive.Entries.Count);
-            var totalBytes = 0L;
-
-            foreach (var entry in archive.Entries)
+            // The archive handle is closed before the delete below: it is opened with
+            // FileShare.Read and no FileShare.Delete, so on Windows deleting it while this
+            // handle is open is a sharing violation and every installed archive would be
+            // retained forever.
+            using (var archive = ZipFile.OpenRead(archivePath))
             {
-                string destination;
-                try
+                // Every destination is resolved before a single byte is written. A hostile entry
+                // found halfway through would already have put files outside the game directory,
+                // and resolution reads only the central directory, so it costs nothing.
+                var planned = new List<(ZipArchiveEntry Entry, string Destination)>(archive.Entries.Count);
+                var totalBytes = 0L;
+
+                foreach (var entry in archive.Entries)
                 {
-                    destination = Path.GetFullPath(Path.Combine(root, entry.FullName));
-                }
-                catch (Exception e) when (e is ArgumentException or NotSupportedException)
-                {
-                    // A name the path APIs reject is reported the same way a bad write is:
-                    // the entry is named rather than the process crashing on a hostile archive.
-                    throw new IOException($"Archive entry '{entry.FullName}' has a name that is not a valid path: {e.Message}", e);
-                }
-
-                if (destination != root
-                    && !destination.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.Ordinal))
-                {
-                    throw new ZipSlipException(entry.FullName);
-                }
-
-                planned.Add((entry, destination));
-                totalBytes += entry.Length;
-            }
-
-            var bytes = 0L;
-
-            foreach (var (entry, destination) in planned)
-            {
-                ct.ThrowIfCancellationRequested();
-
-                try
-                {
-                    // A directory entry carries a trailing separator and an empty Name.
-                    if (entry.Name.Length == 0)
+                    string destination;
+                    try
                     {
-                        Directory.CreateDirectory(destination);
-                        continue;
+                        destination = Path.GetFullPath(Path.Combine(root, entry.FullName));
+                    }
+                    catch (Exception e) when (e is ArgumentException or NotSupportedException)
+                    {
+                        // A name the path APIs reject is reported the same way a bad write is:
+                        // the entry is named rather than the process crashing on a hostile archive.
+                        throw new IOException($"Archive entry '{entry.FullName}' has a name that is not a valid path: {e.Message}", e);
                     }
 
-                    Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+                    if (destination != root
+                        && !destination.StartsWith(inside, StringComparison.Ordinal))
+                    {
+                        throw new ZipSlipException(entry.FullName);
+                    }
 
-                    await using var source = entry.Open();
-                    await using var target = new FileStream(
-                        destination, FileMode.Create, FileAccess.Write, FileShare.None,
-                        BufferSize, FileOptions.Asynchronous);
-
-                    await source.CopyToAsync(target, ct);
+                    planned.Add((entry, destination));
+                    totalBytes += entry.Length;
                 }
-                catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException)
+
+                var bytes = 0L;
+
+                foreach (var (entry, destination) in planned)
                 {
-                    // Upstream caught everything and reported one generic message. Naming the
-                    // entry is the difference between a bug report and a guess, whether the
-                    // failure was creating its parent directory or writing its bytes.
-                    throw new IOException(
-                        $"Entry '{entry.FullName}' could not be written to '{destination}': {e.Message}", e);
-                }
+                    ct.ThrowIfCancellationRequested();
 
-                written++;
-                bytes += entry.Length;
-                Report(progress, new InstallProgress(pack.Code, bytes, totalBytes, entry.FullName));
+                    try
+                    {
+                        // A directory entry carries a trailing separator and an empty Name.
+                        if (entry.Name.Length == 0)
+                        {
+                            Directory.CreateDirectory(destination);
+                            continue;
+                        }
+
+                        Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
+
+                        await using var source = entry.Open();
+                        await using var target = new FileStream(
+                            destination, FileMode.Create, FileAccess.Write, FileShare.None,
+                            BufferSize, FileOptions.Asynchronous);
+
+                        await source.CopyToAsync(target, ct);
+                    }
+                    catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException)
+                    {
+                        // The entry is named in the message, so a report says which one failed
+                        // and whether it was creating its parent directory or writing its bytes.
+                        throw new IOException(
+                            $"Entry '{entry.FullName}' could not be written to '{destination}': {e.Message}", e);
+                    }
+
+                    written++;
+                    bytes += entry.Length;
+                    Report(progress, new InstallProgress(pack.Code, bytes, totalBytes, entry.FullName));
+                }
             }
 
             // Deleted only now. A failed or cancelled install keeps the verified archive so the
@@ -153,8 +174,12 @@ public sealed class ZipInstaller
         {
             return InstallResult.InsufficientSpace(e.Message);
         }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException or InvalidDataException)
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException
+                                       or InvalidDataException or ArgumentException)
         {
+            // ArgumentException covers the path APIs, which reject a name rather than failing
+            // to use it: a UNC game directory on Windows reaches DriveInfo this way. This
+            // method always returns an InstallResult.
             return InstallResult.Failed(e.Message, written);
         }
     }
