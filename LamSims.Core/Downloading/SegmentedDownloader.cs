@@ -72,7 +72,7 @@ public sealed class SegmentedDownloader
             // honours ranges at all.
             if (mirrors.Count == 0)
                 return await new SingleStreamDownloader(_client, _paths, _retry, _delay)
-                    .DownloadAsync(request, rangeLess[0], progress, ct);
+                    .DownloadAsync(request, rangeLess, progress, ct);
 
             var chunks = ChunkPlan.Create(request.Size, _options.ChunkSize);
 
@@ -140,8 +140,10 @@ public sealed class SegmentedDownloader
                 else
                     rangeLess.Add(url);
             }
-            catch (Exception e) when (e is HttpRequestException or IOException)
+            catch (Exception e) when (e is HttpRequestException or IOException or SizeMismatchException)
             {
+                // Per url, including the size disagreement raised just above: one stale mirror
+                // must not stop the mirrors after it from being probed.
                 lastError = e;
             }
         }
@@ -173,11 +175,15 @@ public sealed class SegmentedDownloader
 
         var saved = store.TryLoad();
 
-        // PartState is a positional record, so a document that omits either collection — or
-        // spells it null — deserializes with that property left null.
+        // PartState is a positional record, so a document that omits either collection, or
+        // spells it null, deserializes with that property left null. A null *element* inside
+        // one is the same hazard a step further in: no serializer writes it, but the file is
+        // untrusted, and the projections below would dereference it.
         if (saved is null
             || saved.CompletedChunks is null
             || saved.Mirrors is null
+            || saved.CompletedChunks.Any(c => c is null)
+            || saved.Mirrors.Any(m => m is null)
             || saved.Code != request.Code
             || saved.TotalSize != request.Size
             || saved.ChunkSize != _options.ChunkSize

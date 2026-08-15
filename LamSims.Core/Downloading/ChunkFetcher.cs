@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http.Headers;
 using Microsoft.Win32.SafeHandles;
@@ -44,7 +45,9 @@ public sealed class ValidatorMismatchException : Exception
 
 /// <summary>
 /// Fetches one chunk, retrying with exponential backoff and rotating mirrors between
-/// attempts. Writes land positionally on a shared handle, so workers need no lock.
+/// attempts. Writes land positionally on a shared handle, so workers need no lock. One
+/// instance serves a whole download, so a mirror set aside for changing its entity stays
+/// set aside for the chunks that follow.
 /// </summary>
 public sealed class ChunkFetcher
 {
@@ -53,6 +56,9 @@ public sealed class ChunkFetcher
     private readonly HttpClient _client;
     private readonly RetryOptions _retry;
     private readonly IDelayProvider _delay;
+
+    /// <summary>Mirrors that answered a conditional range request with 200, by url.</summary>
+    private readonly ConcurrentDictionary<string, byte> _setAside = new(StringComparer.Ordinal);
 
     public ChunkFetcher(HttpClient client, RetryOptions retry, IDelayProvider delay)
     {
@@ -74,17 +80,24 @@ public sealed class ChunkFetcher
         for (var attempt = 0; attempt < _retry.MaxAttempts; attempt++)
         {
             ct.ThrowIfCancellationRequested();
-            var mirror = mirrors[(preferredMirror + attempt) % mirrors.Count];
+
+            var mirror = NextMirror(mirrors, preferredMirror + attempt);
+            if (mirror is null) break;
 
             try
             {
                 await FetchOnceAsync(chunk, mirror, target, ct);
                 return mirror;
             }
-            catch (ValidatorMismatchException)
+            catch (ValidatorMismatchException e)
             {
-                // The entity changed; retrying the same bytes cannot help.
-                throw;
+                // The entity changed there, so retrying the same bytes on that mirror cannot
+                // help, but the other mirrors can still serve them. A round-robin cluster
+                // whose nodes derive a different ETag from identical bytes would otherwise make
+                // the pack permanently unfetchable, and re-probing rederives the same unstable
+                // validator every run. No backoff, because another mirror is ready now.
+                _setAside[mirror.Url.ToString()] = 0;
+                lastError = e;
             }
             catch (Exception e) when (e is HttpRequestException or IOException && !ct.IsCancellationRequested)
             {
@@ -95,6 +108,21 @@ public sealed class ChunkFetcher
         }
 
         throw lastError ?? new HttpRequestException($"Chunk {chunk.Index} could not be fetched.");
+    }
+
+    /// <summary>
+    /// The first mirror at or after <paramref name="start"/> that has not been set aside, or
+    /// null once every one of them has been.
+    /// </summary>
+    private MirrorSource? NextMirror(IReadOnlyList<MirrorSource> mirrors, int start)
+    {
+        for (var offset = 0; offset < mirrors.Count; offset++)
+        {
+            var mirror = mirrors[(start + offset) % mirrors.Count];
+            if (!_setAside.ContainsKey(mirror.Url.ToString())) return mirror;
+        }
+
+        return null;
     }
 
     private async Task FetchOnceAsync(Chunk chunk, MirrorSource mirror, SafeFileHandle target, CancellationToken ct)

@@ -134,4 +134,29 @@ public class PartStateStoreTests
         Assert.True(validator.HasValidator);
         Assert.Equal("Wed, 21 Oct 2015 07:28:00 GMT", validator.IfRangeValue);
     }
+
+
+    [Fact]
+    public async Task Delete_sweeps_a_temp_file_left_by_a_kill_mid_save()
+    {
+        using var temp = new TempDir();
+        var path = Path.Combine(temp.Path, "EP01.part.json");
+        var store = new PartStateStore(path);
+
+        await store.SaveAsync(
+            new PartState("EP01", 100, new string('a', 64), 50,
+                Array.Empty<CompletedChunk>(), Array.Empty<MirrorValidator>()),
+            CancellationToken.None);
+
+        // AtomicFile names each temp uniquely, so a process killed mid-save leaves one behind
+        // that no later save overwrites. Without a sweep they accumulate for the life of the
+        // download directory.
+        var orphan = path + "." + Path.GetRandomFileName() + ".tmp";
+        await File.WriteAllTextAsync(orphan, "half-written");
+
+        store.Delete();
+
+        Assert.False(File.Exists(path));
+        Assert.False(File.Exists(orphan));
+    }
 }

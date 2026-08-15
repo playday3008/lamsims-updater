@@ -1,9 +1,11 @@
 namespace LamSims.Core.Downloading;
 
 /// <summary>
-/// The fallback for servers that ignore byte ranges. It offers no speedup and cannot
-/// resume — a retry restarts from zero — but it goes through the same partial file and
-/// the same checksum gate, so a completed archive is trusted on the same terms.
+/// The fallback for servers that ignore byte ranges. It offers no speedup and cannot resume,
+/// so a retry restarts from zero, but it goes through the same partial file and the same
+/// checksum gate, so a completed archive is trusted on the same terms. Each attempt takes the
+/// next url in turn, so a mirror that dies mid-transfer costs one attempt rather than the
+/// download.
 /// </summary>
 public sealed class SingleStreamDownloader
 {
@@ -24,14 +26,18 @@ public sealed class SingleStreamDownloader
     }
 
     public async Task<DownloadResult> DownloadAsync(
-        DownloadRequest request, Uri url, IProgress<DownloadProgress>? progress, CancellationToken ct)
+        DownloadRequest request, IReadOnlyList<Uri> urls, IProgress<DownloadProgress>? progress,
+        CancellationToken ct)
     {
         var state = new PartStateStore(_paths.StateFile(request.Code));
 
         Exception? lastError = null;
+        var transferred = false;
 
-        for (var attempt = 0; attempt < _retry.MaxAttempts; attempt++)
+        for (var attempt = 0; attempt < _retry.MaxAttempts && !transferred; attempt++)
         {
+            var url = urls[attempt % urls.Count];
+
             try
             {
                 // Backoff runs inside the try, so a cancellation during it is reported as
@@ -42,9 +48,7 @@ public sealed class SingleStreamDownloader
                 _paths.EnsureCreated();
 
                 await TransferAsync(request, url, state, progress, ct);
-
-                return await new ArchiveFinalizer(_paths)
-                    .FinalizeAsync(request.Code, request.Sha256, state, usedSingleStream: true, ct);
+                transferred = true;
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {
@@ -57,8 +61,37 @@ public sealed class SingleStreamDownloader
             }
         }
 
+        if (!transferred)
+            return DownloadResult.Failed(
+                lastError?.Message ?? $"{request.Code} could not be downloaded.", usedSingleStream: true);
+
+        // Finalizing gets its own attempts rather than sharing the transfer's. Hashing and
+        // renaming a file that is already complete fails for reasons of its own, usually a
+        // scanner holding the just-closed file, and those are worth waiting out, where
+        // re-entering the transfer loop would truncate the finished part file and pull every
+        // byte down again.
+        for (var attempt = 0; attempt < _retry.MaxAttempts; attempt++)
+        {
+            try
+            {
+                if (attempt > 0)
+                    await _delay.DelayAsync(BackoffFor(attempt - 1), ct);
+
+                return await new ArchiveFinalizer(_paths)
+                    .FinalizeAsync(request.Code, request.Sha256, state, usedSingleStream: true, ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                return DownloadResult.Cancelled(usedSingleStream: true);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                lastError = e;
+            }
+        }
+
         return DownloadResult.Failed(
-            lastError?.Message ?? $"{request.Code} could not be downloaded.", usedSingleStream: true);
+            lastError?.Message ?? $"{request.Code} could not be finalized.", usedSingleStream: true);
     }
 
     /// <summary>Same capped, jittered backoff the segmented path uses.</summary>
@@ -132,6 +165,10 @@ public sealed class SingleStreamDownloader
         if (received != request.Size)
             throw new IOException($"'{url}' ended after {received} of {request.Size} bytes.");
 
-        await file.FlushAsync(ct);
+        // To the disk, not just to the OS: the finalizer hashes this file out of the page
+        // cache and renames it, so a power loss straight afterwards would otherwise leave a
+        // full-length archive of zeroed blocks. The segmented path flushes every chunk to disk
+        // the same way.
+        file.Flush(flushToDisk: true);
     }
 }

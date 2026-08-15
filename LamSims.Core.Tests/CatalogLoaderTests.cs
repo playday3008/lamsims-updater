@@ -54,6 +54,40 @@ public class CatalogLoaderTests
     }
 
     [Fact]
+    public async Task Refuses_a_local_catalog_larger_than_the_cap()
+    {
+        using var temp = new TempDir();
+        var oversized = Path.Combine(temp.Path, "huge.json");
+        Directory.CreateDirectory(temp.Path);
+
+        // One byte past the 1 MB cap, and filler rather than valid JSON: the refusal has to
+        // happen on length alone, before anything parses it.
+        File.WriteAllBytes(oversized, new byte[(1024 * 1024) + 1]);
+
+        var resolution = await Loader(temp).ResolveAsync(oversized, null, CancellationToken.None);
+
+        Assert.Equal(CatalogStatus.Failed, resolution.Status);
+        Assert.Contains("exceeds", resolution.Error);
+    }
+
+    [Fact]
+    public async Task Loads_a_local_catalog_written_with_a_byte_order_mark()
+    {
+        using var temp = new TempDir();
+        var withBom = Path.Combine(temp.Path, "bom.json");
+        Directory.CreateDirectory(temp.Path);
+
+        // Notepad and PowerShell's Out-File both do this. The BOM must be consumed the same way
+        // it is over HTTP, or the catalog reaches the parser as a U+FEFF it rejects.
+        File.WriteAllText(withBom, CatalogJson("EP09"), new UTF8Encoding(encoderShouldEmitUTF8Identifier: true));
+
+        var resolution = await Loader(temp).ResolveAsync(withBom, null, CancellationToken.None);
+
+        Assert.Equal(CatalogStatus.Loaded, resolution.Status);
+        Assert.Equal("EP09", Assert.Single(resolution.Load!.Catalog.Packs).Code);
+    }
+
+    [Fact]
     public async Task Falls_back_to_the_settings_source()
     {
         using var temp = new TempDir();

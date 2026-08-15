@@ -46,6 +46,21 @@ public sealed class PartStateStore
     public void Delete()
     {
         try { File.Delete(_path); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
-        try { File.Delete(_path + ".tmp"); } catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+
+        // AtomicFile writes through a temp name unique to each call and removes it itself, so
+        // one survives only a kill mid-save. Sweeping them here is what keeps that from
+        // accumulating across a download's lifetime: nothing else matches the name.
+        try
+        {
+            foreach (var stale in Directory.EnumerateFiles(
+                         Path.GetDirectoryName(_path)!, Path.GetFileName(_path) + ".*.tmp"))
+            {
+                try { File.Delete(stale); }
+                catch (Exception e) when (e is IOException or UnauthorizedAccessException) { }
+            }
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or DirectoryNotFoundException)
+        {
+        }
     }
 }

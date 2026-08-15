@@ -147,6 +147,9 @@ public static class CatalogParser
         element.TryGetProperty("type", out var type)
         && type.ValueKind == JsonValueKind.String
         && Enum.TryParse<PackType>(type.GetString(), ignoreCase: true, out var parsed)
+        // TryParse also accepts the numeric form of an enum, so "7" would otherwise cross the
+        // public API as a PackType no switch in the application has a case for.
+        && Enum.IsDefined(parsed)
             ? parsed
             : PackType.Unknown;
 

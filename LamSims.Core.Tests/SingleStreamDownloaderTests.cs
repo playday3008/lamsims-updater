@@ -29,7 +29,7 @@ public class SingleStreamDownloaderTests
         var result = await new SingleStreamDownloader(client, paths, RetryOptions.Default, new FakeDelayProvider())
             .DownloadAsync(
                 new DownloadRequest("EP01", new[] { server.FileUrl }, content.LongLength, Sha256Of(content)),
-                server.FileUrl, progress: null, CancellationToken.None);
+                new[] { server.FileUrl }, progress: null, CancellationToken.None);
 
         Assert.Equal(DownloadOutcome.Completed, result.Outcome);
         Assert.True(result.UsedSingleStream);
@@ -54,7 +54,7 @@ public class SingleStreamDownloaderTests
         var result = await new SingleStreamDownloader(client, paths, RetryOptions.Default, new FakeDelayProvider())
             .DownloadAsync(
                 new DownloadRequest("EP01", new[] { server.FileUrl }, content.LongLength, Sha256Of(content)),
-                server.FileUrl, progress: null, CancellationToken.None);
+                new[] { server.FileUrl }, progress: null, CancellationToken.None);
 
         Assert.Equal(DownloadOutcome.Completed, result.Outcome);
         Assert.Equal(content, await File.ReadAllBytesAsync(paths.ArchiveFile("EP01")));
@@ -84,7 +84,7 @@ public class SingleStreamDownloaderTests
         var result = await new SingleStreamDownloader(client, paths, shortTimeout, new FakeDelayProvider())
             .DownloadAsync(
                 new DownloadRequest("EP01", new[] { server.FileUrl }, content.LongLength, Sha256Of(content)),
-                server.FileUrl, progress: null, CancellationToken.None);
+                new[] { server.FileUrl }, progress: null, CancellationToken.None);
 
         Assert.Equal(DownloadOutcome.Failed, result.Outcome);
         Assert.Contains("sent no data", result.Error!);
@@ -108,7 +108,7 @@ public class SingleStreamDownloaderTests
         var result = await new SingleStreamDownloader(client, paths, shortTimeout, new FakeDelayProvider())
             .DownloadAsync(
                 new DownloadRequest("EP01", new[] { server.FileUrl }, content.LongLength, Sha256Of(content)),
-                server.FileUrl, progress: null, CancellationToken.None);
+                new[] { server.FileUrl }, progress: null, CancellationToken.None);
 
         Assert.Equal(DownloadOutcome.Failed, result.Outcome);
         Assert.Contains("sent no response headers", result.Error!);
@@ -131,7 +131,7 @@ public class SingleStreamDownloaderTests
         var result = await new SingleStreamDownloader(client, paths, RetryOptions.Default, new FakeDelayProvider())
             .DownloadAsync(
                 new DownloadRequest("EP01", new[] { server.FileUrl }, 2000, Sha256Of(content)),
-                server.FileUrl, progress: null, CancellationToken.None);
+                new[] { server.FileUrl }, progress: null, CancellationToken.None);
 
         Assert.Equal(DownloadOutcome.Failed, result.Outcome);
         Assert.Contains("ended after 1000 of 2000 bytes", result.Error!);
@@ -154,7 +154,7 @@ public class SingleStreamDownloaderTests
         var result = await new SingleStreamDownloader(client, paths, RetryOptions.Default, new FakeDelayProvider())
             .DownloadAsync(
                 new DownloadRequest("EP01", new[] { server.FileUrl }, 1000, Sha256Of(content)),
-                server.FileUrl, progress: null, CancellationToken.None);
+                new[] { server.FileUrl }, progress: null, CancellationToken.None);
 
         Assert.Equal(DownloadOutcome.Failed, result.Outcome);
         Assert.Contains("more than the expected 1000 bytes", result.Error!);
@@ -177,7 +177,7 @@ public class SingleStreamDownloaderTests
         var result = await new SingleStreamDownloader(client, paths, RetryOptions.Default, new FakeDelayProvider())
             .DownloadAsync(
                 new DownloadRequest("EP01", new[] { server.FileUrl }, content.LongLength, Sha256Of(content)),
-                server.FileUrl, progress, cts.Token);
+                new[] { server.FileUrl }, progress, cts.Token);
 
         Assert.Equal(DownloadOutcome.Cancelled, result.Outcome);
         Assert.True(result.UsedSingleStream);
@@ -201,7 +201,7 @@ public class SingleStreamDownloaderTests
                 client, new DownloadPaths(locked.Child), RetryOptions.Default, new FakeDelayProvider())
             .DownloadAsync(
                 new DownloadRequest("EP01", new[] { server.FileUrl }, content.LongLength, Sha256Of(content)),
-                server.FileUrl, progress: null, CancellationToken.None);
+                new[] { server.FileUrl }, progress: null, CancellationToken.None);
 
         // A process holding CAP_DAC_OVERRIDE ignores the permission bits and succeeds; there is
         // nothing to assert in that case.
@@ -230,6 +230,34 @@ public class SingleStreamDownloaderTests
         Assert.Equal(DownloadOutcome.Completed, result.Outcome);
         Assert.True(result.UsedSingleStream);
         Assert.Equal(content, await File.ReadAllBytesAsync(paths.ArchiveFile("EP01")));
+    }
+
+    [Fact]
+    public async Task The_fallback_rotates_across_every_rangeless_mirror()
+    {
+        // The fallback cannot resume, so a mirror that dies mid-transfer is a total loss and
+        // re-requesting it on every attempt never reaches the healthy alternate.
+        var content = Payload(150_000);
+        await using var broken = await TestFileServer.StartAsync(
+            content, new TestFileServerOptions { SupportRanges = false, DropAfterBytes = 10 });
+        await using var healthy = await TestFileServer.StartAsync(
+            content, new TestFileServerOptions { SupportRanges = false });
+        using var temp = new TempDir();
+        var paths = new DownloadPaths(temp.Path);
+        using var client = HttpFactory.Create(4);
+
+        var result = await new SegmentedDownloader(
+                client, paths, new DownloadOptions { Connections = 4, ChunkSize = 16 * 1024 },
+                RetryOptions.Default, new FakeDelayProvider())
+            .DownloadAsync(
+                new DownloadRequest("EP01", new[] { broken.FileUrl, healthy.FileUrl },
+                    content.LongLength, Sha256Of(content)),
+                progress: null, CancellationToken.None);
+
+        Assert.Equal(DownloadOutcome.Completed, result.Outcome);
+        Assert.True(result.UsedSingleStream);
+        Assert.Equal(content, await File.ReadAllBytesAsync(paths.ArchiveFile("EP01")));
+        Assert.True(healthy.RequestCount > 1, "the second rangeless mirror was never asked for the body");
     }
 
     [Fact]

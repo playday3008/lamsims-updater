@@ -237,6 +237,77 @@ public class SegmentedDownloaderTests
     }
 
     [Fact]
+    public async Task A_mirror_whose_entity_changes_mid_download_is_set_aside_for_another()
+    {
+        // A round-robin cluster with per-node ETags answers an If-Range with 200 for identical
+        // bytes. Failing the whole download over that makes the pack permanently unfetchable
+        // even with a healthy mirror listed, and the probe re-derives the same unstable
+        // validator on every run, so it never self-heals.
+        var content = Payload(400_000);
+        var changingOptions = new TestFileServerOptions { ETag = "\"v1\"" };
+        await using var changing = await TestFileServer.StartAsync(content, changingOptions);
+        await using var steady = await TestFileServer.StartAsync(
+            content, new TestFileServerOptions { ETag = "\"steady\"" });
+        using var temp = new TempDir();
+        var paths = new DownloadPaths(temp.Path);
+        using var client = HttpFactory.Create(8);
+
+        // One connection, so the chunks are pulled in order and the entity changes exactly
+        // once, after the first of four has landed.
+        var progress = new SyncProgress<DownloadProgress>(_ => changingOptions.ETag = "\"v2\"");
+
+        var result = await Downloader(client, paths, connections: 1, chunkSize: 100_000).DownloadAsync(
+            new DownloadRequest("EP01", new[] { changing.FileUrl, steady.FileUrl },
+                content.LongLength, Sha256Of(content)),
+            progress, CancellationToken.None);
+
+        Assert.Equal(DownloadOutcome.Completed, result.Outcome);
+        Assert.Equal(content, await File.ReadAllBytesAsync(paths.ArchiveFile("EP01")));
+
+        // The remaining chunks came from the mirror that did not change.
+        Assert.True(steady.RequestCount >= 2, $"steady mirror served {steady.RequestCount} requests");
+    }
+
+    [Fact]
+    public async Task A_validator_change_with_no_mirror_left_is_reported_rather_than_thrown()
+    {
+        var content = Payload(400_000);
+        var options = new TestFileServerOptions { ETag = "\"v1\"" };
+        await using var server = await TestFileServer.StartAsync(content, options);
+        using var temp = new TempDir();
+        var paths = new DownloadPaths(temp.Path);
+        using var client = HttpFactory.Create(8);
+
+        var progress = new SyncProgress<DownloadProgress>(_ => options.ETag = "\"v2\"");
+
+        var result = await Downloader(client, paths, connections: 1, chunkSize: 100_000).DownloadAsync(
+            new DownloadRequest("EP01", new[] { server.FileUrl }, content.LongLength, Sha256Of(content)),
+            progress, CancellationToken.None);
+
+        Assert.Equal(DownloadOutcome.Failed, result.Outcome);
+        Assert.Contains("changed on the server", result.Error!);
+    }
+
+    [Fact]
+    public async Task A_mirror_reporting_the_wrong_size_does_not_stop_the_others_being_probed()
+    {
+        var content = Payload(400_000);
+        await using var stale = await TestFileServer.StartAsync(Payload(123_456));
+        await using var current = await TestFileServer.StartAsync(content);
+        using var temp = new TempDir();
+        var paths = new DownloadPaths(temp.Path);
+        using var client = HttpFactory.Create(8);
+
+        var result = await Downloader(client, paths, connections: 2, chunkSize: 100_000).DownloadAsync(
+            new DownloadRequest("EP01", new[] { stale.FileUrl, current.FileUrl },
+                content.LongLength, Sha256Of(content)),
+            progress: null, CancellationToken.None);
+
+        Assert.Equal(DownloadOutcome.Completed, result.Outcome);
+        Assert.Equal(content, await File.ReadAllBytesAsync(paths.ArchiveFile("EP01")));
+    }
+
+    [Fact]
     public async Task A_torn_sidecar_restarts_the_download_instead_of_throwing()
     {
         var content = Payload(200_000);
@@ -277,6 +348,41 @@ public class SegmentedDownloaderTests
               {"Code":"EP01","TotalSize":{{content.LongLength}},
                "ExpectedSha256":"{{Sha256Of(content)}}","ChunkSize":{{chunkSize}},
                "CompletedChunks":null,"Mirrors":null}
+              """);
+
+        var result = await Downloader(client, paths, connections: 2, chunkSize).DownloadAsync(
+            new DownloadRequest("EP01", new[] { server.FileUrl }, content.LongLength, Sha256Of(content)),
+            progress: null, CancellationToken.None);
+
+        Assert.Equal(DownloadOutcome.Completed, result.Outcome);
+        Assert.Equal(content, await File.ReadAllBytesAsync(paths.ArchiveFile("EP01")));
+    }
+
+    [Theory]
+    [InlineData("\"CompletedChunks\":[null],\"Mirrors\":[]")]
+    [InlineData("\"CompletedChunks\":[],\"Mirrors\":[null]")]
+    public async Task A_sidecar_holding_a_null_entry_restarts_the_download(string collections)
+    {
+        // One step past the absent-collection case: the list is there, an element inside it is
+        // not. No serializer writes this, but the sidecar is a file on disk that anything may
+        // have written, and the projections over it would dereference the null.
+        var content = Payload(200_000);
+        await using var server = await TestFileServer.StartAsync(content);
+        using var temp = new TempDir();
+        var paths = new DownloadPaths(temp.Path);
+        paths.EnsureCreated();
+        using var client = HttpFactory.Create(8);
+
+        const long chunkSize = 100_000;
+        using (var fs = new FileStream(paths.PartFile("EP01"), FileMode.Create, FileAccess.Write))
+            fs.SetLength(content.LongLength);
+
+        await File.WriteAllTextAsync(
+            paths.StateFile("EP01"),
+            $$"""
+              {"Code":"EP01","TotalSize":{{content.LongLength}},
+               "ExpectedSha256":"{{Sha256Of(content)}}","ChunkSize":{{chunkSize}},
+               {{collections}}}
               """);
 
         var result = await Downloader(client, paths, connections: 2, chunkSize).DownloadAsync(
@@ -536,5 +642,28 @@ public class SegmentedDownloaderTests
         Assert.Equal(DownloadOutcome.Failed, result.Outcome);
         Assert.Contains("free", result.Error!, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(0, server.RequestCount);
+    }
+
+    [Fact]
+    public async Task Fails_the_download_when_a_chunk_exhausts_every_retry()
+    {
+        // Every ranged response is cut short, so no chunk can complete. A mirror that accepts the
+        // connection and then stops sending is the ordinary way a real download dies.
+        var content = Payload(2_000_000);
+        await using var server = await TestFileServer.StartAsync(
+            content, new TestFileServerOptions { DropAfterBytes = 1024 });
+        using var temp = new TempDir();
+        var paths = new DownloadPaths(temp.Path);
+        using var client = HttpFactory.Create(8);
+
+        var result = await Downloader(client, paths, connections: 4, chunkSize: 64 * 1024).DownloadAsync(
+            new DownloadRequest("EP01", new[] { server.FileUrl }, content.LongLength, Sha256Of(content)),
+            progress: null, CancellationToken.None);
+
+        // Failed, not ChecksumMismatch: a transport failure reported as a checksum failure sends
+        // the user hunting a corrupt mirror, and leaves a .zip.bad they have to clear by hand.
+        Assert.Equal(DownloadOutcome.Failed, result.Outcome);
+        Assert.False(File.Exists(paths.QuarantineFile("EP01")));
+        Assert.False(File.Exists(paths.ArchiveFile("EP01")));
     }
 }

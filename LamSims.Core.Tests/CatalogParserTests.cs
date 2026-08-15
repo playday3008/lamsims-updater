@@ -81,6 +81,10 @@ public class CatalogParserTests
     [InlineData("stuff", PackType.Stuff)]
     [InlineData("kit", PackType.Kit)]
     [InlineData("bundle", PackType.Unknown)]
+    // Enum.TryParse accepts the numeric form too, so without a defined-value check these would
+    // reach the application as a PackType nothing has a case for.
+    [InlineData("7", PackType.Unknown)]
+    [InlineData("-1", PackType.Unknown)]
     public void Reads_the_pack_type_case_insensitively(string type, PackType expected)
     {
         var pack = Assert.Single(CatalogParser.Parse(Json(Pack(type: type))).Catalog.Packs);

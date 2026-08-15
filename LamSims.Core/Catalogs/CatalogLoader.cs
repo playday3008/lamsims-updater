@@ -37,8 +37,12 @@ public sealed record CatalogResolution(
 
 public sealed class CatalogLoader
 {
-    /// <summary>A genuine remote fetch is bounded by this many bytes; see <see cref="ReadBoundedAsync"/>.</summary>
-    private const long MaxRemoteBytes = 1024 * 1024;
+    /// <summary>
+    /// A genuine catalog is bounded by this many bytes, wherever it comes from. A local path is
+    /// no more trustworthy than a URL, since both are values the user typed, so the same cap
+    /// applies to each; see <see cref="ReadBoundedAsync"/> and <see cref="ReadLocalBoundedAsync"/>.
+    /// </summary>
+    private const long MaxCatalogBytes = 1024 * 1024;
 
     private static readonly TimeSpan DefaultRemoteTimeout = TimeSpan.FromSeconds(30);
 
@@ -169,7 +173,7 @@ public sealed class CatalogLoader
     private async Task<CatalogLoadResult> LoadCoreAsync(CatalogSource source, CancellationToken ct)
     {
         if (!source.IsRemote)
-            return CatalogParser.Parse(await File.ReadAllTextAsync(source.Location, ct));
+            return CatalogParser.Parse(await ReadLocalBoundedAsync(source, ct));
 
         // Bounds the fetch end to end; see the constructor's remoteTimeout parameter. Firing
         // cancels the linked token, not the caller's ct, so IsSourceFailure's check of
@@ -194,12 +198,34 @@ public sealed class CatalogLoader
     }
 
     /// <summary>
-    /// Streams the response body into memory up to <see cref="MaxRemoteBytes"/>, past which a
+    /// The local counterpart of <see cref="ReadBoundedAsync"/>. Reading a path with
+    /// File.ReadAllTextAsync would allocate whatever it was pointed at in full, and
+    /// OutOfMemoryException is not something <see cref="IsSourceFailure"/> can report; the
+    /// process dies. The length is known up front here, so the file is refused before any of it
+    /// is read. detectEncodingFromByteOrderMarks matches the remote path so a BOM-prefixed
+    /// catalog loads identically from disk and over HTTP.
+    /// </summary>
+    private static async Task<string> ReadLocalBoundedAsync(CatalogSource source, CancellationToken ct)
+    {
+        await using var stream = new FileStream(
+            source.Location, FileMode.Open, FileAccess.Read, FileShare.Read);
+
+        if (stream.Length > MaxCatalogBytes)
+        {
+            throw new CatalogTooLargeException(
+                $"The catalog at '{source.Location}' exceeds the {MaxCatalogBytes}-byte limit.");
+        }
+
+        using var reader = new StreamReader(stream, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
+        return await reader.ReadToEndAsync(ct);
+    }
+
+    /// <summary>
+    /// Streams the response body into memory up to <see cref="MaxCatalogBytes"/>, past which a
     /// hostile or misconfigured URL is refused before more of it is read. This only bounds
     /// memory because <see cref="LoadCoreAsync"/> requests the response with
-    /// <see cref="HttpCompletionOption.ResponseHeadersRead"/> — otherwise HttpClient would
-    /// already hold the whole body before this method ever saw it. A catalog is at most a few
-    /// hundred KB, so the cap costs nothing a real catalog would ever hit.
+    /// <see cref="HttpCompletionOption.ResponseHeadersRead"/>; otherwise HttpClient would
+    /// already hold the whole body before this method ever saw it.
     /// </summary>
     private static async Task<string> ReadBoundedAsync(
         HttpResponseMessage response, CatalogSource source, CancellationToken ct)
@@ -211,10 +237,10 @@ public sealed class CatalogLoader
         int read;
         while ((read = await stream.ReadAsync(chunk, ct)) > 0)
         {
-            if (buffered.Length + read > MaxRemoteBytes)
+            if (buffered.Length + read > MaxCatalogBytes)
             {
                 throw new CatalogTooLargeException(
-                    $"The catalog at '{source.Location}' exceeds the {MaxRemoteBytes}-byte limit.");
+                    $"The catalog at '{source.Location}' exceeds the {MaxCatalogBytes}-byte limit.");
             }
 
             await buffered.WriteAsync(chunk.AsMemory(0, read), ct);
