@@ -7,8 +7,13 @@ namespace LamSims.Core.Downloading;
 /// <see cref="Length"/>/<see cref="LastWriteTimeUtc"/> pair binds the record to a file
 /// <em>snapshot</em> rather than to a name, so a same-name file swapped in underneath forces a
 /// re-hash instead of inheriting the verification. A tool that replaces the content while
-/// preserving both defeats the check; the threat model is accident, not an adversary who
+/// preserving both defeats the check; the threat model here is accident, not an adversary who
 /// already holds the user's own write permissions.
+///
+/// FAT and exFAT store timestamps in local time rather than UTC, so a daylight-saving
+/// transition shifts every file's reported <see cref="LastWriteTimeUtc"/> on such a volume and
+/// invalidates every record's mtime match at once. That costs one re-hash per pack, once,
+/// after the transition.
 /// </summary>
 public sealed record ArchiveDigest(
     int SchemaVersion,

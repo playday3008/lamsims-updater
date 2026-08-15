@@ -101,6 +101,10 @@ public static class InstallScanner
 
         var results = new List<PackScanResult>();
 
+        // Canonicalised once rather than inside Applicable: every pack in the catalog would
+        // otherwise re-run Path.GetFullPath and an NFC pass over the same scanned directory.
+        var canonicalGameDirectory = PathIdentity.Canonical(gameDirectory);
+
         foreach (var pack in packs)
         {
             var missing = pack.InstallDirs
@@ -121,7 +125,7 @@ public static class InstallScanner
                 continue;
             }
 
-            var marker = Applicable(markers, gameDirectory, pack.Code);
+            var marker = Applicable(markers, canonicalGameDirectory, pack.Code);
 
             if (marker is null)
             {
@@ -150,13 +154,22 @@ public static class InstallScanner
     /// makes that grouping unable to misattribute state, so a hand-copied marker, or one whose
     /// directory has since been renamed, stops applying.
     /// </summary>
+    /// <param name="canonicalGameDirectory">
+    /// The scanned directory, already run through <see cref="PathIdentity.Canonical"/> by the
+    /// caller. Null means it could not be resolved, which must still mean "does not apply"
+    /// rather than throwing or matching a marker whose own directory is also unresolvable.
+    /// </param>
     private static InstallMarker? Applicable(
-        IReadOnlyDictionary<string, InstallMarker> markers, string gameDirectory, string code)
+        IReadOnlyDictionary<string, InstallMarker> markers, string? canonicalGameDirectory, string code)
     {
         if (!markers.TryGetValue(code, out var marker)) return null;
+        if (canonicalGameDirectory is null) return null;
+
+        var markerDirectory = PathIdentity.Canonical(marker.GameDirectory);
 
         return string.Equals(marker.Code, code, StringComparison.OrdinalIgnoreCase)
-               && PathIdentity.SameDirectory(marker.GameDirectory, gameDirectory)
+               && markerDirectory is not null
+               && string.Equals(canonicalGameDirectory, markerDirectory, StringComparison.OrdinalIgnoreCase)
             ? marker
             : null;
     }

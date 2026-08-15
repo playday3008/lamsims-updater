@@ -118,8 +118,9 @@ public sealed class InstallStateStore
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
             // A missing group directory is the ordinary case for a game directory nothing has
-            // been installed into; an unreadable one degrades every pack to unverified, which
-            // is the same benign state a first run after the upgrade produces.
+            // been installed into. A fault partway through enumeration keeps whatever markers
+            // were already read, which can only leave a pack unverified rather than accuse a
+            // healthy one of being interrupted.
         }
 
         return markers;

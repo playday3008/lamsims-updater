@@ -56,25 +56,15 @@ internal static class PathIdentity
         }
     }
 
-    /// <summary>True when both values resolve and name the same directory. False if either is unresolvable.</summary>
-    public static bool SameDirectory(string? left, string? right)
-    {
-        var a = Canonical(left);
-        var b = Canonical(right);
-
-        return a is not null && b is not null && string.Equals(a, b, StringComparison.OrdinalIgnoreCase);
-    }
-
     /// <summary>
     /// A short, filesystem-safe name for a game directory, used to group that directory's
-    /// install markers. A path cannot be a directory name — separators, length limits, invalid
-    /// characters — so it is hashed; the marker still records the path in full and the scanner
-    /// re-checks it, so a collision cannot make a marker vouch for the wrong directory.
+    /// install markers. A path cannot be a directory name, so it is hashed; the marker still
+    /// records the path in full and the scanner re-checks it, so a collision cannot make a
+    /// marker vouch for the wrong directory.
     ///
     /// Lower-cased before hashing so the grouping agrees with the OrdinalIgnoreCase comparison
-    /// <see cref="SameDirectory"/> makes. On a case-sensitive filesystem two directories
-    /// differing only in case share a group; their markers still carry distinct recorded paths,
-    /// which is what applicability is actually decided on.
+    /// that decides applicability. A character where the two disagree costs a group lookup that
+    /// finds nothing, leaving the pack unverified rather than misattributed.
     /// </summary>
     public static string DirectoryKey(string gameDirectory)
     {

@@ -191,6 +191,23 @@ public class InstallScannerTests
     }
 
     [Fact]
+    public void Reports_a_pack_with_genuinely_empty_install_dirs_as_not_installed()
+    {
+        // The catalog parser defaults an absent or empty 'installDirs' to [code], so this only
+        // arrives another way. No directories is no evidence of an install, and must not read as
+        // "nothing missing".
+        using var temp = new TempDir();
+        var pack = new PackEntry(
+            "EP01", "Pack EP01", PackType.Expansion, 1024, null, Digest,
+            new[] { new Uri("https://host-a.example.invalid/EP01.zip") }, Array.Empty<string>());
+
+        var result = Assert.Single(InstallScanner.Scan(temp.Path, new[] { pack }, NoMarkers).Packs);
+
+        Assert.Equal(PackInstallState.NotInstalled, result.State);
+        Assert.Empty(result.MissingDirs);
+    }
+
+    [Fact]
     public void Reports_a_pack_with_no_directory_as_not_installed()
     {
         using var temp = new TempDir();

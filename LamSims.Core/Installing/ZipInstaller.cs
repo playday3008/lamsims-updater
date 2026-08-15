@@ -75,6 +75,11 @@ public sealed class ZipInstaller
     /// <summary>
     /// Reports the caller's cancellation through the result's <c>Cancelled</c> outcome
     /// rather than throwing <see cref="OperationCanceledException"/>.
+    ///
+    /// The caller must already have verified that <paramref name="archivePath"/> hashes to
+    /// <paramref name="pack"/>'s <see cref="PackEntry.Sha256"/>: the marker this method writes
+    /// records that digest as the identity of what was installed, without re-checking it
+    /// against the archive's actual bytes.
     /// </summary>
     public async Task<InstallResult> InstallAsync(
         PackEntry pack, string archivePath, string gameDirectory,
