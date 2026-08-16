@@ -29,6 +29,12 @@ public sealed class DownloadPaths
     /// </summary>
     public string ArchiveDigestFile(string code) => Path.Combine(Root, Validate(code) + ".zip.json");
 
+    /// <summary>
+    /// The advisory lock for one pack, held for its whole run. Beside the archive so a second
+    /// instance pointed at the same download directory contends for the same file.
+    /// </summary>
+    public string LockFile(string code) => Path.Combine(Root, Validate(code) + ".lock");
+
     public void EnsureCreated() => Directory.CreateDirectory(Root);
 
     private static string Validate(string code)

@@ -4,6 +4,23 @@ namespace LamSims.Core.Tests;
 
 public class OrphanCleanerTests
 {
+    /// <summary>
+    /// A suffix added to <see cref="OrphanCleaner"/>'s chain must not start unlinking live locks:
+    /// on Unix that removes the name while the holder keeps its handle, ending exclusion.
+    /// </summary>
+    [Fact]
+    public void Leaves_lock_files_alone()
+    {
+        using var temp = new TempDir();
+        var paths = new DownloadPaths(temp.Path);
+        paths.EnsureCreated();
+        File.WriteAllText(paths.LockFile("EP99"), "");
+
+        new OrphanCleaner(paths).CleanOrphans(new HashSet<string>());
+
+        Assert.True(File.Exists(paths.LockFile("EP99")));
+    }
+
     [Fact]
     public void Deletes_partials_whose_code_is_unknown()
     {

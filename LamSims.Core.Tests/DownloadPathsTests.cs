@@ -40,6 +40,15 @@ public class DownloadPathsTests
     }
 
     [Fact]
+    public void Lock_file_sits_beside_the_archive_and_rejects_a_path_character()
+    {
+        var paths = new DownloadPaths("/tmp/lamsims-x");
+
+        Assert.Equal(Path.Combine("/tmp/lamsims-x", "EP01.lock"), paths.LockFile("EP01"));
+        Assert.Throws<ArgumentException>(() => paths.LockFile("../EP01"));
+    }
+
+    [Fact]
     public void EnsureCreated_creates_the_root()
     {
         using var temp = new TempDir();
