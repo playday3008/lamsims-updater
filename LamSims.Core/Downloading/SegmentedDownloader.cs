@@ -89,6 +89,11 @@ public sealed class SegmentedDownloader
 
             var done = carried.ToDictionary(c => c.Index);
 
+            // One snapshot before any worker starts. Without it a resume whose chunks are all
+            // trusted runs no workers and tells the caller nothing at all, and every download
+            // shows 0% until its first chunk lands.
+            tracker.Deliver(progress, tracker.Snapshot());
+
             using (var handle = File.OpenHandle(
                 partFile, FileMode.Open, FileAccess.Write, FileShare.ReadWrite, FileOptions.Asynchronous))
             {
@@ -233,6 +238,7 @@ public sealed class SegmentedDownloader
         var fetcher = new ChunkFetcher(_client, _retry, _delay);
         var errors = new ConcurrentQueue<Exception>();
         var workerCount = Math.Min(_options.Connections, Math.Max(pending.Count, 1));
+        var sink = new TrackerSink(tracker, progress);
 
         // Held across the done-set mutation AND the sidecar write, so snapshots persist in
         // the order they were built. Building under a lock and saving outside it would let
@@ -253,7 +259,7 @@ public sealed class SegmentedDownloader
                     failure.Token.ThrowIfCancellationRequested();
 
                     var servedBy = await fetcher.FetchAsync(
-                        chunk!, mirrors, worker % mirrors.Count, handle, failure.Token);
+                        chunk!, mirrors, worker % mirrors.Count, worker, handle, sink, failure.Token);
 
                     // Data must reach disk before the chunk is flagged complete: otherwise a
                     // power loss can leave a "done" chunk whose bytes never left the page
@@ -274,7 +280,7 @@ public sealed class SegmentedDownloader
                                 mirrors.Select(m => m.Validator).ToArray()),
                             failure.Token);
 
-                        tracker.Add(chunk.Length);
+                        tracker.CommitChunk(worker, chunk.Length);
                         snapshot = tracker.Snapshot();
                     }
                     finally
@@ -318,5 +324,28 @@ public sealed class SegmentedDownloader
         // Backstop: a cancellation that somehow left no recorded exception must still surface
         // as one, or the caller would finalize a download that never finished.
         ct.ThrowIfCancellationRequested();
+    }
+
+    /// <summary>
+    /// Routes a fetch's per-read reports into the tracker and out to the caller, so a one-chunk
+    /// pack shows movement instead of nothing until it finishes.
+    ///
+    /// This fires once per ReadAsync *return*, which over HTTP is typically tens of kilobytes
+    /// rather than the full 1 MB buffer. ProgressTracker.Deliver coalesces (one reporter at a
+    /// time, overtaken snapshots dropped) and holds no shared lock while the handler runs, so it
+    /// cannot stall the other workers. It does block the reporting worker's own read loop for as
+    /// long as it keeps draining, and a sibling depositing a newer snapshot re-arms that loop, so
+    /// the queue rate-limits on top of this.
+    /// </summary>
+    private sealed class TrackerSink(ProgressTracker tracker, IProgress<DownloadProgress>? progress)
+        : IChunkProgress
+    {
+        public void Advanced(int worker, long bytes)
+        {
+            tracker.Advance(worker, bytes);
+            tracker.Deliver(progress, tracker.Snapshot());
+        }
+
+        public void Abandoned(int worker) => tracker.Abandon(worker);
     }
 }

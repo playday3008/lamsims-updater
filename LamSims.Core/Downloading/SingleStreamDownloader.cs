@@ -155,7 +155,7 @@ public sealed class SingleStreamDownloader
                 throw new IOException($"'{url}' sent more than the expected {request.Size} bytes.");
 
             await file.WriteAsync(buffer.AsMemory(0, read), ct);
-            tracker.Add(read);
+            tracker.CommitChunk(0, read);
             tracker.Deliver(progress, tracker.Snapshot());
         }
 

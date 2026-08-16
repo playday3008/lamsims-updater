@@ -24,6 +24,16 @@ public class ChunkFetcherTests
         public void Dispose() => Handle.Dispose();
     }
 
+    /// <summary>Records every call verbatim, including which worker made it, for assertion.</summary>
+    private sealed class RecordingProgress : IChunkProgress
+    {
+        public List<(int Worker, long Bytes)> Advances { get; } = new();
+        public List<int> Abandons { get; } = new();
+
+        public void Advanced(int worker, long bytes) => Advances.Add((worker, bytes));
+        public void Abandoned(int worker) => Abandons.Add(worker);
+    }
+
     [Fact]
     public async Task Writes_the_chunk_at_its_offset()
     {
@@ -35,8 +45,8 @@ public class ChunkFetcherTests
         var fetcher = new ChunkFetcher(client, RetryOptions.Default, new FakeDelayProvider());
 
         using (target)
-            await fetcher.FetchAsync(new Chunk(1, 100, 100), new[] { Mirror(server.FileUrl) }, 0,
-                target.Handle, CancellationToken.None);
+            await fetcher.FetchAsync(new Chunk(1, 100, 100), new[] { Mirror(server.FileUrl) }, 0, 0,
+                target.Handle, null, CancellationToken.None);
 
         var written = await File.ReadAllBytesAsync(path);
         Assert.Equal(content[100..200], written[100..200]);
@@ -52,8 +62,8 @@ public class ChunkFetcherTests
         var fetcher = new ChunkFetcher(client, RetryOptions.Default, new FakeDelayProvider());
 
         using (target)
-            await fetcher.FetchAsync(new Chunk(0, 0, 50), new[] { Mirror(server.FileUrl) }, 0,
-                target.Handle, CancellationToken.None);
+            await fetcher.FetchAsync(new Chunk(0, 0, 50), new[] { Mirror(server.FileUrl) }, 0, 0,
+                target.Handle, null, CancellationToken.None);
 
         Assert.Equal(new[] { "bytes=0-49" }, server.ReceivedRangeHeaders);
         // If-Range is what makes the request conditional: without it a file changing on the
@@ -72,8 +82,8 @@ public class ChunkFetcherTests
         var fetcher = new ChunkFetcher(client, RetryOptions.Default, new FakeDelayProvider());
 
         using (target)
-            await fetcher.FetchAsync(new Chunk(0, 0, 50), new[] { Mirror(server.FileUrl, etag: null) }, 0,
-                target.Handle, CancellationToken.None);
+            await fetcher.FetchAsync(new Chunk(0, 0, 50), new[] { Mirror(server.FileUrl, etag: null) }, 0, 0,
+                target.Handle, null, CancellationToken.None);
 
         Assert.Equal(new string?[] { null }, server.ReceivedIfRangeHeaders);
     }
@@ -90,8 +100,8 @@ public class ChunkFetcherTests
         var fetcher = new ChunkFetcher(client, RetryOptions.Default, delays);
 
         using (target)
-            await fetcher.FetchAsync(new Chunk(0, 0, 100), new[] { Mirror(server.FileUrl) }, 0,
-                target.Handle, CancellationToken.None);
+            await fetcher.FetchAsync(new Chunk(0, 0, 100), new[] { Mirror(server.FileUrl) }, 0, 0,
+                target.Handle, null, CancellationToken.None);
 
         Assert.Equal(2, delays.Delays.Count);
         Assert.True(delays.Delays[1] > delays.Delays[0], "backoff should grow");
@@ -112,7 +122,7 @@ public class ChunkFetcherTests
         MirrorSource served;
         using (target)
             served = await fetcher.FetchAsync(new Chunk(0, 0, 100),
-                new[] { Mirror(bad.FileUrl), Mirror(good.FileUrl) }, 0, target.Handle, CancellationToken.None);
+                new[] { Mirror(bad.FileUrl), Mirror(good.FileUrl) }, 0, 0, target.Handle, null, CancellationToken.None);
 
         Assert.Equal(good.FileUrl, served.Url);
         Assert.True(good.RequestCount >= 1);
@@ -132,8 +142,8 @@ public class ChunkFetcherTests
         var fetcher = new ChunkFetcher(client, RetryOptions.Default, new FakeDelayProvider());
 
         using (target)
-            await fetcher.FetchAsync(new Chunk(0, 0, 50_000), new[] { Mirror(server.FileUrl) }, 0,
-                target.Handle, CancellationToken.None);
+            await fetcher.FetchAsync(new Chunk(0, 0, 50_000), new[] { Mirror(server.FileUrl) }, 0, 0,
+                target.Handle, null, CancellationToken.None);
 
         Assert.Equal(2, server.RequestCount);
         Assert.Equal(content[0..50_000], (await File.ReadAllBytesAsync(path))[0..50_000]);
@@ -154,7 +164,7 @@ public class ChunkFetcherTests
         {
             var ex = await Assert.ThrowsAsync<ValidatorMismatchException>(
                 () => fetcher.FetchAsync(new Chunk(0, 0, 100),
-                    new[] { Mirror(server.FileUrl, "\"stale\"") }, 0, target.Handle, CancellationToken.None));
+                    new[] { Mirror(server.FileUrl, "\"stale\"") }, 0, 0, target.Handle, null, CancellationToken.None));
 
             Assert.Equal(server.FileUrl.ToString(), ex.Url);
         }
@@ -182,7 +192,7 @@ public class ChunkFetcherTests
         {
             var ex = await Assert.ThrowsAsync<IOException>(
                 () => fetcher.FetchAsync(new Chunk(0, 0, 100), new[] { Mirror(server.FileUrl) }, 0,
-                    target.Handle, CancellationToken.None));
+                    0, target.Handle, null, CancellationToken.None));
 
             Assert.Contains("sent no data", ex.Message);
         }
@@ -208,7 +218,7 @@ public class ChunkFetcherTests
         {
             var ex = await Assert.ThrowsAsync<IOException>(
                 () => fetcher.FetchAsync(new Chunk(0, 0, 100), new[] { Mirror(server.FileUrl) }, 0,
-                    target.Handle, CancellationToken.None));
+                    0, target.Handle, null, CancellationToken.None));
 
             Assert.Contains("sent no response headers", ex.Message);
         }
@@ -234,7 +244,7 @@ public class ChunkFetcherTests
         {
             var ex = await Assert.ThrowsAsync<HttpRequestException>(
                 () => fetcher.FetchAsync(new Chunk(1, 100, 100), new[] { Mirror(server.FileUrl) }, 0,
-                    target.Handle, CancellationToken.None));
+                    0, target.Handle, null, CancellationToken.None));
 
             Assert.Contains("Content-Range", ex.Message);
         }
@@ -257,8 +267,45 @@ public class ChunkFetcherTests
         using (target)
             await Assert.ThrowsAsync<HttpRequestException>(
                 () => fetcher.FetchAsync(new Chunk(0, 0, 100), new[] { Mirror(server.FileUrl) }, 0,
-                    target.Handle, CancellationToken.None));
+                    0, target.Handle, null, CancellationToken.None));
 
         Assert.Equal(RetryOptions.Default.MaxAttempts, server.RequestCount);
+    }
+
+    [Fact]
+    public async Task Abandons_the_reporting_workers_provisional_bytes_on_a_validator_mismatch()
+    {
+        // A single FetchAsync rejects before reading a byte, so the mismatch has zero bytes to
+        // abandon; the worker index is the part that matters. Two chunks run on the same worker
+        // here so that abandoning the wrong slot double-counts a retry.
+        var content = Payload(1000);
+        var options = new TestFileServerOptions { ETag = "\"v1\"" };
+        await using var server = await TestFileServer.StartAsync(content, options);
+        using var temp = new TempDir();
+        var (_, target) = PreparedTarget(temp, 1000);
+        using var client = HttpFactory.Create(4);
+        var fetcher = new ChunkFetcher(client, RetryOptions.Default, new FakeDelayProvider());
+        var recorder = new RecordingProgress();
+        const int worker = 5;
+
+        using (target)
+        {
+            // A normal fetch, validator matches: reads land and are reported for `worker`.
+            await fetcher.FetchAsync(new Chunk(0, 0, 100), new[] { Mirror(server.FileUrl, "\"v1\"") }, 0,
+                worker, target.Handle, recorder, CancellationToken.None);
+
+            Assert.NotEmpty(recorder.Advances);
+            Assert.All(recorder.Advances, a => Assert.Equal(worker, a.Worker));
+            Assert.Empty(recorder.Abandons);
+
+            // The entity changes underneath the download: the mirror's validator is now stale.
+            options.ETag = "\"v2\"";
+
+            await Assert.ThrowsAsync<ValidatorMismatchException>(
+                () => fetcher.FetchAsync(new Chunk(1, 100, 100), new[] { Mirror(server.FileUrl, "\"v1\"") }, 0,
+                    worker, target.Handle, recorder, CancellationToken.None));
+        }
+
+        Assert.Equal(new[] { worker }, recorder.Abandons);
     }
 }

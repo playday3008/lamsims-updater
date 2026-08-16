@@ -31,6 +31,20 @@ public sealed record RetryOptions(
 }
 
 /// <summary>
+/// Where a fetch reports the bytes it has read. Passed per call rather than injected: one
+/// ChunkFetcher serves every worker of a download, so a constructor-held sink could not tell
+/// which worker was reading.
+/// </summary>
+public interface IChunkProgress
+{
+    /// <summary>Bytes just read by this attempt, incrementally.</summary>
+    void Advanced(int worker, long bytes);
+
+    /// <summary>This attempt is being discarded; the bytes it reported are garbage.</summary>
+    void Abandoned(int worker);
+}
+
+/// <summary>
 /// Raised when a mirror answers a conditional range request with 200, meaning its entity
 /// changed underneath the download.
 /// </summary>
@@ -72,7 +86,9 @@ public sealed class ChunkFetcher
         Chunk chunk,
         IReadOnlyList<MirrorSource> mirrors,
         int preferredMirror,
+        int worker,
         SafeFileHandle target,
+        IChunkProgress? progress,
         CancellationToken ct)
     {
         Exception? lastError = null;
@@ -86,7 +102,7 @@ public sealed class ChunkFetcher
 
             try
             {
-                await FetchOnceAsync(chunk, mirror, target, ct);
+                await FetchOnceAsync(chunk, mirror, worker, target, progress, ct);
                 return mirror;
             }
             catch (ValidatorMismatchException e)
@@ -96,11 +112,13 @@ public sealed class ChunkFetcher
                 // whose nodes derive a different ETag from identical bytes would otherwise make
                 // the pack permanently unfetchable, and re-probing rederives the same unstable
                 // validator every run. No backoff, because another mirror is ready now.
+                progress?.Abandoned(worker);
                 _setAside[mirror.Url.ToString()] = 0;
                 lastError = e;
             }
             catch (Exception e) when (e is HttpRequestException or IOException && !ct.IsCancellationRequested)
             {
+                progress?.Abandoned(worker);
                 lastError = e;
                 if (attempt == _retry.MaxAttempts - 1) break;
                 await _delay.DelayAsync(BackoffFor(attempt), ct);
@@ -125,7 +143,9 @@ public sealed class ChunkFetcher
         return null;
     }
 
-    private async Task FetchOnceAsync(Chunk chunk, MirrorSource mirror, SafeFileHandle target, CancellationToken ct)
+    private async Task FetchOnceAsync(
+        Chunk chunk, MirrorSource mirror, int worker, SafeFileHandle target, IChunkProgress? progress,
+        CancellationToken ct)
     {
         using var request = new HttpRequestMessage(HttpMethod.Get, mirror.Url);
         request.Headers.Range = new RangeHeaderValue(chunk.Start, chunk.EndInclusive);
@@ -189,6 +209,7 @@ public sealed class ChunkFetcher
                 throw new IOException($"Chunk {chunk.Index} ended {remaining} bytes early.");
 
             await RandomAccess.WriteAsync(target, buffer.AsMemory(0, read), offset, ct);
+            progress?.Advanced(worker, read);
             offset += read;
             remaining -= read;
         }

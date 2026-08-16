@@ -14,6 +14,25 @@ public sealed class ProgressTracker
     private readonly Stopwatch _clock = Stopwatch.StartNew();
     private readonly Lock _gate = new();
 
+    /// <summary>
+    /// How long a window must be before the speed is resampled. Per-read reporting takes
+    /// Snapshot() from once per 16 MB chunk to once per megabyte per worker, and a 0.3 smoothing
+    /// factor over sub-millisecond windows is not a readout anybody can use.
+    /// </summary>
+    private static readonly TimeSpan SpeedWindow = TimeSpan.FromMilliseconds(200);
+
+    /// <summary>
+    /// Bytes read by attempts still in flight, per worker. Not pre-sized: the worker count is
+    /// only known after the tracker is built, so slots appear on first use.
+    /// </summary>
+    private readonly Dictionary<int, long> _provisional = new();
+
+    /// <summary>
+    /// Test seam for elapsed time. Real elapsed time in a unit test never reaches the 200ms
+    /// speed window, so the window and the clamp are only reachable through a supplied clock.
+    /// </summary>
+    internal Func<TimeSpan> Clock { get; init; } = null!;
+
     private long _bytesCompleted;
     private long _lastBytes;
     private long _lastAccepted = -1;
@@ -22,44 +41,102 @@ public sealed class ProgressTracker
     private DownloadProgress? _pending;
     private bool _reporting;
 
+    /// <summary>
+    /// Test seam. Invoked inside Deliver's loop between taking a pending snapshot and reporting
+    /// it, so a test can deposit a newer snapshot in the window where the reporter must pick it
+    /// up rather than stand down.
+    ///
+    /// It runs inside the try/catch that swallows a throwing progress consumer, so an
+    /// assertion thrown from the hook is swallowed with it. Record what happened and assert
+    /// after Deliver returns.
+    /// </summary>
+    internal Action? BeforeReport;
+
     public ProgressTracker(string code, long totalBytes, long alreadyCompletedBytes = 0)
     {
         _code = code;
         _totalBytes = totalBytes;
         _bytesCompleted = alreadyCompletedBytes;
         _lastBytes = alreadyCompletedBytes;
+        Clock = () => _clock.Elapsed;
     }
 
-    public long BytesCompleted { get { lock (_gate) return _bytesCompleted; } }
-
-    public void Add(long bytes)
+    public long BytesCompleted
     {
-        lock (_gate) _bytesCompleted += bytes;
+        get
+        {
+            lock (_gate)
+            {
+                var observed = _bytesCompleted;
+                foreach (var held in _provisional.Values) observed += held;
+                return observed;
+            }
+        }
+    }
+
+    /// <summary>Bytes just read by an attempt that has not finished its chunk.</summary>
+    public void Advance(int worker, long bytes)
+    {
+        lock (_gate)
+        {
+            _provisional.TryGetValue(worker, out var held);
+            _provisional[worker] = held + bytes;
+        }
+    }
+
+    /// <summary>The attempt was discarded; the bytes it read are garbage.</summary>
+    public void Abandon(int worker)
+    {
+        lock (_gate) _provisional[worker] = 0;
+    }
+
+    /// <summary>
+    /// A chunk finished. The commit and the clearing of that worker's provisional bytes happen
+    /// under one lock acquisition: split them and a snapshot taken between the two counts the
+    /// chunk twice, which on the final chunks pushes BytesCompleted above the total. Deliver
+    /// latches _lastAccepted monotonically, so the true final snapshot would then be dropped and
+    /// the caller's last observed value would stay above 100% for good.
+    /// </summary>
+    public void CommitChunk(int worker, long bytes)
+    {
+        lock (_gate)
+        {
+            _bytesCompleted += bytes;
+            _provisional[worker] = 0;
+        }
     }
 
     public DownloadProgress Snapshot()
     {
         lock (_gate)
         {
-            var elapsed = _clock.Elapsed;
+            var observed = _bytesCompleted;
+            foreach (var held in _provisional.Values) observed += held;
+
+            var elapsed = Clock();
             var window = elapsed - _lastElapsed;
 
-            if (window > TimeSpan.Zero)
+            // Resampled only over a window long enough to mean something. Inside it the last
+            // computed rate stands and _lastBytes/_lastElapsed are left alone, so the next real
+            // sample measures the whole span rather than a sliver of it.
+            if (window >= SpeedWindow)
             {
-                var instant = (_bytesCompleted - _lastBytes) / window.TotalSeconds;
+                // Clamped: an abandoned attempt hands bytes back, and a negative instant would
+                // drag the average below zero and show the user a negative speed.
+                var instant = Math.Max(0, (observed - _lastBytes) / window.TotalSeconds);
                 _bytesPerSecond = _bytesPerSecond == 0
                     ? instant
                     : SmoothingFactor * instant + (1 - SmoothingFactor) * _bytesPerSecond;
-                _lastBytes = _bytesCompleted;
+                _lastBytes = observed;
                 _lastElapsed = elapsed;
             }
 
-            var remaining = _totalBytes - _bytesCompleted;
+            var remaining = _totalBytes - observed;
             TimeSpan? eta = _bytesPerSecond > 1 && remaining > 0
                 ? TimeSpan.FromSeconds(remaining / _bytesPerSecond)
                 : null;
 
-            return new DownloadProgress(_code, _bytesCompleted, _totalBytes, _bytesPerSecond, eta);
+            return new DownloadProgress(_code, observed, _totalBytes, _bytesPerSecond, eta);
         }
     }
 
@@ -117,6 +194,7 @@ public sealed class ProgressTracker
 
                 try
                 {
+                    BeforeReport?.Invoke();
                     progress.Report(due);
                 }
                 catch (Exception)

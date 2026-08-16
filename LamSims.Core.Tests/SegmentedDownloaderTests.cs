@@ -475,7 +475,13 @@ public class SegmentedDownloaderTests
         using var client = HttpFactory.Create(8);
         using var cts = new CancellationTokenSource();
 
-        var progress = new SyncProgress<DownloadProgress>(_ => cts.Cancel());
+        // Progress fires before any chunk has committed: a baseline snapshot up front, then one
+        // report per read while a chunk is still in flight. Cancelling on the first report would
+        // not guarantee the sidecar exists yet, so cancel only once it does.
+        var progress = new SyncProgress<DownloadProgress>(_ =>
+        {
+            if (File.Exists(paths.StateFile("EP01"))) cts.Cancel();
+        });
 
         var result = await Downloader(client, paths, connections: 2, chunkSize: 32 * 1024)
             .DownloadAsync(
@@ -665,5 +671,126 @@ public class SegmentedDownloaderTests
         Assert.Equal(DownloadOutcome.Failed, result.Outcome);
         Assert.False(File.Exists(paths.QuarantineFile("EP01")));
         Assert.False(File.Exists(paths.ArchiveFile("EP01")));
+    }
+
+    [Fact]
+    public async Task Reports_intermediate_progress_for_a_pack_that_fits_in_one_chunk()
+    {
+        // One chunk is the only case with no intermediate reporting at all today: the single
+        // Deliver fires after the chunk completes, at exactly TotalBytes. At 2..Connections chunks
+        // the current code already delivers one update per chunk, so a test written at that size
+        // passes today and detects nothing.
+        var content = Payload(300_000);
+        await using var server = await TestFileServer.StartAsync(content);
+        using var temp = new TempDir();
+        var paths = new DownloadPaths(temp.Path);
+        using var client = HttpFactory.Create(8);
+
+        var seen = new List<long>();
+        var request = new DownloadRequest(
+            "EP01", new[] { server.FileUrl }, content.LongLength, Sha256Of(content));
+
+        var result = await Downloader(client, paths, connections: 8, chunkSize: 1024 * 1024)
+            .DownloadAsync(
+                request,
+                new SyncProgress<DownloadProgress>(p => seen.Add(p.BytesCompleted)),
+                CancellationToken.None);
+
+        Assert.Equal(DownloadOutcome.Completed, result.Outcome);
+        Assert.Contains(seen, b => b > 0 && b < content.LongLength);
+    }
+
+    [Fact]
+    public async Task Delivers_a_baseline_snapshot_when_every_chunk_is_already_trusted()
+    {
+        // A resume with nothing left to fetch has an empty pending set, so no worker ever runs and
+        // today the caller is told nothing at all before finalizing.
+        var content = Payload(400_000);
+        await using var server = await TestFileServer.StartAsync(content);
+        using var temp = new TempDir();
+        var paths = new DownloadPaths(temp.Path);
+        paths.EnsureCreated();
+        using var client = HttpFactory.Create(8);
+
+        const long chunkSize = 100_000;
+        var request = new DownloadRequest(
+            "EP01", new[] { server.FileUrl }, content.LongLength, Sha256Of(content));
+
+        // Staged by hand, as the partial-resume tests above do. A first real run cannot be used:
+        // ArchiveFinalizer promotes .part to .zip and deletes the sidecar, so neither file
+        // survives to be restored.
+        using (var fs = new FileStream(paths.PartFile("EP01"), FileMode.Create, FileAccess.Write))
+        {
+            fs.SetLength(content.LongLength);
+            await fs.WriteAsync(content.AsMemory());
+        }
+
+        var probe = await new RangeProbe(client).ProbeAsync(server.FileUrl, CancellationToken.None);
+        await new PartStateStore(paths.StateFile("EP01")).SaveAsync(
+            new PartState("EP01", content.LongLength, Sha256Of(content), chunkSize,
+                Enumerable.Range(0, 4).Select(i => new CompletedChunk(i, server.FileUrl.ToString())).ToArray(),
+                new[] { probe.Validator }),
+            CancellationToken.None);
+
+        var seen = new List<DownloadProgress>();
+        var result = await Downloader(client, paths, connections: 4, chunkSize).DownloadAsync(
+            request, new SyncProgress<DownloadProgress>(seen.Add), CancellationToken.None);
+
+        Assert.Equal(DownloadOutcome.Completed, result.Outcome);
+        Assert.NotEmpty(seen);
+        Assert.Equal(content.LongLength, seen[0].BytesCompleted);
+    }
+
+    [Fact]
+    public async Task A_chunk_that_fails_once_never_reports_more_bytes_than_the_archive_holds()
+    {
+        // The maximum is asserted because an overshoot latches Deliver's _lastAccepted and
+        // suppresses the true final snapshot, which checking the last value alone would miss.
+        var content = Payload(400_000);
+        await using var server = await TestFileServer.StartAsync(content, new TestFileServerOptions
+        {
+            DropAfterBytes = 30_000,
+            DropAfterBytesCount = 1,
+        });
+        using var temp = new TempDir();
+        var paths = new DownloadPaths(temp.Path);
+        using var client = HttpFactory.Create(8);
+
+        var high = 0L;
+        var request = new DownloadRequest(
+            "EP01", new[] { server.FileUrl }, content.LongLength, Sha256Of(content));
+
+        var result = await Downloader(client, paths, connections: 4, chunkSize: 100_000).DownloadAsync(
+            request,
+            new SyncProgress<DownloadProgress>(p => high = Math.Max(high, p.BytesCompleted)),
+            CancellationToken.None);
+
+        Assert.Equal(DownloadOutcome.Completed, result.Outcome);
+        Assert.Equal(content.LongLength, high);
+    }
+
+    [Fact]
+    public async Task Speed_is_never_negative_across_a_run_containing_a_dropped_response()
+    {
+        var content = Payload(400_000);
+        await using var server = await TestFileServer.StartAsync(content, new TestFileServerOptions
+        {
+            DropAfterBytes = 30_000,
+            DropAfterBytesCount = 1,
+        });
+        using var temp = new TempDir();
+        var paths = new DownloadPaths(temp.Path);
+        using var client = HttpFactory.Create(8);
+
+        var negatives = 0;
+        var request = new DownloadRequest(
+            "EP01", new[] { server.FileUrl }, content.LongLength, Sha256Of(content));
+
+        await Downloader(client, paths, connections: 4, chunkSize: 100_000).DownloadAsync(
+            request,
+            new SyncProgress<DownloadProgress>(p => { if (p.BytesPerSecond < 0) negatives++; }),
+            CancellationToken.None);
+
+        Assert.Equal(0, negatives);
     }
 }
