@@ -26,7 +26,7 @@ public sealed record PackWorkflowResult(
 /// archive. Two concurrent calls would each claim the whole connection budget and could
 /// install into the same game directory at once.
 /// </summary>
-public sealed class PackWorkflow
+public sealed class PackWorkflow : IPackRunner
 {
     /// <summary>What the archive already on disk is worth, if there is one.</summary>
     private enum ArchiveTrust { Trusted, NeedsDownload, Cancelled }
@@ -47,6 +47,7 @@ public sealed class PackWorkflow
     public async Task<PackWorkflowResult> RunAsync(
         PackEntry pack,
         string gameDirectory,
+        IProgress<PackPhase>? phase,
         IProgress<DownloadProgress>? downloadProgress,
         IProgress<InstallProgress>? installProgress,
         CancellationToken ct)
@@ -55,13 +56,14 @@ public sealed class PackWorkflow
         DownloadResult? download = null;
         var warnings = new List<string>();
 
-        var trust = await ClassifyAsync(pack, archive, warnings, ct);
+        var trust = await ClassifyAsync(pack, archive, warnings, phase, ct);
 
         if (trust == ArchiveTrust.Cancelled)
             return new PackWorkflowResult(PackStage.Downloading, DownloadResult.Cancelled(), null, warnings);
 
         if (trust == ArchiveTrust.NeedsDownload)
         {
+            Report(phase, PackPhase.Downloading);
             download = await _downloader.DownloadAsync(pack.ToDownloadRequest(), downloadProgress, ct);
 
             if (download.Outcome != DownloadOutcome.Completed)
@@ -70,6 +72,7 @@ public sealed class PackWorkflow
             archive = download.FilePath!;
         }
 
+        Report(phase, PackPhase.Installing);
         var install = await _installer.InstallAsync(pack, archive, gameDirectory, installProgress, ct);
 
         // The installer deletes the archive it consumed; the record describes a file that is
@@ -100,7 +103,7 @@ public sealed class PackWorkflow
     /// Never throws: cancellation and I/O failure both come back as one of these three answers.
     /// </summary>
     private async Task<ArchiveTrust> ClassifyAsync(
-        PackEntry pack, string archive, List<string> warnings, CancellationToken ct)
+        PackEntry pack, string archive, List<string> warnings, IProgress<PackPhase>? phase, CancellationToken ct)
     {
         // One FileInfo snapshot rather than a separate File.Exists check: orphan cleanup or a
         // second instance can remove the archive between the two calls, and FileInfo.Length
@@ -123,6 +126,7 @@ public sealed class PackWorkflow
         string actual;
         try
         {
+            Report(phase, PackPhase.Verifying);
             actual = await Sha256Verifier.ComputeAsync(archive, ct);
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
@@ -178,5 +182,11 @@ public sealed class PackWorkflow
         }
 
         _digests.Delete(code);
+    }
+
+    private static void Report(IProgress<PackPhase>? phase, PackPhase value)
+    {
+        try { phase?.Report(value); }
+        catch (Exception) { }
     }
 }

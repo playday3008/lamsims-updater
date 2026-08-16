@@ -40,6 +40,77 @@ public class PackWorkflowTests
             paths);
     }
 
+    /// <summary>
+    /// An archive already on disk, correct and recorded as verified. Shared by the phase tests
+    /// that start from a pre-existing archive. The digest record and the download URL are both
+    /// real but unexercised unless a test knocks the record aside.
+    /// </summary>
+    private static async Task<(PackWorkflow Workflow, PackEntry Pack, string GameDir, DownloadPaths Paths, byte[] ArchiveBytes)>
+        BuildWorkflowWithArchiveOnDiskAsync(TempDir temp, HttpClient client)
+    {
+        var archive = BuildArchive(temp);
+        var workflow = Workflow(temp, client, out var paths);
+        paths.EnsureCreated();
+        await File.WriteAllBytesAsync(paths.ArchiveFile("EP01"), archive);
+
+        var pack = Pack(archive, new Uri("http://127.0.0.1/unused.zip"));
+        await new ArchiveDigestStore(paths).RecordAsync(pack.Code, paths.ArchiveFile(pack.Code), Sha256Of(archive));
+
+        return (workflow, pack, GameDir(temp), paths, archive);
+    }
+
+    [Fact]
+    public async Task Reports_downloading_then_installing_when_no_archive_is_on_disk()
+    {
+        using var temp = new TempDir();
+        var archive = BuildArchive(temp);
+
+        await using var server = await TestFileServer.StartAsync(archive);
+        using var client = new HttpClient();
+
+        var workflow = Workflow(temp, client, out _);
+        var phases = new List<PackPhase>();
+
+        await workflow.RunAsync(
+            Pack(archive, server.FileUrl), GameDir(temp),
+            new SyncProgress<PackPhase>(phases.Add), null, null, CancellationToken.None);
+
+        Assert.Equal(new[] { PackPhase.Downloading, PackPhase.Installing }, phases);
+    }
+
+    [Fact]
+    public async Task Reports_verifying_when_an_archive_is_on_disk_without_a_digest_record()
+    {
+        using var temp = new TempDir();
+        using var client = new HttpClient();
+        var phases = new List<PackPhase>();
+
+        var (workflow, pack, gameDir, paths, _) = await BuildWorkflowWithArchiveOnDiskAsync(temp, client);
+        // Archive present and correct, but no <code>.zip.json beside it.
+        File.Delete(paths.ArchiveDigestFile(pack.Code));
+
+        await workflow.RunAsync(
+            pack, gameDir, new SyncProgress<PackPhase>(phases.Add), null, null, CancellationToken.None);
+
+        Assert.Equal(new[] { PackPhase.Verifying, PackPhase.Installing }, phases);
+    }
+
+    [Fact]
+    public async Task Reports_installing_only_when_the_digest_record_vouches_for_the_archive()
+    {
+        using var temp = new TempDir();
+        using var client = new HttpClient();
+        var phases = new List<PackPhase>();
+
+        var (workflow, pack, gameDir, _, _) = await BuildWorkflowWithArchiveOnDiskAsync(temp, client);
+        // BuildWorkflowWithArchiveOnDiskAsync leaves a matching record in place.
+
+        await workflow.RunAsync(
+            pack, gameDir, new SyncProgress<PackPhase>(phases.Add), null, null, CancellationToken.None);
+
+        Assert.Equal(new[] { PackPhase.Installing }, phases);
+    }
+
     [Fact]
     public async Task Downloads_then_installs_a_pack()
     {
@@ -53,7 +124,7 @@ public class PackWorkflowTests
         var game = GameDir(temp);
 
         var result = await workflow.RunAsync(
-            Pack(archive, server.FileUrl), game, null, null, CancellationToken.None);
+            Pack(archive, server.FileUrl), game, null, null, null, CancellationToken.None);
 
         Assert.Equal(PackStage.Done, result.ReachedStage);
         Assert.Equal(DownloadOutcome.Completed, result.Download!.Outcome);
@@ -78,7 +149,7 @@ public class PackWorkflowTests
         };
 
         var result = await workflow.RunAsync(
-            pack, GameDir(temp), null, null, CancellationToken.None);
+            pack, GameDir(temp), null, null, null, CancellationToken.None);
 
         Assert.Equal(PackStage.Downloading, result.ReachedStage);
         Assert.Equal(DownloadOutcome.ChecksumMismatch, result.Download!.Outcome);
@@ -101,7 +172,7 @@ public class PackWorkflowTests
         var game = GameDir(temp);
 
         var result = await workflow.RunAsync(
-            Pack(archive, server.FileUrl), game, null, null, CancellationToken.None);
+            Pack(archive, server.FileUrl), game, null, null, null, CancellationToken.None);
 
         Assert.Equal(PackStage.Done, result.ReachedStage);
         Assert.Null(result.Download);
@@ -127,7 +198,7 @@ public class PackWorkflowTests
 
         var result = await workflow.RunAsync(
             Pack(archive, server.FileUrl),
-            GameDir(temp), null, null, CancellationToken.None);
+            GameDir(temp), null, null, null, CancellationToken.None);
 
         Assert.Equal(PackStage.Done, result.ReachedStage);
         Assert.NotNull(result.Download);
@@ -150,7 +221,7 @@ public class PackWorkflowTests
         var pack = Pack(archive, server.FileUrl) with { InstalledSize = long.MaxValue };
 
         var result = await workflow.RunAsync(
-            pack, GameDir(temp), null, null, CancellationToken.None);
+            pack, GameDir(temp), null, null, null, CancellationToken.None);
 
         Assert.Equal(PackStage.Installing, result.ReachedStage);
         Assert.Equal(InstallOutcome.InsufficientSpace, result.Install!.Outcome);
@@ -178,7 +249,7 @@ public class PackWorkflowTests
 
         var result = await workflow.RunAsync(
             Pack(bytes, server.FileUrl), GameDir(temp),
-            null, installProgress, cancellation.Token);
+            null, null, installProgress, cancellation.Token);
 
         Assert.Equal(PackStage.Installing, result.ReachedStage);
         Assert.Equal(InstallOutcome.Cancelled, result.Install!.Outcome);
@@ -207,7 +278,7 @@ public class PackWorkflowTests
 
         var game = GameDir(temp);
         var result = await workflow.RunAsync(
-            Pack(archive, server.FileUrl), game, null, null, CancellationToken.None);
+            Pack(archive, server.FileUrl), game, null, null, null, CancellationToken.None);
 
         Assert.Equal(PackStage.Done, result.ReachedStage);
         Assert.True(server.RequestCount > 0);
@@ -235,7 +306,7 @@ public class PackWorkflowTests
         await File.WriteAllBytesAsync(paths.ArchiveFile("EP01"), impostor);
 
         var result = await workflow.RunAsync(
-            Pack(archive, server.FileUrl), GameDir(temp), null, null, CancellationToken.None);
+            Pack(archive, server.FileUrl), GameDir(temp), null, null, null, CancellationToken.None);
 
         var warning = Assert.Single(result.Warnings);
         Assert.Contains("EP01", warning);
@@ -261,7 +332,7 @@ public class PackWorkflowTests
         // during the re-hash is still there to assert on.
         var pack = Pack(archive, server.FileUrl) with { InstalledSize = long.MaxValue };
 
-        var result = await workflow.RunAsync(pack, GameDir(temp), null, null, CancellationToken.None);
+        var result = await workflow.RunAsync(pack, GameDir(temp), null, null, null, CancellationToken.None);
 
         Assert.Equal(PackStage.Installing, result.ReachedStage);
         Assert.Equal(0, server.RequestCount);
@@ -298,7 +369,7 @@ public class PackWorkflowTests
                 new DateTimeOffset(2001, 1, 1, 0, 0, 0, TimeSpan.Zero)),
             CancellationToken.None);
 
-        await workflow.RunAsync(pack, GameDir(temp), null, null, CancellationToken.None);
+        await workflow.RunAsync(pack, GameDir(temp), null, null, null, CancellationToken.None);
 
         Assert.Equal(0, server.RequestCount);
 
@@ -332,7 +403,7 @@ public class PackWorkflowTests
                 info.Length, new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero)),
             CancellationToken.None);
 
-        await workflow.RunAsync(pack, GameDir(temp), null, null, CancellationToken.None);
+        await workflow.RunAsync(pack, GameDir(temp), null, null, null, CancellationToken.None);
 
         Assert.Equal(0, server.RequestCount);
         Assert.Equal(pack.Sha256, digests.TryLoad("EP01")!.Sha256);
@@ -365,7 +436,7 @@ public class PackWorkflowTests
 
         var before = await File.ReadAllBytesAsync(paths.ArchiveDigestFile("EP01"));
 
-        await workflow.RunAsync(pack, GameDir(temp), null, null, CancellationToken.None);
+        await workflow.RunAsync(pack, GameDir(temp), null, null, null, CancellationToken.None);
 
         Assert.Equal(0, server.RequestCount);
         Assert.Equal(before, await File.ReadAllBytesAsync(paths.ArchiveDigestFile("EP01")));
@@ -383,7 +454,7 @@ public class PackWorkflowTests
         var workflow = Workflow(temp, client, out var paths);
 
         var result = await workflow.RunAsync(
-            Pack(archive, server.FileUrl), GameDir(temp), null, null, CancellationToken.None);
+            Pack(archive, server.FileUrl), GameDir(temp), null, null, null, CancellationToken.None);
 
         Assert.Equal(PackStage.Done, result.ReachedStage);
         Assert.False(File.Exists(paths.ArchiveFile("EP01")));
@@ -407,7 +478,7 @@ public class PackWorkflowTests
         await cancellation.CancelAsync();
 
         var result = await workflow.RunAsync(
-            Pack(archive, server.FileUrl), GameDir(temp), null, null, cancellation.Token);
+            Pack(archive, server.FileUrl), GameDir(temp), null, null, null, cancellation.Token);
 
         Assert.Equal(PackStage.Downloading, result.ReachedStage);
         Assert.Equal(DownloadOutcome.Cancelled, result.Download!.Outcome);
@@ -445,7 +516,7 @@ public class PackWorkflowTests
         try
         {
             var result = await workflow.RunAsync(
-                Pack(archive, server.FileUrl), game, null, installProgress, CancellationToken.None);
+                Pack(archive, server.FileUrl), game, null, null, installProgress, CancellationToken.None);
 
             Assert.Equal(PackStage.Done, result.ReachedStage);
 
