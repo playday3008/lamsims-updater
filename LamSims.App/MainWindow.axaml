@@ -3,5 +3,112 @@
         x:Class="LamSims.App.MainWindow"
         Width="900" Height="640"
         Title="LamSims Updater">
-  <TextBlock Margin="16" Text="LamSims Updater" />
+  <DockPanel Margin="12">
+
+    <StackPanel DockPanel.Dock="Top" Spacing="6">
+      <StackPanel Orientation="Horizontal" Spacing="8">
+        <TextBlock Text="Game folder:" VerticalAlignment="Center" Width="110" />
+        <TextBlock Text="{Binding GameDirectory}" VerticalAlignment="Center" Width="560" TextTrimming="CharacterEllipsis" />
+        <Button Content="Browse" Command="{Binding BrowseGameCommand}" />
+      </StackPanel>
+
+      <StackPanel Orientation="Horizontal" Spacing="8">
+        <TextBlock Text="Catalog:" VerticalAlignment="Center" Width="110" />
+        <TextBlock Text="{Binding CatalogDescription}" VerticalAlignment="Center" Width="560" TextTrimming="CharacterEllipsis" />
+        <Button Content="Change" Command="{Binding ChangeCatalogCommand}" />
+        <Button Content="Use cached copy" Command="{Binding UseCachedCatalogCommand}" />
+      </StackPanel>
+
+      <Expander Header="Advanced">
+        <StackPanel Spacing="6">
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <TextBlock Text="Downloads:" VerticalAlignment="Center" Width="110" />
+            <TextBlock Text="{Binding DownloadDirectory}" VerticalAlignment="Center" Width="560" TextTrimming="CharacterEllipsis" />
+            <Button Content="Browse" Command="{Binding BrowseDownloadsCommand}" />
+          </StackPanel>
+          <StackPanel Orientation="Horizontal" Spacing="8">
+            <TextBlock Text="Connections:" VerticalAlignment="Center" Width="110" />
+            <Slider Minimum="1" Maximum="16" Width="220" Value="{Binding Connections}" />
+            <TextBlock Text="{Binding Connections}" VerticalAlignment="Center" />
+          </StackPanel>
+          <TextBlock Text="Applies after restart"
+                     IsVisible="{Binding RestartNoticeVisible}" />
+        </StackPanel>
+      </Expander>
+
+      <ItemsControl ItemsSource="{Binding Banners}">
+        <ItemsControl.ItemTemplate>
+          <DataTemplate>
+            <Border BorderThickness="1" Padding="6" Margin="0,2">
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <TextBlock Text="{Binding Text}" TextWrapping="Wrap" Width="760" />
+                <Button Content="Dismiss"
+                        Command="{Binding $parent[ItemsControl].DataContext.DismissBannerCommand}"
+                        CommandParameter="{Binding}" />
+              </StackPanel>
+            </Border>
+          </DataTemplate>
+        </ItemsControl.ItemTemplate>
+      </ItemsControl>
+
+      <StackPanel Orientation="Horizontal" Spacing="8">
+        <Button Content="Select all" Command="{Binding SelectAllCommand}" />
+        <Button Content="None" Command="{Binding SelectNoneCommand}" />
+        <TextBlock Text="Search:" VerticalAlignment="Center" />
+        <TextBox Width="240" Text="{Binding SearchText}" />
+        <Button Content="Scan" Command="{Binding ScanCommand}" />
+      </StackPanel>
+    </StackPanel>
+
+    <Grid DockPanel.Dock="Bottom" ColumnDefinitions="*,Auto,Auto,Auto,Auto" Margin="0,8,0,0">
+      <TextBlock Grid.Column="0" Text="{Binding StatusText}" VerticalAlignment="Center" />
+      <Button Grid.Column="1" Content="Pause" Command="{Binding PauseCommand}" />
+      <Button Grid.Column="2" Content="Resume" Command="{Binding ResumeCommand}" />
+      <Button Grid.Column="3" Content="Cancel all" Command="{Binding CancelAllCommand}" />
+      <Button Grid.Column="4" Content="Add selected" Command="{Binding AddSelectedCommand}" />
+    </Grid>
+
+    <!-- The stopping state: the content stays visible and goes inert rather than being
+         replaced, because shutdown waits for the runner and can take minutes on a large extract.
+         A window that emptied itself would look like a crash. -->
+    <TextBlock DockPanel.Dock="Bottom" Margin="0,8,0,0"
+               Text="Finishing up — waiting for the current pack to stop…"
+               IsVisible="{Binding IsShuttingDown}" />
+
+    <Panel>
+      <TextBlock Text="{Binding EmptyStateMessage}"
+                 HorizontalAlignment="Center" VerticalAlignment="Center" />
+      <ListBox ItemsSource="{Binding FilteredRows}">
+        <ListBox.ItemTemplate>
+          <DataTemplate>
+            <StackPanel Spacing="2">
+              <StackPanel Orientation="Horizontal" Spacing="8">
+                <CheckBox IsChecked="{Binding IsChecked}" IsEnabled="{Binding IsCheckable}" />
+                <TextBlock Text="{Binding Code}" Width="60" />
+                <TextBlock Text="{Binding Name}" Width="260" />
+                <TextBlock Text="{Binding StatusText}" Width="360" TextWrapping="Wrap" />
+                <ProgressBar Width="120" Minimum="0" Maximum="100"
+                             Value="{Binding ProgressPercent}"
+                             IsVisible="{Binding IsProgressVisible}" />
+              </StackPanel>
+              <TextBlock Text="{Binding Message}" Margin="28,0,0,0" TextWrapping="Wrap" />
+              <TextBlock Text="{Binding CurrentEntry}" Margin="28,0,0,0" TextTrimming="CharacterEllipsis" />
+            </StackPanel>
+            <DataTemplate.DataType />
+          </DataTemplate>
+        </ListBox.ItemTemplate>
+        <ListBox.ContextMenu>
+          <ContextMenu>
+            <MenuItem Header="Cancel" Command="{Binding CancelCommand}" />
+            <MenuItem Header="Remove" Command="{Binding RemoveCommand}" />
+            <!-- An Installed row's checkbox is disabled, and this is the only way to
+                 re-check it. Without this item ForceCheckable is implemented, unit-tested, and
+                 unreachable from the application. -->
+            <MenuItem Header="Reinstall anyway" Command="{Binding ReinstallCommand}" />
+          </ContextMenu>
+        </ListBox.ContextMenu>
+      </ListBox>
+    </Panel>
+
+  </DockPanel>
 </Window>

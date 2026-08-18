@@ -12,7 +12,8 @@ public partial class App : Application
     {
         if (ApplicationLifetime is IClassicDesktopStyleApplicationLifetime desktop)
         {
-            desktop.MainWindow = new MainWindow();
+            var catalogArgument = desktop.Args?.FirstOrDefault();
+            desktop.MainWindow = new MainWindow(Composition.Build(catalogArgument));
         }
 
         base.OnFrameworkInitializationCompleted();

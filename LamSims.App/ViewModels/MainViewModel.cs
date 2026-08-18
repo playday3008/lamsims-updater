@@ -4,6 +4,7 @@ using CommunityToolkit.Mvvm.Input;
 using LamSims.App.Services;
 using LamSims.Core.Catalogs;
 using LamSims.Core.Queueing;
+using LamSims.Core.Scanning;
 using LamSims.Core.Settings;
 
 namespace LamSims.App.ViewModels;
@@ -27,12 +28,19 @@ public sealed partial class MainViewModel : ObservableObject
         _load = load ?? services.Catalog.LoadAsync;
         _save = save ?? services.Settings.SaveAsync;
 
-        // Seeded without going through the property setters: those queue a save and, for the
-        // download directory, move the engine. A value the user already chose is neither a
-        // change nor a reason to write it back.
+        // Seeded without going through the property setters: those mark the restart notice and
+        // queue a save, and loading a value the user already chose is neither a change nor a
+        // reason to warn them.
         _gameDirectory = services.Current.GameDirectory;
         _downloadDirectory = services.Current.DownloadDirectory;
         _connections = services.Current.Connections;
+
+        if (services.SettingsError is { } settingsError)
+        {
+            Banners.Add(new Banner("settings-load",
+                $"Your settings could not be read and defaults are in use: {settingsError}",
+                BannerKind.Warning));
+        }
     }
 
     // These wrappers keep the three delegate fields read: a private field assigned and never
@@ -44,6 +52,196 @@ public sealed partial class MainViewModel : ObservableObject
         _load(source, ct);
 
     private Task PersistSettingsAsync(CancellationToken ct) => _save(_services.Current, ct);
+
+    private static readonly TimeSpan SaveDebounce = TimeSpan.FromMilliseconds(500);
+
+    private DateTimeOffset? _saveDueAt;
+
+    internal int SettingsWriteCount { get; private set; }
+
+    [ObservableProperty]
+    private bool _restartNoticeVisible;
+
+    partial void OnConnectionsChanged(int value)
+    {
+        _services.Current.Connections = value;
+        RestartNoticeVisible = true;
+        QueueSave();
+    }
+
+    partial void OnDownloadDirectoryChanged(string? value)
+    {
+        _services.Current.DownloadDirectory = value;
+        RestartNoticeVisible = true;
+        QueueSave();
+    }
+
+    private void QueueSave() => _saveDueAt = _services.Clock.UtcNow + SaveDebounce;
+
+    /// <summary>Writes a pending change only once the debounce has elapsed. Driven by a timer.</summary>
+    public Task FlushDueSettingsAsync(CancellationToken ct) =>
+        _saveDueAt is { } due && _services.Clock.UtcNow >= due
+            ? FlushSettingsNowAsync(ct)
+            : Task.CompletedTask;
+
+    /// <summary>Writes a pending change immediately. Used at shutdown and after a picker.</summary>
+    public async Task FlushSettingsNowAsync(CancellationToken ct)
+    {
+        if (_saveDueAt is null) return;
+
+        _saveDueAt = null;
+
+        try
+        {
+            await PersistSettingsAsync(ct);
+            SettingsWriteCount++;
+            Dismiss("settings");
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            Raise(new Banner("settings", $"Your settings could not be saved: {e.Message}", BannerKind.Warning));
+        }
+    }
+
+    [RelayCommand]
+    private async Task BrowseGameAsync(CancellationToken ct)
+    {
+        var picked = await _services.Pickers.PickFolderAsync("Choose the Sims 4 folder", GameDirectory);
+        if (picked is null) return;
+
+        GameDirectory = picked;
+        _services.Current.GameDirectory = picked;
+        QueueSave();
+        await FlushSettingsNowAsync(ct);
+        Scan();
+    }
+
+    [RelayCommand]
+    private async Task BrowseDownloadsAsync(CancellationToken ct)
+    {
+        var picked = await _services.Pickers.PickFolderAsync("Choose where downloads are kept", DownloadDirectory);
+        if (picked is null) return;
+
+        DownloadDirectory = picked;   // its setter queues the save and raises the restart notice
+        await FlushSettingsNowAsync(ct);
+    }
+
+    public ObservableCollection<Banner> Banners { get; } = new();
+
+    [ObservableProperty]
+    private string _emptyStateMessage = "";
+
+    [ObservableProperty]
+    private string _catalogDescription = "";
+
+    private CatalogSource? _cachedCopy;
+
+    public async Task LoadCatalogAsync(CancellationToken ct)
+    {
+        CatalogResolution resolution;
+
+        try
+        {
+            resolution = await ResolveCatalogAsync(ct);
+        }
+        catch (OperationCanceledException)
+        {
+            // The application is closing. Not a catalog error, and not a banner.
+            return;
+        }
+
+        Apply(resolution);
+    }
+
+    private void Apply(CatalogResolution resolution)
+    {
+        _cachedCopy = resolution.CachedCopy;
+        UseCachedCatalogCommand.NotifyCanExecuteChanged();
+        Dismiss("catalog");
+        Dismiss("catalog-rejected");
+
+        switch (resolution.Status)
+        {
+            case CatalogStatus.Loaded when resolution.Load is { } load:
+                BuildRows(load.Catalog.Packs);
+                CatalogDescription = resolution.Source?.Location ?? "";
+                EmptyStateMessage = load.Catalog.Packs.Count == 0 ? "This catalog lists no packs." : "";
+
+                if (load.Rejected.Count > 0)
+                {
+                    Raise(new Banner("catalog-rejected",
+                        $"{load.Rejected.Count} catalog entr{(load.Rejected.Count == 1 ? "y was" : "ies were")} "
+                        + $"skipped. First: {load.Rejected[0].Description} — {load.Rejected[0].Reason}",
+                        BannerKind.Warning));
+                }
+
+                break;
+
+            case CatalogStatus.Empty:
+                BuildRows([]);
+                CatalogDescription = "";
+                EmptyStateMessage = "No catalog selected.";
+                break;
+
+            default:
+                BuildRows([]);
+                CatalogDescription = "";
+                EmptyStateMessage = "The catalog could not be loaded.";
+                Raise(new Banner("catalog", resolution.Error ?? "The catalog could not be loaded.", BannerKind.Error));
+                break;
+        }
+    }
+
+    private void Raise(Banner banner)
+    {
+        Dismiss(banner.Id);
+        Banners.Add(banner);
+    }
+
+    private void Dismiss(string id)
+    {
+        for (var i = Banners.Count - 1; i >= 0; i--)
+        {
+            if (Banners[i].Id == id) Banners.RemoveAt(i);
+        }
+    }
+
+    [RelayCommand]
+    private void DismissBanner(Banner banner) => Banners.Remove(banner);
+
+    /// <summary>
+    /// Refused while anything is still in the queue: a rebuilt row list orphans an in-flight
+    /// pack, which keeps its lock and its bandwidth with no row to cancel it from, and a pack
+    /// whose entry changed would render progress under a size and digest the run is not using.
+    /// </summary>
+    public bool CanChangeCatalog => PendingCount == 0;
+
+    [RelayCommand(CanExecute = nameof(CanChangeCatalog))]
+    private async Task ChangeCatalogAsync(CancellationToken ct)
+    {
+        var picked = await _services.Pickers.PickFileAsync("Choose a catalog file", _services.Paths.Root);
+        if (picked is null) return;
+
+        _services.Current.CatalogSource = picked;
+        await SaveSettingsAsync(ct);
+        Apply(await LoadCatalogFromAsync(new CatalogSource(CatalogSourceKind.Settings, picked), ct));
+    }
+
+    private bool CanUseCachedCatalog => _cachedCopy is not null && PendingCount == 0;
+
+    [RelayCommand(CanExecute = nameof(CanUseCachedCatalog))]
+    public async Task UseCachedCatalogAsync(CancellationToken ct)
+    {
+        if (_cachedCopy is not { } source) return;
+
+        Apply(await LoadCatalogFromAsync(source, ct));
+    }
+
+    private Task SaveSettingsAsync(CancellationToken ct)
+    {
+        QueueSave();
+        return FlushSettingsNowAsync(ct);
+    }
 
     public ObservableCollection<PackRowViewModel> Rows { get; } = new();
 
@@ -110,7 +308,48 @@ public sealed partial class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(PendingCount));
         OnPropertyChanged(nameof(FailedCount));
 
+        ChangeCatalogCommand.NotifyCanExecuteChanged();
+        UseCachedCatalogCommand.NotifyCanExecuteChanged();
+
         ApplyQueueState(update.State);
+
+        if (update.Items.Any(i => i.State == QueueItemState.Completed && _rescanned.Add(i.Code))) Scan();
+    }
+
+    private readonly HashSet<string> _rescanned = new(StringComparer.Ordinal);
+
+    /// <summary>Test-visible: proves the rescan fires once per completion, not once per update.</summary>
+    internal int ScanCount { get; private set; }
+
+    [RelayCommand]
+    private void Scan()
+    {
+        if (string.IsNullOrWhiteSpace(GameDirectory)) return;
+
+        ScanCount++;
+
+        // Both calls are pure and total by core's contract (neither writes, and neither throws
+        // on a marker's content), so this command has no error path of its own.
+        var markers = _services.InstallState.LoadAll(GameDirectory);
+        var result = InstallScanner.Scan(GameDirectory, Rows.Select(r => r.Entry), markers);
+
+        GameDirectoryReadable = result.GameDirectoryReadable;
+
+        if (result.GameDirectoryReadable)
+        {
+            Dismiss("game-directory");
+        }
+        else
+        {
+            Raise(new Banner("game-directory",
+                $"The game folder '{GameDirectory}' could not be read, so no pack can be shown as installed.",
+                BannerKind.Error));
+        }
+
+        // Ordinal: InstallScanner builds every PackScanResult from the catalog's own pack.Code,
+        // so these strings are identical to the rows'. The store's case-insensitive dictionary
+        // is consulted inside the scanner and its comparer never reaches the results.
+        foreach (var scan in result.Packs) RowFor(scan.Code)?.ApplyScan(scan);
     }
 
     public void ApplyQueueState(QueueState state)
@@ -173,5 +412,91 @@ public sealed partial class MainViewModel : ObservableObject
         PauseCommand.NotifyCanExecuteChanged();
         ResumeCommand.NotifyCanExecuteChanged();
         CancelAllCommand.NotifyCanExecuteChanged();
+    }
+
+    private QueueBridge? _bridge;
+    private Task? _queueRun;
+    private Task? _bridgeRun;
+
+    [ObservableProperty]
+    private bool _isShuttingDown;
+
+    public async Task StartAsync(CancellationToken ct)
+    {
+        _bridge = new QueueBridge(
+            _services.Queue, _services.Dispatcher, RowFor, () => Rows, ApplyUpdate, NoteQueueClosed);
+
+        _queueRun = ObserveQueueAsync(ct);
+        _bridgeRun = _bridge.RunAsync();
+
+        await LoadCatalogAsync(ct);
+
+        if (!string.IsNullOrWhiteSpace(GameDirectory)) Scan();
+    }
+
+    /// <summary>
+    /// The queue's fault arrives here rather than through the bridge. `RunAsync`'s finally calls
+    /// `_updates.Writer.TryComplete()` with no argument on every exit path including the fault
+    /// path (`PackQueue.cs:536`, and `:1093` for a queue never run), so the bridge's
+    /// `await foreach` always ends cleanly and the `fault` it reports is always null against a
+    /// real queue. Left unobserved, the exception surfaces only where `ShutdownAsync` awaits
+    /// `_queueRun`, inside `OnClosing`'s `async void`, as an unhandled crash on window close,
+    /// and the banner it raises would be dead code.
+    /// </summary>
+    private async Task ObserveQueueAsync(CancellationToken ct)
+    {
+        try
+        {
+            await _services.Queue.RunAsync(ct);
+        }
+        catch (Exception e)
+        {
+            // Through the dispatcher: RunAsync's continuation is not on the UI thread.
+            _services.Dispatcher.Post(() => NoteQueueClosed(e));
+        }
+    }
+
+    /// <summary>
+    /// The queue has ended. Two callers: the bridge, when the update channel closes (always with
+    /// a null fault, see <see cref="ObserveQueueAsync"/>), and <c>ObserveQueueAsync</c> itself,
+    /// which is the only place a real fault can be seen. Both cases disable the queue controls;
+    /// only a fault also banners.
+    /// </summary>
+    public void NoteQueueClosed(Exception? fault)
+    {
+        IsQueueAlive = false;
+
+        if (fault is not null)
+        {
+            Raise(new Banner("queue",
+                $"The download queue stopped and this session cannot start more work: {fault.Message}",
+                BannerKind.Error));
+        }
+    }
+
+    [RelayCommand]
+    public async Task ShutdownAsync()
+    {
+        if (IsShuttingDown) return;
+
+        IsShuttingDown = true;
+
+        await FlushSettingsNowAsync(CancellationToken.None);
+
+        // CancelAll BEFORE disposal, and Complete() is never called at all. Complete() makes a
+        // blocked pack eligible to start, clears a standing pause and releases the loop's
+        // signal, so between it and the next statement the loop can take a pack lock and reach
+        // the installer — which writes its journal marker before the first entry, leaving a
+        // Partial install nobody asked for. CancelAll marks every pending and blocked item
+        // Cancelled, which is terminal, so nothing can be requeued afterwards; and DisposeAsync
+        // calls StopAcceptingWork itself, so Complete() adds nothing even where it is safe.
+        _services.Queue.CancelAll();
+        await _services.Queue.DisposeAsync();
+
+        // Neither await can throw: ObserveQueueAsync catches the queue's fault and QueueBridge
+        // catches its own. That matters because this runs from OnClosing's async void, where an
+        // exception is an unhandled crash rather than a caught one.
+        if (_queueRun is not null) await _queueRun;
+        if (_bridgeRun is not null) await _bridgeRun;
     }
 }
