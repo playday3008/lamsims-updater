@@ -2,6 +2,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         x:Class="LamSims.App.MainWindow"
         Width="900" Height="640"
+        MinWidth="760" MinHeight="480"
         Title="LamSims Updater">
   <DockPanel Margin="12">
 
@@ -9,31 +10,37 @@
          inert. Bound on the three content blocks rather than on the DockPanel so the stopping
          notice below is not dimmed along with the controls it explains. -->
     <StackPanel DockPanel.Dock="Top" Spacing="6" IsEnabled="{Binding !IsShuttingDown}">
-      <StackPanel Orientation="Horizontal" Spacing="8">
-        <TextBlock Text="Game folder:" VerticalAlignment="Center" Width="110" />
-        <TextBlock Text="{Binding GameDirectory}" VerticalAlignment="Center" Width="560" TextTrimming="CharacterEllipsis" />
-        <Button Content="Browse" Command="{Binding BrowseGameCommand}" />
-      </StackPanel>
+      <Grid ColumnDefinitions="110,*,Auto" ColumnSpacing="8">
+        <TextBlock Grid.Column="0" Text="Game folder:" VerticalAlignment="Center" />
+        <TextBlock Grid.Column="1" Text="{Binding GameDirectory}" VerticalAlignment="Center"
+                   TextTrimming="CharacterEllipsis" />
+        <Button Grid.Column="2" Content="Browse" Command="{Binding BrowseGameCommand}" />
+      </Grid>
 
-      <StackPanel Orientation="Horizontal" Spacing="8">
-        <TextBlock Text="Catalog:" VerticalAlignment="Center" Width="110" />
-        <TextBlock Text="{Binding CatalogDescription}" VerticalAlignment="Center" Width="560" TextTrimming="CharacterEllipsis" />
-        <Button Content="Change" Command="{Binding ChangeCatalogCommand}" />
-        <Button Content="Use cached copy" Command="{Binding UseCachedCatalogCommand}" />
-      </StackPanel>
+      <Grid ColumnDefinitions="110,*,Auto" ColumnSpacing="8">
+        <TextBlock Grid.Column="0" Text="Catalog:" VerticalAlignment="Center" />
+        <TextBlock Grid.Column="1" Text="{Binding CatalogDescription}" VerticalAlignment="Center"
+                   TextTrimming="CharacterEllipsis" />
+        <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8">
+          <Button Content="Change" Command="{Binding ChangeCatalogCommand}" />
+          <Button Content="Use cached copy" Command="{Binding UseCachedCatalogCommand}" />
+        </StackPanel>
+      </Grid>
 
       <Expander Header="Advanced">
         <StackPanel Spacing="6">
-          <StackPanel Orientation="Horizontal" Spacing="8">
-            <TextBlock Text="Downloads:" VerticalAlignment="Center" Width="110" />
-            <TextBlock Text="{Binding DownloadDirectory}" VerticalAlignment="Center" Width="560" TextTrimming="CharacterEllipsis" />
-            <Button Content="Browse" Command="{Binding BrowseDownloadsCommand}" />
-          </StackPanel>
-          <StackPanel Orientation="Horizontal" Spacing="8">
-            <TextBlock Text="Connections:" VerticalAlignment="Center" Width="110" />
-            <Slider Minimum="1" Maximum="16" Width="220" Value="{Binding Connections}" />
-            <TextBlock Text="{Binding Connections}" VerticalAlignment="Center" />
-          </StackPanel>
+          <Grid ColumnDefinitions="110,*,Auto" ColumnSpacing="8">
+            <TextBlock Grid.Column="0" Text="Downloads:" VerticalAlignment="Center" />
+            <TextBlock Grid.Column="1" Text="{Binding DownloadDirectory}" VerticalAlignment="Center"
+                       TextTrimming="CharacterEllipsis" />
+            <Button Grid.Column="2" Content="Browse" Command="{Binding BrowseDownloadsCommand}" />
+          </Grid>
+          <Grid ColumnDefinitions="110,Auto,Auto" ColumnSpacing="8">
+            <TextBlock Grid.Column="0" Text="Connections:" VerticalAlignment="Center" />
+            <Slider Grid.Column="1" Minimum="1" Maximum="16" Width="220"
+                    Value="{Binding Connections}" />
+            <TextBlock Grid.Column="2" Text="{Binding Connections}" VerticalAlignment="Center" />
+          </Grid>
           <TextBlock Text="Applies after restart"
                      IsVisible="{Binding RestartNoticeVisible}" />
         </StackPanel>
@@ -42,9 +49,12 @@
       <ItemsControl ItemsSource="{Binding Banners}">
         <ItemsControl.ItemTemplate>
           <DataTemplate>
-            <Border BorderThickness="1" Padding="6" Margin="0,2">
+            <Border Classes="banner"
+                    Classes.warning="{Binding IsWarning}"
+                    Classes.error="{Binding IsError}">
               <StackPanel Orientation="Horizontal" Spacing="8">
-                <TextBlock Text="{Binding Text}" TextWrapping="Wrap" Width="760" />
+                <TextBlock Text="{Binding Text}" TextWrapping="Wrap"
+                           HorizontalAlignment="Stretch" VerticalAlignment="Center" />
                 <Button Content="Dismiss"
                         Command="{Binding $parent[ItemsControl].DataContext.DismissBannerCommand}"
                         CommandParameter="{Binding}" />
@@ -54,16 +64,16 @@
         </ItemsControl.ItemTemplate>
       </ItemsControl>
 
-      <StackPanel Orientation="Horizontal" Spacing="8">
-        <Button Content="Select all" Command="{Binding SelectAllCommand}" />
-        <Button Content="None" Command="{Binding SelectNoneCommand}" />
-        <TextBlock Text="Search:" VerticalAlignment="Center" />
-        <TextBox Width="240" Text="{Binding SearchText}" />
-        <Button Content="Scan" Command="{Binding ScanCommand}" />
-      </StackPanel>
+      <Grid ColumnDefinitions="Auto,Auto,Auto,*,Auto" ColumnSpacing="8">
+        <Button Grid.Column="0" Content="Select all" Command="{Binding SelectAllCommand}" />
+        <Button Grid.Column="1" Content="None" Command="{Binding SelectNoneCommand}" />
+        <TextBlock Grid.Column="2" Text="Search:" VerticalAlignment="Center" />
+        <TextBox Grid.Column="3" MinWidth="160" Text="{Binding SearchText}" />
+        <Button Grid.Column="4" Content="Scan" Command="{Binding ScanCommand}" />
+      </Grid>
     </StackPanel>
 
-    <Grid DockPanel.Dock="Bottom" ColumnDefinitions="*,Auto,Auto,Auto,Auto" Margin="0,8,0,0"
+    <Grid DockPanel.Dock="Bottom" ColumnDefinitions="*,Auto,Auto,Auto,Auto" ColumnSpacing="8" Margin="0,8,0,0"
           IsEnabled="{Binding !IsShuttingDown}">
       <TextBlock Grid.Column="0" Text="{Binding StatusText}" VerticalAlignment="Center" />
       <Button Grid.Column="1" Content="Pause" Command="{Binding PauseCommand}" />
@@ -80,8 +90,11 @@
                IsVisible="{Binding IsShuttingDown}" />
 
     <Panel IsEnabled="{Binding !IsShuttingDown}">
-      <TextBlock Text="{Binding EmptyStateMessage}"
-                 HorizontalAlignment="Center" VerticalAlignment="Center" />
+      <TextBlock x:Name="EmptyState"
+                 Text="{Binding EmptyStateMessage}"
+                 HorizontalAlignment="Center" VerticalAlignment="Center"
+                 IsVisible="{Binding EmptyStateMessage,
+                             Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
       <ListBox ItemsSource="{Binding FilteredRows}">
         <ListBox.ItemTemplate>
           <DataTemplate>
@@ -100,17 +113,32 @@
                   <MenuItem Header="Reinstall anyway" Command="{Binding ReinstallCommand}" />
                 </ContextMenu>
               </StackPanel.ContextMenu>
-              <StackPanel Orientation="Horizontal" Spacing="8">
-                <CheckBox IsChecked="{Binding IsChecked}" IsEnabled="{Binding IsCheckable}" />
-                <TextBlock Text="{Binding Code}" Width="60" />
-                <TextBlock Text="{Binding Name}" Width="260" />
-                <TextBlock Text="{Binding StatusText}" Width="360" TextWrapping="Wrap" />
-                <ProgressBar Width="120" Minimum="0" Maximum="100"
+              <Grid ColumnDefinitions="Auto,Auto,2*,3*,Auto,Auto">
+                <CheckBox Grid.Column="0" Margin="0,0,8,0"
+                          IsChecked="{Binding IsChecked}" IsEnabled="{Binding IsCheckable}" />
+                <TextBlock Grid.Column="1" Text="{Binding Code}" MinWidth="56" Margin="0,0,8,0"
+                           VerticalAlignment="Center" />
+                <TextBlock Grid.Column="2" Text="{Binding Name}" Margin="0,0,8,0"
+                           VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
+                <TextBlock Grid.Column="3" Text="{Binding StatusText}" Margin="0,0,8,0"
+                           VerticalAlignment="Center" TextWrapping="Wrap" />
+                <TextBlock Grid.Column="4" Classes="secondary" Text="{Binding SizeText}"
+                           MinWidth="72" Margin="0,0,8,0"
+                           HorizontalAlignment="Right" VerticalAlignment="Center" />
+                <ProgressBar Grid.Column="5" Width="120" Minimum="0" Maximum="100"
+                             VerticalAlignment="Center"
                              Value="{Binding ProgressPercent}"
                              IsVisible="{Binding IsProgressVisible}" />
-              </StackPanel>
-              <TextBlock Text="{Binding Message}" Margin="28,0,0,0" TextWrapping="Wrap" />
-              <TextBlock Text="{Binding CurrentEntry}" Margin="28,0,0,0" TextTrimming="CharacterEllipsis" />
+              </Grid>
+              <TextBlock Text="{Binding Message}" Margin="28,0,0,0" TextWrapping="Wrap"
+                         Classes.warning="{Binding IsWarning}"
+                         Classes.error="{Binding IsError}"
+                         IsVisible="{Binding Message,
+                                     Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+              <TextBlock Text="{Binding CurrentEntry}" Margin="28,0,0,0" Classes="secondary"
+                         TextTrimming="CharacterEllipsis"
+                         IsVisible="{Binding CurrentEntry,
+                                     Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
             </StackPanel>
           </DataTemplate>
         </ListBox.ItemTemplate>

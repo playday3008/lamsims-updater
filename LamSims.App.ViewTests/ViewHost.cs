@@ -1,5 +1,6 @@
 using Avalonia;
 using Avalonia.Controls;
+using Avalonia.Threading;
 using Avalonia.VisualTree;
 using LamSims.App.Services;
 using LamSims.App.ViewModels;
@@ -63,6 +64,18 @@ public sealed class ViewHost : IDisposable
 
     public static T Find<T>(Visual root) where T : Visual =>
         root.GetVisualDescendants().OfType<T>().First();
+
+    /// <summary>
+    /// Runs the layout pass that a real message loop would. Headless does not pump on its own, and
+    /// an item added to a bound collection AFTER Show() gets its container but not its template
+    /// content until layout runs, so a test that adds a banner and looks for its Border finds
+    /// nothing without this. Property changes on already-realized controls need no pump.
+    /// </summary>
+    public void Pump()
+    {
+        Dispatcher.UIThread.RunJobs();
+        Window.UpdateLayout();
+    }
 
     public void Dispose()
     {
