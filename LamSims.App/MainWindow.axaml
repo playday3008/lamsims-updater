@@ -1,0 +1,7 @@
+<Window xmlns="https://github.com/avaloniaui"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        x:Class="LamSims.App.MainWindow"
+        Width="900" Height="640"
+        Title="LamSims Updater">
+  <TextBlock Margin="16" Text="LamSims Updater" />
+</Window>
