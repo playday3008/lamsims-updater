@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Avalonia.Headless.XUnit" Version="12.0.4" />
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.14.1" />
+    <PackageReference Include="xunit.v3" Version="3.2.2" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="3.1.4" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="Xunit" />
+    <Using Include="LamSims.Core.Catalogs" />
+    <Using Include="LamSims.Core.Queueing" />
+    <Using Include="LamSims.Core.Scanning" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\LamSims.App\LamSims.App.csproj" />
+    <ProjectReference Include="..\LamSims.Core\LamSims.Core.csproj" />
+  </ItemGroup>
+
+</Project>

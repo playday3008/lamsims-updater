@@ -112,6 +112,10 @@ public sealed partial class PackRowViewModel : ObservableObject
         _ => RowMessageKind.None,
     };
 
+    public bool IsWarning => MessageKind is RowMessageKind.Warning;
+
+    public bool IsError => MessageKind is RowMessageKind.Error;
+
     public string StatusText => QueueState switch
     {
         QueueItemState.Queued => "Queued",
@@ -263,8 +267,8 @@ public sealed partial class PackRowViewModel : ObservableObject
         [
             nameof(InstallState), nameof(MissingDirs), nameof(QueueState), nameof(IsCheckable),
             nameof(StatusText), nameof(IsBusy), nameof(ProgressPercent), nameof(IsProgressVisible),
-            nameof(Message), nameof(MessageKind), nameof(CurrentEntry), nameof(CanCancel),
-            nameof(CanRemove),
+            nameof(Message), nameof(MessageKind), nameof(IsWarning), nameof(IsError),
+            nameof(CurrentEntry), nameof(CanCancel), nameof(CanRemove),
         ])
         {
             OnPropertyChanged(name);
