@@ -27,4 +27,10 @@
     <ProjectReference Include="..\LamSims.Core\LamSims.Core.csproj" />
   </ItemGroup>
 
+  <ItemGroup>
+    <!-- Read as XML by SelectorSweepTests. Embedded rather than located on disk so the same build
+         that compiles the assertion refreshes the copy it reads. -->
+    <EmbeddedResource Include="..\LamSims.App\Themes\Controls.axaml" LogicalName="Controls.axaml" />
+  </ItemGroup>
+
 </Project>

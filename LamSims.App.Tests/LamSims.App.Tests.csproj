@@ -28,6 +28,9 @@
          build that compiles the assertion refreshes the copy it reads, and no working-directory
          assumption can make the test vacuous. -->
     <EmbeddedResource Include="..\LamSims.App\MainWindow.axaml" LogicalName="MainWindow.axaml" />
+    <EmbeddedResource Include="..\LamSims.App\App.axaml" LogicalName="App.axaml" />
+    <EmbeddedResource Include="..\LamSims.App\Themes\Palette.axaml" LogicalName="Palette.axaml" />
+    <EmbeddedResource Include="..\LamSims.App\Themes\Controls.axaml" LogicalName="Controls.axaml" />
   </ItemGroup>
 
   <ItemGroup>

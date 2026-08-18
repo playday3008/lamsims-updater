@@ -51,11 +51,15 @@ public class RowMessageTests
 
         Assert.Null(host.Row("EP01").Message);
 
+        var lines = host.RowVisual("EP01").GetVisualDescendants().OfType<TextBlock>().ToList();
+
+        // Assert.All over an empty sequence passes, so the row having any text at all is part of
+        // the claim rather than an assumption.
+        Assert.NotEmpty(lines);
+
         // Every realized TextBlock in the row is either non-empty or collapsed: an always-present
         // blank line would push every row taller for nothing.
-        Assert.All(
-            host.RowVisual("EP01").GetVisualDescendants().OfType<TextBlock>(),
-            t => Assert.True(!string.IsNullOrEmpty(t.Text) || !t.IsVisible));
+        Assert.All(lines, t => Assert.True(!string.IsNullOrEmpty(t.Text) || !t.IsVisible));
     }
 
     /// <summary>

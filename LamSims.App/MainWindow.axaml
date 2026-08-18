@@ -52,13 +52,18 @@
             <Border Classes="banner"
                     Classes.warning="{Binding IsWarning}"
                     Classes.error="{Binding IsError}">
-              <StackPanel Orientation="Horizontal" Spacing="8">
-                <TextBlock Text="{Binding Text}" TextWrapping="Wrap"
-                           HorizontalAlignment="Stretch" VerticalAlignment="Center" />
-                <Button Content="Dismiss"
+              <!-- Two columns rather than a horizontal StackPanel. A StackPanel measures
+                   horizontally with infinite available width, so Stretch is inert and Wrap never
+                   fires: the text lays out on one unbroken line and Dismiss (the only route to
+                   clear a banner) is arranged off the window, with no horizontal scroll to
+                   reach it. Banner text interpolates paths and exception messages. -->
+              <Grid ColumnDefinitions="*,Auto" ColumnSpacing="8">
+                <TextBlock Grid.Column="0" Text="{Binding Text}" TextWrapping="Wrap"
+                           VerticalAlignment="Center" />
+                <Button Grid.Column="1" Content="Dismiss"
                         Command="{Binding $parent[ItemsControl].DataContext.DismissBannerCommand}"
                         CommandParameter="{Binding}" />
-              </StackPanel>
+              </Grid>
             </Border>
           </DataTemplate>
         </ItemsControl.ItemTemplate>
@@ -90,11 +95,6 @@
                IsVisible="{Binding IsShuttingDown}" />
 
     <Panel IsEnabled="{Binding !IsShuttingDown}">
-      <TextBlock x:Name="EmptyState"
-                 Text="{Binding EmptyStateMessage}"
-                 HorizontalAlignment="Center" VerticalAlignment="Center"
-                 IsVisible="{Binding EmptyStateMessage,
-                             Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
       <ListBox ItemsSource="{Binding FilteredRows}">
         <ListBox.ItemTemplate>
           <DataTemplate>
@@ -143,6 +143,15 @@
           </DataTemplate>
         </ListBox.ItemTemplate>
       </ListBox>
+
+      <!-- LAST child, deliberately. A Panel draws in document order and the ListBox carries an
+           opaque MantleBrush background, so a label declared before the list is painted and then
+           covered. Nothing binds the list's IsVisible, so this overlays rather than hides. -->
+      <TextBlock x:Name="EmptyState"
+                 Text="{Binding EmptyStateMessage}"
+                 HorizontalAlignment="Center" VerticalAlignment="Center"
+                 IsVisible="{Binding EmptyStateMessage,
+                             Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
     </Panel>
 
   </DockPanel>

@@ -49,11 +49,18 @@
     <Setter Property="Background" Value="Transparent"/>
   </Style>
 
-  <Style Selector="ListBoxItem:pointerover">
+  <!-- /template/, not the item itself. Fluent's ListBoxItem control theme paints its state
+       backgrounds onto the template's PART_ContentPresenter through its own pseudo-class styles,
+       and those win at style-trigger priority over the TemplateBinding that would otherwise carry
+       the item's own Background down. Setting Background on ListBoxItem:selected therefore sets a
+       property nothing reads: the item reported Surface1 while the presenter painted Fluent's
+       #0078d7. The plain ListBoxItem style above is a different case and stays: the unselected
+       item has no competing trigger, so its Transparent does reach the presenter. -->
+  <Style Selector="ListBoxItem:pointerover /template/ ContentPresenter#PART_ContentPresenter">
     <Setter Property="Background" Value="{DynamicResource Surface0Brush}"/>
   </Style>
 
-  <Style Selector="ListBoxItem:selected">
+  <Style Selector="ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter">
     <Setter Property="Background" Value="{DynamicResource Surface1Brush}"/>
   </Style>
 

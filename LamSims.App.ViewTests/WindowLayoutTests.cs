@@ -17,8 +17,13 @@ public class WindowLayoutTests
         Assert.Equal(480d, host.Window.MinHeight);
     }
 
+    /// <summary>
+    /// Covers REALIZED content only. Popup content (the row context menu) and anything inside a
+    /// collapsed region is structurally invisible to a visual-tree walk, so this makes its claim
+    /// about what the window has actually laid out, not about the markup as a whole.
+    /// </summary>
     [AvaloniaFact]
-    public void No_text_in_the_window_is_pinned_to_a_fixed_width()
+    public void No_realized_text_in_the_window_is_pinned_to_a_fixed_width()
     {
         using var host = ViewHost.Show(Packs.Entry("EP01"), Packs.Entry("EP02", "Get Together"));
 
@@ -32,7 +37,7 @@ public class WindowLayoutTests
         // than the markup, and covers the row template as well as the chrome.
         var pinned = host.Window.GetVisualDescendants().OfType<TextBlock>()
             .Where(t => !double.IsNaN(t.Width))
-            .Select(t => $"{t.Text}: Width={t.Width}")
+            .Select(t => $"realized TextBlock '{t.Text}' is pinned to Width={t.Width}")
             .ToList();
 
         Assert.True(pinned.Count == 0, string.Join(Environment.NewLine, pinned));
@@ -86,5 +91,15 @@ public class WindowLayoutTests
 
         Assert.True(empty.IsVisible);
         Assert.Equal("This catalog lists no packs.", empty.Text);
+
+        // IsVisible says nothing about occlusion, and this test once passed while the label was
+        // invisible to users: the ListBox carries an opaque background, a Panel draws in document
+        // order, and nothing binds the list's IsVisible, so a label declared before the list is
+        // painted and then covered. The assertion is about relative order for that reason.
+        var panel = ViewHost.Find<Panel>(host.Window, p => p.Children.Contains(empty));
+        var list = ViewHost.Find<ListBox>(host.Window);
+
+        Assert.True(panel.Children.IndexOf(empty) > panel.Children.IndexOf(list),
+            "the empty-state label must be declared after the ListBox or the list paints over it");
     }
 }

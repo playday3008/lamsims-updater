@@ -17,5 +17,6 @@ public static class TestAppBuilder
 {
     public static AppBuilder BuildAvaloniaApp() =>
         AppBuilder.Configure<LamSims.App.App>()
+            .WithInterFont()
             .UseHeadless(new AvaloniaHeadlessPlatformOptions());
 }

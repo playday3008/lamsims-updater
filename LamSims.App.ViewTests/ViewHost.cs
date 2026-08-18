@@ -27,6 +27,11 @@ public sealed class ViewHost : IDisposable
             new SettingsStore(paths),
             new AppSettings(),
             null,
+            // A real CatalogLoader over a real HttpClient, and safe only because Show() below
+            // constructs the window as `new MainWindow { DataContext = vm }`. That path never runs
+            // OnOpened's StartAsync, so nothing ever asks this loader for a URL. A future test that
+            // switched to the AppServices constructor would reach the public internet from a unit
+            // test — stub the loader before making that change, not after.
             new CatalogLoader(new HttpClient(), paths),
             new InstallStateStore(paths.InstallStateDirectory),
             new StubQueue(),

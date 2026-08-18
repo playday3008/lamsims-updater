@@ -111,22 +111,82 @@
   <SolidColorBrush x:Key="TextControlBorderBrushPointerOver" Color="{StaticResource CatppuccinBlue}"/>
   <SolidColorBrush x:Key="TextControlBorderBrushFocused" Color="{StaticResource CatppuccinLavender}"/>
   <SolidColorBrush x:Key="TextControlBorderBrushDisabled" Color="{StaticResource CatppuccinSurface1}"/>
+  <!-- Despite the name Fluent declares this as a brush, and it is the search box's selection
+       highlight: accent-derived, so Windows blue until overridden. -->
+  <SolidColorBrush x:Key="TextControlSelectionHighlightColor" Color="{StaticResource CatppuccinSurface2}"/>
 
   <SolidColorBrush x:Key="CheckBoxBackgroundUnchecked" Color="{StaticResource CatppuccinSurface0}"/>
   <SolidColorBrush x:Key="CheckBoxBackgroundUncheckedPointerOver" Color="{StaticResource CatppuccinSurface1}"/>
   <SolidColorBrush x:Key="CheckBoxBackgroundChecked" Color="{StaticResource CatppuccinSurface1}"/>
   <SolidColorBrush x:Key="CheckBoxBackgroundCheckedPointerOver" Color="{StaticResource CatppuccinSurface2}"/>
 
+  <!-- The checked mark is GreenBrush #a6e3a1: upstream stroked both the tick and the checked
+       border. Without these the tick is Fluent's own and GreenBrush is a colour the application
+       defines and never uses. -->
+  <!-- The box the tick sits in. Fluent fills it from the accent, so without these a green tick
+       lands on a Windows-blue square. There is no CheckBoxCheckBackgroundStrokeChecked in Fluent
+       12.0.4's inventory; the checked stroke follows this fill. -->
+  <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillChecked" Color="{StaticResource CatppuccinSurface1}"/>
+  <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillCheckedPointerOver" Color="{StaticResource CatppuccinSurface2}"/>
+  <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillCheckedPressed" Color="{StaticResource CatppuccinSurface2}"/>
+  <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillCheckedDisabled" Color="{StaticResource CatppuccinSurface0}"/>
+
+  <SolidColorBrush x:Key="CheckBoxCheckGlyphForegroundChecked" Color="{StaticResource CatppuccinGreen}"/>
+  <SolidColorBrush x:Key="CheckBoxCheckGlyphForegroundCheckedPointerOver" Color="{StaticResource CatppuccinGreen}"/>
+  <SolidColorBrush x:Key="CheckBoxCheckGlyphForegroundCheckedPressed" Color="{StaticResource CatppuccinGreen}"/>
+  <SolidColorBrush x:Key="CheckBoxCheckGlyphForegroundCheckedDisabled" Color="{StaticResource CatppuccinOverlay0}"/>
+
+  <!-- The border family: four states, so the checked border does not fall back to Fluent
+       blue on pointer-over or press. -->
+  <SolidColorBrush x:Key="CheckBoxBorderBrushChecked" Color="{StaticResource CatppuccinGreen}"/>
+  <SolidColorBrush x:Key="CheckBoxBorderBrushCheckedPointerOver" Color="{StaticResource CatppuccinGreen}"/>
+  <SolidColorBrush x:Key="CheckBoxBorderBrushCheckedPressed" Color="{StaticResource CatppuccinGreen}"/>
+  <SolidColorBrush x:Key="CheckBoxBorderBrushCheckedDisabled" Color="{StaticResource CatppuccinSurface1}"/>
+  <SolidColorBrush x:Key="CheckBoxBorderBrushUnchecked" Color="{StaticResource CatppuccinSurface2}"/>
+  <SolidColorBrush x:Key="CheckBoxBorderBrushUncheckedPointerOver" Color="{StaticResource CatppuccinOverlay0}"/>
+  <SolidColorBrush x:Key="CheckBoxBorderBrushUncheckedPressed" Color="{StaticResource CatppuccinOverlay0}"/>
+  <SolidColorBrush x:Key="CheckBoxBorderBrushUncheckedDisabled" Color="{StaticResource CatppuccinSurface1}"/>
+
   <SolidColorBrush x:Key="ExpanderChevronBackground" Color="Transparent"/>
   <SolidColorBrush x:Key="ExpanderChevronForeground" Color="{StaticResource CatppuccinText}"/>
   <SolidColorBrush x:Key="ExpanderChevronBorderBrush" Color="{StaticResource CatppuccinSurface2}"/>
 
+  <!-- The container is the Slider's own backdrop and Transparent is correct for it, but it is not
+       what a user sees: the track, its filled portion and the thumb all resolve from Fluent's
+       accent, which is Windows blue on a Catppuccin window. -->
   <SolidColorBrush x:Key="SliderContainerBackground" Color="Transparent"/>
   <SolidColorBrush x:Key="SliderContainerBackgroundPointerOver" Color="Transparent"/>
+
+  <SolidColorBrush x:Key="SliderTrackFill" Color="{StaticResource CatppuccinSurface1}"/>
+  <SolidColorBrush x:Key="SliderTrackFillPointerOver" Color="{StaticResource CatppuccinSurface2}"/>
+  <SolidColorBrush x:Key="SliderTrackFillPressed" Color="{StaticResource CatppuccinSurface2}"/>
+  <SolidColorBrush x:Key="SliderTrackFillDisabled" Color="{StaticResource CatppuccinSurface0}"/>
+
+  <SolidColorBrush x:Key="SliderTrackValueFill" Color="{StaticResource CatppuccinMauve}"/>
+  <SolidColorBrush x:Key="SliderTrackValueFillPointerOver" Color="{StaticResource CatppuccinMauve}"/>
+  <SolidColorBrush x:Key="SliderTrackValueFillPressed" Color="{StaticResource CatppuccinMauve}"/>
+  <SolidColorBrush x:Key="SliderTrackValueFillDisabled" Color="{StaticResource CatppuccinOverlay0}"/>
+
+  <SolidColorBrush x:Key="SliderThumbBackground" Color="{StaticResource CatppuccinMauve}"/>
+  <SolidColorBrush x:Key="SliderThumbBackgroundPointerOver" Color="{StaticResource CatppuccinLavender}"/>
+  <SolidColorBrush x:Key="SliderThumbBackgroundPressed" Color="{StaticResource CatppuccinLavender}"/>
+  <SolidColorBrush x:Key="SliderThumbBackgroundDisabled" Color="{StaticResource CatppuccinOverlay0}"/>
+
+  <!-- The row context menu's popup surface. Popup content is not in the visual tree, so this is
+       checked by eye and by the key name existing in Fluent 12.0.4's inventory. -->
+  <SolidColorBrush x:Key="MenuFlyoutPresenterBackground" Color="{StaticResource CatppuccinMantle}"/>
+  <SolidColorBrush x:Key="MenuFlyoutPresenterBorderBrush" Color="{StaticResource CatppuccinSurface2}"/>
 
   <SolidColorBrush x:Key="MenuFlyoutItemBackground" Color="Transparent"/>
   <SolidColorBrush x:Key="MenuFlyoutItemBackgroundPointerOver" Color="{StaticResource CatppuccinSurface1}"/>
   <SolidColorBrush x:Key="MenuFlyoutItemForeground" Color="{StaticResource CatppuccinText}"/>
+
+  <!-- The focus adorner. Fluent draws a two-tone ring (a primary stroke over a secondary one, so
+       it stays visible on any backdrop) and both keys default to a monochrome white/black pair.
+       No view test covers it; the ring is drawn into an adorner layer that these tests do not
+       reach. -->
+  <SolidColorBrush x:Key="SystemControlFocusVisualPrimaryBrush" Color="{StaticResource CatppuccinLavender}"/>
+  <SolidColorBrush x:Key="SystemControlFocusVisualSecondaryBrush" Color="{StaticResource CatppuccinCrust}"/>
 
   <SolidColorBrush x:Key="ScrollBarBackground" Color="{StaticResource CatppuccinSurface0}"/>
   <SolidColorBrush x:Key="ScrollBarBackgroundPointerOver" Color="{StaticResource CatppuccinSurface1}"/>

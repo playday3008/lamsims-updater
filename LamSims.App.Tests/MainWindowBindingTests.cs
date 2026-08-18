@@ -29,15 +29,7 @@ public class MainWindowBindingTests
     /// build that compiles the assertion, and it cannot go missing because the test ran from an
     /// unexpected working directory.
     /// </summary>
-    private static XDocument LoadWindow()
-    {
-        using var stream = typeof(MainWindowBindingTests).Assembly
-            .GetManifestResourceStream("MainWindow.axaml");
-
-        Assert.NotNull(stream);
-
-        return XDocument.Load(stream);
-    }
+    private static XDocument LoadWindow() => XamlSource.Window;
 
     [Fact]
     public void Every_binding_in_the_window_names_a_member_of_its_own_data_context()

@@ -1,0 +1,112 @@
+using System.Text.RegularExpressions;
+using System.Xml.Linq;
+
+namespace LamSims.App.ViewTests;
+
+/// <summary>
+/// Static checks over Controls.axaml. Rendering proves a style reached a control, but only for the
+/// controls a test constructs; this visits every selector in the file and can only check names.
+///
+/// Plain [Fact], not [AvaloniaFact]: this starts no application and shows no window. It lives in
+/// this project only because it reflects over Avalonia types, which LamSims.App.Tests may not.
+///
+/// There is no setter-property check here: Avalonia's XAML compiler already rejects a wrong Setter
+/// Property name at build time (AVLN2000). It does NOT validate pseudo-classes, so ":hover"
+/// compiles clean, which is why the selector check below is worth writing.
+///
+/// The TYPE half is not exercised by current markup, since every type Controls.axaml names is a
+/// stock Avalonia control that resolves trivially; it guards against a future selector.
+/// </summary>
+public class SelectorSweepTests
+{
+    private static XDocument Styles()
+    {
+        using var stream = typeof(SelectorSweepTests).Assembly.GetManifestResourceStream("Controls.axaml");
+
+        Assert.True(stream is not null, "'Controls.axaml' is not an EmbeddedResource of this project");
+
+        return XDocument.Load(stream!);
+    }
+
+    /// <summary>
+    /// The pseudo-classes this application is allowed to use. An unrecognised one fails rather than
+    /// being skipped: Avalonia silently ignores a selector whose pseudo-class never matches, so
+    /// ":hover" (the CSS name, which Avalonia does not have) would be dead markup with no build
+    /// error and no rendering test able to see it.
+    /// </summary>
+    private static readonly HashSet<string> KnownPseudoClasses = new(StringComparer.Ordinal)
+    {
+        "pointerover", "pressed", "disabled", "focus", "focus-within", "focus-visible",
+        "checked", "unchecked", "indeterminate", "selected", "expanded", "empty", "open",
+        "horizontal", "vertical", "dragging", "flyout-open",
+    };
+
+    private static List<(string Selector, XElement Style)> Selectors() =>
+        Styles().Descendants()
+            .Where(e => e.Name.LocalName == "Style")
+            .Select(e => (Selector: e.Attribute("Selector")?.Value ?? "", Style: e))
+            .Where(pair => pair.Selector.Length > 0)
+            .ToList();
+
+    private static readonly Type[] SearchAnchors =
+    [
+        typeof(Avalonia.Controls.Button),
+        typeof(Avalonia.Visual),
+    ];
+
+    private static Type? ResolveType(string name) =>
+        SearchAnchors
+            .SelectMany(anchor => anchor.Assembly.GetExportedTypes())
+            .FirstOrDefault(t => string.Equals(t.Name, name, StringComparison.Ordinal));
+
+    /// <summary>
+    /// The last type named in a selector governs its setters: for
+    /// "Button:pointerover /template/ ContentPresenter" that is ContentPresenter, not Button.
+    /// '#' terminates the type the same way '.' and ':' do: "ContentPresenter#PART_ContentPresenter"
+    /// names the type ContentPresenter and the element name PART_ContentPresenter. A selector that
+    /// gave a name with no type at all still yields "" here and still fails to resolve, which is
+    /// the behaviour to keep: this recognises the name syntax, it does not excuse a missing type.
+    /// </summary>
+    private static string TargetTypeName(string selector)
+    {
+        var segment = selector.Split("/template/", StringSplitOptions.TrimEntries).Last();
+
+        return segment.Split(' ', StringSplitOptions.RemoveEmptyEntries).Last().Split('.', ':', '#')[0];
+    }
+
+    [Fact]
+    public void Every_selector_names_a_real_type_and_a_known_pseudo_class()
+    {
+        var selectors = Selectors();
+
+        // Not decoration: without this, a Controls.axaml that failed to embed would make this
+        // check and the next one pass over an empty sequence.
+        Assert.NotEmpty(selectors);
+
+        var problems = new List<string>();
+
+        foreach (var (selector, _) in selectors)
+        {
+            var typeName = TargetTypeName(selector);
+
+            if (ResolveType(typeName) is null)
+            {
+                problems.Add($"selector '{selector}': '{typeName}' is not a type this application can see");
+            }
+
+            foreach (Match match in Regex.Matches(selector, @":(?<pseudo>[a-z][a-z-]*)"))
+            {
+                var pseudo = match.Groups["pseudo"].Value;
+
+                if (!KnownPseudoClasses.Contains(pseudo))
+                {
+                    problems.Add($"selector '{selector}': ':{pseudo}' is not a pseudo-class this project "
+                                 + "knows. If Avalonia really has it, add it to KnownPseudoClasses "
+                                 + "deliberately.");
+                }
+            }
+        }
+
+        Assert.True(problems.Count == 0, string.Join(Environment.NewLine, problems));
+    }
+}

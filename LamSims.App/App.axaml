@@ -10,7 +10,16 @@
     </ResourceDictionary>
   </Application.Resources>
   <Application.Styles>
-    <FluentTheme />
+    <!-- Fluent derives a family of SystemAccentColor* keys at runtime from
+         Avalonia.Themes.Fluent.Accents.SystemAccentColors, so those keys never appear in a dump of
+         DECLARED resources and overriding them by hand races the provider. Feeding the theme's own
+         palette is the supported seam. #cba6f7 is CatppuccinMauve; x:Key="Dark" is the palette that
+         applies because RequestedThemeVariant is pinned to Dark above. -->
+    <FluentTheme>
+      <FluentTheme.Palettes>
+        <ColorPaletteResources x:Key="Dark" Accent="#cba6f7" />
+      </FluentTheme.Palettes>
+    </FluentTheme>
     <StyleInclude Source="avares://LamSims.App/Themes/Controls.axaml"/>
   </Application.Styles>
 </Application>
