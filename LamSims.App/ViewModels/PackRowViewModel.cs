@@ -51,6 +51,14 @@ public sealed partial class PackRowViewModel : ObservableObject
     private string? _keptMessage;
     private RowMessageKind _keptKind = RowMessageKind.None;
 
+    /// <summary>
+    /// The terminal state a scan most recently retired. It latches: while it is set, every
+    /// arriving snapshot carrying that same state is ignored. It clears when a different state
+    /// arrives, which a genuine re-enqueue always produces because Reset publishes Queued first.
+    /// See ApplyQueue.
+    /// </summary>
+    private QueueItemState? _retiredState;
+
     /// <summary>Null when the pack is not in the queue, or when a scan cleared a terminal overlay.</summary>
     public QueueItemState? QueueState { get; private set; }
 
@@ -75,21 +83,32 @@ public sealed partial class PackRowViewModel : ObservableObject
     // and nothing in the snapshot distinguishes them, so both controls would silently no-op.
     public bool CanRemove => QueueState is QueueItemState.Queued;
 
+    // Failed is tested before the warnings arm, and that order matters. PackWorkflow adds the
+    // quarantine warning inside ClassifyAsync and returns it alongside a failed download, and
+    // PackQueue.Settle writes Warnings, Failed and Error together. With the arms the other way
+    // round a quarantined archive whose re-download 404s reads as a warning carrying the
+    // quarantine text, and the reason it failed is never shown. The warnings still follow the
+    // error rather than being dropped.
     public string? Message => QueueState switch
     {
         QueueItemState.Blocked => null,
         null => _keptMessage,
+        QueueItemState.Failed => FailedMessage,
         _ when _warnings.Count > 0 => string.Join(" ", _warnings),
-        QueueItemState.Failed => _error,
         _ => null,
     };
+
+    private string? FailedMessage =>
+        _error is null
+            ? (_warnings.Count > 0 ? string.Join(" ", _warnings) : null)
+            : string.Join(" ", _warnings.Prepend(_error));
 
     public RowMessageKind MessageKind => QueueState switch
     {
         QueueItemState.Blocked => RowMessageKind.None,
         null => _keptKind,
-        _ when _warnings.Count > 0 => RowMessageKind.Warning,
         QueueItemState.Failed => RowMessageKind.Error,
+        _ when _warnings.Count > 0 => RowMessageKind.Warning,
         _ => RowMessageKind.None,
     };
 
@@ -99,7 +118,10 @@ public sealed partial class PackRowViewModel : ObservableObject
         QueueItemState.Verifying => "Verifying…",
         QueueItemState.Downloading => $"Downloading  {ProgressPercent:0}%{RateText}{EtaText}",
         QueueItemState.Installing => $"Installing  {ProgressPercent:0}%",
-        QueueItemState.Blocked => _error ?? "In use by another copy of this application",
+        // Core's text, verbatim, with nothing invented behind it. MarkBlocked sets
+        // Error on every path that produces Blocked, so the null case is unreachable; where it
+        // is not, an empty row is honest and a sentence this application made up is not.
+        QueueItemState.Blocked => _error ?? string.Empty,
         QueueItemState.Failed => "Failed",
         QueueItemState.Cancelled => "Cancelled",
         QueueItemState.Completed => "Installed",
@@ -112,6 +134,19 @@ public sealed partial class PackRowViewModel : ObservableObject
 
     public void ApplyQueue(QueueItemSnapshot snapshot)
     {
+        // The queue re-publishes every item wholesale whenever its own state moves (Running to
+        // Idle once nothing is left to run, in PackQueue's LoopAsync/TakeNext), not only when an
+        // item's own state changes, so a terminal item's snapshot echoes at least once after the
+        // publish that carried its ending. A scan reads that ending and retires the overlay
+        // (ApplyScan, below); without this guard the echo reapplies the state the scan cleared.
+        //
+        // The guard latches: it suppresses every snapshot carrying the retired state, because
+        // the queue keeps republishing that terminal item for the rest of the session. It is
+        // released when a different state arrives (Queued from a re-enqueue), so a real second
+        // run is never suppressed.
+        if (_retiredState == snapshot.State) return;
+        _retiredState = null;
+
         QueueState = snapshot.State;
         _bytesCompleted = snapshot.BytesCompleted;
         _totalBytes = snapshot.TotalBytes;
@@ -134,9 +169,21 @@ public sealed partial class PackRowViewModel : ObservableObject
     /// </summary>
     public void ClearQueueOverlay()
     {
+        // The bridge calls this on every row absent from every update, and every update carries
+        // every item, so with a 30-pack catalog and one download running this is thousands of
+        // no-op RaiseAll()s per second on the UI thread. These four are the whole of what this
+        // method clears: QueueState is null exactly when DropOverlay has already run (or never
+        // needed to), and DropOverlay's other fields are only ever written beside it.
+        if (QueueState is null && _retiredState is null
+            && _keptMessage is null && _keptKind == RowMessageKind.None)
+        {
+            return;
+        }
+
         DropOverlay();
         _keptMessage = null;
         _keptKind = RowMessageKind.None;
+        _retiredState = null;
         RaiseAll();
     }
 
@@ -201,6 +248,7 @@ public sealed partial class PackRowViewModel : ObservableObject
         {
             _keptMessage = Message;
             _keptKind = MessageKind;
+            _retiredState = QueueState;
             DropOverlay();
         }
 

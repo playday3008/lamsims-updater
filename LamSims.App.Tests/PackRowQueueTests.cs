@@ -122,6 +122,30 @@ public class PackRowQueueTests
     }
 
     [Fact]
+    public void A_failed_pack_carrying_a_warning_shows_the_failure_reason_too()
+    {
+        // PackWorkflow adds the quarantine warning inside ClassifyAsync and returns it alongside
+        // a failed download, and PackQueue.Settle writes Warnings, Failed and Error in the same
+        // lock. With the warnings arm ahead of the Failed arm this row read as a WARNING carrying
+        // the quarantine text, and "the mirror returned 404", the only thing that says why the
+        // pack is not installed, was never shown.
+        var row = Row();
+        row.ApplyQueue(Snap(QueueItemState.Failed,
+            error: "the mirror returned 404",
+            warnings: ["the archive on disk did not hash to the digest the catalog gives, so it was moved aside"]));
+
+        Assert.Equal("Failed", row.StatusText);
+        Assert.Equal(RowMessageKind.Error, row.MessageKind);
+        Assert.NotNull(row.Message);
+        Assert.Contains("the mirror returned 404", row.Message);
+        Assert.StartsWith("the mirror returned 404", row.Message, StringComparison.Ordinal);
+
+        // A failed row keeps the quarantine text as well: the warning follows the error rather
+        // than replacing it.
+        Assert.Contains("moved aside", row.Message);
+    }
+
+    [Fact]
     public void Warnings_survive_as_a_warning_message()
     {
         var row = Row();
@@ -188,6 +212,36 @@ public class PackRowQueueTests
 
         Assert.Equal(QueueItemState.Downloading, row.QueueState);
         Assert.Equal("Downloading  50%", row.StatusText);
+    }
+
+    [Fact]
+    public void A_republished_terminal_snapshot_does_not_resurrect_a_retired_overlay()
+    {
+        // A real PackQueue re-publishes every item wholesale when ITS OWN state moves (Running
+        // to Idle once nothing is left to run), not only when an item's own state changes, so
+        // a terminal item's snapshot echoes at least once after the scan already retired it.
+        var row = Row();
+        row.ApplyQueue(Snap(QueueItemState.Completed));
+        row.ApplyScan(Scan(PackInstallState.Installed));
+        row.ApplyQueue(Snap(QueueItemState.Completed));   // the queue's idle-transition echo
+
+        Assert.Null(row.QueueState);
+        Assert.Equal("Installed", row.StatusText);
+    }
+
+    [Fact]
+    public void A_re_enqueued_pack_reaching_the_same_ending_again_is_not_suppressed()
+    {
+        // The guard above must not become permanent: a genuine re-enqueue always passes
+        // through a non-terminal state first (Reset publishes Queued), and that has to clear
+        // it so a second, real completion is applied rather than swallowed as another echo.
+        var row = Row();
+        row.ApplyQueue(Snap(QueueItemState.Completed));
+        row.ApplyScan(Scan(PackInstallState.Installed));
+        row.ApplyQueue(Snap(QueueItemState.Queued));      // Reset publishes this first
+        row.ApplyQueue(Snap(QueueItemState.Completed));
+
+        Assert.Equal(QueueItemState.Completed, row.QueueState);
     }
 
     [Fact]

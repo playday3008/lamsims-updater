@@ -84,6 +84,57 @@ public class MainViewModelScanTests
     }
 
     [Fact]
+    public void A_pack_that_completes_a_second_time_rescans_a_second_time()
+    {
+        // The dedupe set below is needed (every update carries every item), but it has to be
+        // RELEASED as well as taken. A reinstall goes Completed, then Queued, then Completed
+        // again; with the code left in the set the second completion fires no rescan at all, so
+        // the terminal overlay is never retired and the row sits at "Installed" with a dead
+        // checkbox until the user finds the Scan button. That is the normal outcome of every
+        // Reinstall, which is the context menu's whole purpose.
+        var vm = TestHost.ViewModel(out var host);
+        using var _h = host;
+        vm.BuildRows([Packs.Entry()]);
+        vm.GameDirectory = host.GameDirectory;
+
+        var completed = new QueueUpdate(QueueState.Idle, [Snap("EP01", QueueItemState.Completed)]);
+
+        Deliver(vm, completed);
+        var afterFirst = vm.ScanCount;
+
+        // A genuine re-enqueue: Reset publishes Queued before anything else.
+        Deliver(vm, new QueueUpdate(QueueState.Running, [Snap("EP01", QueueItemState.Queued)]));
+        Deliver(vm, completed);
+
+        Assert.Equal(afterFirst + 1, vm.ScanCount);
+        Assert.Null(vm.Rows[0].QueueState);
+    }
+
+    [Fact]
+    public void Rebuilding_the_rows_forgets_which_packs_have_already_been_rescanned()
+    {
+        // BuildRows drops every row, so each code in the rescan dedupe is a claim about something
+        // that no longer exists. Left standing, a pack completed before a catalog change and
+        // enqueued again afterwards has its rebuilt row adopt an echoed Completed with no rescan
+        // to retire the overlay, so the row pins "Installed" with a dead checkbox.
+        var vm = TestHost.ViewModel(out var host);
+        using var _h = host;
+        vm.GameDirectory = host.GameDirectory;
+
+        var completed = new QueueUpdate(QueueState.Idle, [Snap("EP01", QueueItemState.Completed)]);
+
+        vm.BuildRows([Packs.Entry()]);
+        Deliver(vm, completed);
+        var afterFirst = vm.ScanCount;
+
+        vm.BuildRows([Packs.Entry()]);
+        Deliver(vm, completed);
+
+        Assert.Equal(afterFirst + 1, vm.ScanCount);
+        Assert.Null(vm.Rows[0].QueueState);
+    }
+
+    [Fact]
     public void A_second_update_naming_the_same_completion_does_not_rescan_again()
     {
         var vm = TestHost.ViewModel(out var host);

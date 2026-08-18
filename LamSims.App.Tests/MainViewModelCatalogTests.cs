@@ -114,6 +114,37 @@ public class MainViewModelCatalogTests
         Assert.Contains(vm.Banners, b => b.Id == "settings-load" && b.Text.Contains("not valid JSON"));
     }
 
+    [Fact(Timeout = 15000)]
+    public async Task Changing_the_catalog_rescans_so_an_installed_pack_does_not_read_Not_installed()
+    {
+        // Apply rebuilds every row, and a fresh row knows nothing about what is on disk.
+        // Startup hid this because StartAsync scans separately, but ChangeCatalogAsync and
+        // UseCachedCatalogAsync reach the rows ONLY through Apply. Without the rescan a
+        // first-run user who presses Change and picks their catalog is shown every already
+        // installed pack as "Not installed" with a live checkbox, and Add re-downloads them.
+        //
+        // A row rebuilt from the catalog also reads NotInstalled, so InstalledUnverified (a
+        // value only ApplyScan can produce) is what discriminates, and ScanCount pins that the
+        // scan ran at all rather than some other route setting the state.
+        var vm = TestHost.ViewModel(out var host,
+            load: (source, _) => Task.FromResult(new CatalogResolution(
+                CatalogStatus.Loaded,
+                new CatalogLoadResult(new Catalog(1, null, [Packs.Entry()]), []),
+                source, null, null)));
+        using var _h = host;
+
+        vm.GameDirectory = host.GameDirectory;
+        Directory.CreateDirectory(Path.Combine(host.GameDirectory, "EP01"));
+        host.Pickers.NextFile = Path.Combine(host.Root, "catalog.json");
+
+        await vm.ChangeCatalogCommand.ExecuteAsync(null);
+
+        var row = Assert.Single(vm.Rows);
+        Assert.Equal(1, vm.ScanCount);
+        Assert.Equal(PackInstallState.InstalledUnverified, row.InstallState);
+        Assert.Equal("Installed (not verified by this tool)", row.StatusText);
+    }
+
     [Fact]
     public void Changing_the_catalog_is_refused_while_work_is_in_the_queue()
     {

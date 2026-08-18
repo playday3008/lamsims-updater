@@ -190,6 +190,13 @@ public sealed partial class MainViewModel : ObservableObject
                 Raise(new Banner("catalog", resolution.Error ?? "The catalog could not be loaded.", BannerKind.Error));
                 break;
         }
+
+        // Every branch rebuilt the rows, and a fresh row knows nothing about what is on disk.
+        // StartAsync scans separately, but ChangeCatalogAsync and UseCachedCatalogAsync reach
+        // the rows only through here, so without this an already-installed pack reads
+        // "Not installed" with a live checkbox and Add re-downloads it. Scan() is a no-op with
+        // no game directory.
+        if (!string.IsNullOrWhiteSpace(GameDirectory)) Scan();
     }
 
     private void Raise(Banner banner)
@@ -291,6 +298,11 @@ public sealed partial class MainViewModel : ObservableObject
     {
         Rows.Clear();
 
+        // The rescan dedupe is keyed by code and the rows it described are gone. Left standing,
+        // a pack completed before a catalog change and enqueued again afterwards would have its
+        // rebuilt row adopt an echoed Completed with no rescan to retire the overlay.
+        _rescanned.Clear();
+
         foreach (var entry in entries) Rows.Add(new PackRowViewModel(entry, _services.Queue));
 
         OnPropertyChanged(nameof(FilteredRows));
@@ -312,6 +324,16 @@ public sealed partial class MainViewModel : ObservableObject
         UseCachedCatalogCommand.NotifyCanExecuteChanged();
 
         ApplyQueueState(update.State);
+
+        // Every update carries every item, so a completion echoes for the rest of the session
+        // and the set below is what stops it rescanning each time. The set also has to be
+        // released: a re-enqueued pack leaves Completed first, and if its code stayed in the set
+        // its second completion would fire no rescan, leaving the row pinned at "Installed" with
+        // a disabled checkbox and a terminal overlay nothing retires.
+        foreach (var item in update.Items)
+        {
+            if (item.State != QueueItemState.Completed) _rescanned.Remove(item.Code);
+        }
 
         if (update.Items.Any(i => i.State == QueueItemState.Completed && _rescanned.Add(i.Code))) Scan();
     }
@@ -421,8 +443,17 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty]
     private bool _isShuttingDown;
 
+    private bool _started;
+
     public async Task StartAsync(CancellationToken ct)
     {
+        // MainWindow.OnOpened is an `async void` override and is the only caller, so nothing in
+        // the framework guarantees it runs once. A second call would build a second QueueBridge
+        // over a single-reader channel, and the two would split the updates between them.
+        if (_started) return;
+
+        _started = true;
+
         _bridge = new QueueBridge(
             _services.Queue, _services.Dispatcher, RowFor, () => Rows, ApplyUpdate, NoteQueueClosed);
 
@@ -481,21 +512,55 @@ public sealed partial class MainViewModel : ObservableObject
 
         IsShuttingDown = true;
 
-        await FlushSettingsNowAsync(CancellationToken.None);
+        // This runs from OnClosing's `async void`, where an escaping exception is an unhandled
+        // crash on close, and a crash here is the same mid-extract exit the wait above prevents.
+        // FlushSettingsNowAsync catches only IOException and UnauthorizedAccessException, so any
+        // other failure from the save delegate (a serialiser fault, say) would escape it.
+        try
+        {
+            await FlushSettingsNowAsync(CancellationToken.None);
+        }
+        catch (Exception e)
+        {
+            Raise(new Banner("settings", $"Your settings could not be saved: {e.Message}", BannerKind.Warning));
+        }
 
-        // CancelAll BEFORE disposal, and Complete() is never called at all. Complete() makes a
-        // blocked pack eligible to start, clears a standing pause and releases the loop's
-        // signal, so between it and the next statement the loop can take a pack lock and reach
-        // the installer — which writes its journal marker before the first entry, leaving a
-        // Partial install nobody asked for. CancelAll marks every pending and blocked item
-        // Cancelled, which is terminal, so nothing can be requeued afterwards; and DisposeAsync
-        // calls StopAcceptingWork itself, so Complete() adds nothing even where it is safe.
-        _services.Queue.CancelAll();
-        await _services.Queue.DisposeAsync();
+        // CancelAll before disposal, and Complete() never. Complete() makes a blocked pack
+        // eligible to start, clears a standing pause and releases the loop's signal, so between
+        // it and the next statement the loop can take a pack lock and reach the installer, which
+        // writes its journal marker before the first entry and leaves a Partial install behind.
+        // CancelAll marks every pending and blocked item Cancelled, which is terminal, and
+        // DisposeAsync calls StopAcceptingWork itself, so Complete() adds nothing anyway.
+        //
+        // Guarded for the same reason as the flush above: DisposeAsync waits for the runner and
+        // runs the cancellation callback chain on this thread.
+        //
+        // The inner finally matters. PackQueue.CancelAll ends in cts.Cancel(), which runs
+        // registered cancellation callbacks synchronously on this thread and rethrows them
+        // wrapped in an AggregateException. With both calls in one try that throw would skip the
+        // disposal: _completed would never be set, the loop would keep taking Queued items and
+        // installing packs after the user closed the window, and the window would stay open,
+        // held by MainWindow's re-entrancy guard, while it happened. Disposal therefore happens
+        // on every path out of CancelAll.
+        try
+        {
+            try
+            {
+                _services.Queue.CancelAll();
+            }
+            finally
+            {
+                await _services.Queue.DisposeAsync();
+            }
+        }
+        catch (Exception e)
+        {
+            Raise(new Banner("queue",
+                $"The download queue did not stop cleanly: {e.Message}", BannerKind.Error));
+        }
 
-        // Neither await can throw: ObserveQueueAsync catches the queue's fault and QueueBridge
-        // catches its own. That matters because this runs from OnClosing's async void, where an
-        // exception is an unhandled crash rather than a caught one.
+        // Safe unguarded: ObserveQueueAsync catches the queue's fault and QueueBridge catches
+        // its own, so each task always completes successfully.
         if (_queueRun is not null) await _queueRun;
         if (_bridgeRun is not null) await _bridgeRun;
     }

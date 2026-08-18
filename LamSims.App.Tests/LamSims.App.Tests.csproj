@@ -23,6 +23,14 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!-- Read as XML by MainWindowBindingTests, which resolves every {Binding} against the view
+         model that governs its DataContext. Embedded rather than located on disk so the same
+         build that compiles the assertion refreshes the copy it reads, and no working-directory
+         assumption can make the test vacuous. -->
+    <EmbeddedResource Include="..\LamSims.App\MainWindow.axaml" LogicalName="MainWindow.axaml" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\LamSims.App\LamSims.App.csproj" />
     <ProjectReference Include="..\LamSims.Core\LamSims.Core.csproj" />
   </ItemGroup>

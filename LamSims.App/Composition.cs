@@ -15,16 +15,15 @@ public static class Composition
     /// are therefore fixed for the session: applying them live would mean rebuilding the queue,
     /// the runner, the client and the bridge.
     /// </summary>
+    /// <param name="commandLineCatalog">The catalog named on the command line, if any.</param>
     /// <param name="overrideRoot">
-    /// Redirects both the configuration root and, when no download directory is configured, the
-    /// download root. Tests pass one; the application passes none.
+    /// Redirects BOTH roots (the configuration root and, when no download directory is
+    /// configured, the download root) so a test cannot write archives, quarantines or lock
+    /// files into the developer's real profile. Tests pass one; production passes none.
     /// </param>
-    /// <summary>
-    /// <paramref name="overrideRoot"/> redirects BOTH roots — config and downloads — so a test
-    /// cannot write archives, quarantines or lock files into the developer's real profile.
-    /// <paramref name="delays"/> exists so an end-to-end test cannot sleep for real time on a
-    /// retry; production passes neither.
-    /// </summary>
+    /// <param name="delays">
+    /// Exists so an end-to-end test cannot sleep for real time on a retry. Production passes none.
+    /// </param>
     public static AppServices Build(
         string? commandLineCatalog, string? overrideRoot = null, IDelayProvider? delays = null)
     {

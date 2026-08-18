@@ -1,6 +1,19 @@
+using LamSims.Core.Catalogs;
+using LamSims.Core.Queueing;
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+using Xunit;
+using System.Collections.Concurrent;
+using System.Diagnostics;
+using System.Runtime.CompilerServices;
 using LamSims.App.Services;
 using LamSims.App.ViewModels;
 using LamSims.Core.Downloading;
+using LamSims.Core.Settings;
 
 namespace LamSims.App.Tests;
 
@@ -9,10 +22,37 @@ public class MainViewModelLifecycleTests
     private static QueueItemSnapshot Snap(string code, QueueItemState state) =>
         new(code, code, state, 0, 0, 0, null, null, null, Array.Empty<string>());
 
-    // No sleeping: the [Fact] timeout is what turns a condition that never holds into a red.
-    private static async Task WaitUntil(Func<bool> condition)
+    /// <summary>
+    /// Since this instance was constructed, which xunit does per test method. The budget below is
+    /// spent across the whole test rather than reset per wait: two sequential 10s waits inside one
+    /// 15s [Fact] would let xunit's timeout fire first, and the named diagnostic this exists to
+    /// produce would never be seen.
+    /// </summary>
+    private readonly Stopwatch _test = Stopwatch.StartNew();
+
+    /// <summary>
+    /// Just inside every [Fact(Timeout = 15000)] here, so a hang always reports WHICH condition
+    /// never held instead of xunit's bare timeout, while leaving a correct-but-slow run the same
+    /// margin it always had.
+    /// </summary>
+    private static readonly TimeSpan TestBudget = TimeSpan.FromSeconds(13);
+
+    // No sleeping: yielding is what lets the work being waited for run.
+    // CallerArgumentExpression supplies the condition's own source text, so no call site has to
+    // describe itself.
+    private async Task WaitUntil(Func<bool> condition,
+        [CallerArgumentExpression(nameof(condition))] string? text = null)
     {
-        while (!condition()) await Task.Yield();
+        while (!condition())
+        {
+            if (_test.Elapsed > TestBudget)
+            {
+                throw new TimeoutException(
+                    $"`{text}` was still false {TestBudget.TotalSeconds:0}s into the test.");
+            }
+
+            await Task.Yield();
+        }
     }
 
     // ---- feature detector 3 ----
@@ -38,16 +78,68 @@ public class MainViewModelLifecycleTests
     }
 
     [Fact(Timeout = 15000)]
-    public async Task Shutdown_flushes_a_pending_settings_change_first()
+    public async Task Shutdown_flushes_a_pending_settings_change_before_it_touches_the_queue()
     {
-        var vm = TestHost.ViewModel(out var host);
+        // With the save recorded in its own list and the queue calls in another, moving the
+        // flush after DisposeAsync would leave both lists unchanged, so the save is recorded
+        // into the SAME list the queue records into and the interleaving is pinned.
+        var order = new List<string>();
+        AppSettings? flushed = null;
+
+        var vm = TestHost.ViewModel(out var host,
+            save: (settings, _) =>
+            {
+                order.Add("Save");
+                flushed = settings;
+                return Task.CompletedTask;
+            },
+            queue: new RecordingQueue(order));
         using var _h = host;
         vm.Connections = 5;
 
         await vm.ShutdownAsync();
 
-        Assert.Single(host.Saved);
-        Assert.Equal(5, host.Saved[0].Connections);
+        Assert.Equal(["Save", "CancelAll", "Dispose"], order);
+        Assert.NotNull(flushed);
+        Assert.Equal(5, flushed.Connections);
+    }
+
+    [Fact(Timeout = 15000)]
+    public async Task Shutdown_disposes_the_queue_even_when_CancelAll_throws()
+    {
+        // PackQueue.CancelAll ends in cts.Cancel(), which runs registered cancellation callbacks
+        // synchronously on this thread and rethrows them wrapped in an AggregateException. With
+        // CancelAll and DisposeAsync guarded by one try, that throw skips the disposal: _completed
+        // is never set, so the loop keeps taking Queued items and installing packs after the user
+        // closed the window, with the window held open by MainWindow's re-entrancy guard while it
+        // happens. Both halves are asserted: the banner alone would pass for a shutdown that
+        // reported the failure and then abandoned the queue.
+        var vm = TestHost.ViewModel(out var host);
+        using var _h = host;
+        host.Queue.CancelAllThrows = new AggregateException(new OperationCanceledException());
+
+        await vm.ShutdownAsync();
+
+        Assert.Equal(["CancelAll", "Dispose"], host.Queue.Calls);
+        Assert.Contains(vm.Banners, b => b.Id == "queue" && b.Kind == BannerKind.Error);
+    }
+
+    [Fact(Timeout = 15000)]
+    public async Task Starting_twice_runs_the_queue_and_builds_the_bridge_only_once()
+    {
+        // MainWindow.OnOpened is an async void override and is the only caller, so nothing in the
+        // framework guarantees it runs once. A second StartAsync would build a second QueueBridge
+        // over a single-reader channel, which the bridge's own remarks call a defect rather than a
+        // degradation. "Run" appearing once is the observable for both: they are started together.
+        var vm = TestHost.ViewModel(out var host);
+        using var _h = host;
+
+        await vm.StartAsync(CancellationToken.None);
+        await vm.StartAsync(CancellationToken.None);
+
+        Assert.Equal(["Run"], host.Queue.Calls);
+
+        await vm.ShutdownAsync();
     }
 
     [Fact(Timeout = 15000)]

@@ -1,0 +1,188 @@
+using System.Collections;
+using System.Reflection;
+using System.Text.RegularExpressions;
+using System.Xml.Linq;
+using LamSims.App.ViewModels;
+
+namespace LamSims.App.Tests;
+
+/// <summary>
+/// Reads MainWindow.axaml as XML and resolves every <c>{Binding}</c> against the view model that
+/// governs the DataContext at that point in the tree.
+///
+/// This exists because nothing else in the suite touches the view at all: compiled bindings are
+/// deliberately off in this project (LamSims.App.csproj), so a binding naming a member that does
+/// not exist on its DataContext resolves to null at runtime with no build error and no exception.
+/// The whole row context menu was attached to the ListBox rather than to the item template, so
+/// Cancel, Remove and Reinstall bound against MainViewModel, were dead in the shipped
+/// application, and the suite could not tell.
+///
+/// Reflection and XML only, never Avalonia: LamSims.App.Tests must not touch a windowing type,
+/// construct a Window or a TopLevel, or need a display. The cost of that is that this checks
+/// NAMES, not that a binding produces the right value, which is the failure class that was live.
+/// </summary>
+public class MainWindowBindingTests
+{
+    /// <summary>
+    /// The axaml is an EmbeddedResource of this test project (see the csproj), rather than being
+    /// located by walking up from AppContext.BaseDirectory: the resource is refreshed by the same
+    /// build that compiles the assertion, and it cannot go missing because the test ran from an
+    /// unexpected working directory.
+    /// </summary>
+    private static XDocument LoadWindow()
+    {
+        using var stream = typeof(MainWindowBindingTests).Assembly
+            .GetManifestResourceStream("MainWindow.axaml");
+
+        Assert.NotNull(stream);
+
+        return XDocument.Load(stream);
+    }
+
+    [Fact]
+    public void Every_binding_in_the_window_names_a_member_of_its_own_data_context()
+    {
+        var unresolved = new List<string>();
+
+        Walk(LoadWindow().Root!, typeof(MainViewModel), parent: null, unresolved);
+
+        // Not Assert.Empty: the whole value of this test is that the failure NAMES the binding
+        // and the member, since a silent null binding is the thing being caught.
+        Assert.True(unresolved.Count == 0, string.Join(Environment.NewLine, unresolved));
+    }
+
+    [Fact]
+    public void The_row_context_menu_binds_against_the_row_and_not_against_the_window()
+    {
+        // Named separately from the sweep above so the regression that motivated this file fails
+        // by name rather than as one line inside a list. ForceCheckable has no other route
+        // into the application: without a reachable Reinstall item an Installed row's checkbox
+        // can never be re-enabled.
+        var menu = LoadWindow().Descendants()
+            .Single(e => e.Name.LocalName == "ContextMenu");
+
+        var ancestors = Ancestry(menu).Select(e => e.Name.LocalName).ToList();
+
+        Assert.True(ancestors.Contains("DataTemplate") && ancestors.Contains("ListBox"),
+            "the row ContextMenu must sit inside the ListBox's item template so that it inherits "
+            + "the row's DataContext. Its ancestors are: " + string.Join(" < ", ancestors));
+
+        var listBox = Ancestry(menu).First(e => e.Name.LocalName == "ListBox");
+
+        Assert.Equal("{Binding FilteredRows}", listBox.Attribute("ItemsSource")?.Value);
+
+        foreach (var name in (string[])["CancelCommand", "RemoveCommand", "ReinstallCommand"])
+        {
+            Assert.Contains(menu.Descendants(),
+                item => item.Attribute("Command")?.Value == "{Binding " + name + "}");
+
+            Assert.NotNull(Member(typeof(PackRowViewModel), name));
+        }
+    }
+
+    private static IEnumerable<XElement> Ancestry(XElement element)
+    {
+        for (var e = element.Parent; e is not null; e = e.Parent) yield return e;
+    }
+
+    private static void Walk(XElement element, Type context, Type? parent, List<string> unresolved)
+    {
+        // An `Owner.ItemTemplate` property element re-roots the DataContext at the item type of
+        // whatever the owner's ItemsSource binds to — MainViewModel.Banners gives Banner,
+        // FilteredRows gives PackRowViewModel. Derived by reflection rather than hard-coded, so
+        // a template moved onto a different collection is followed rather than mis-checked.
+        var (childContext, childParent) = element.Name.LocalName.EndsWith(".ItemTemplate", StringComparison.Ordinal)
+            ? (ItemTypeOf(element.Parent, context, unresolved) ?? context, context)
+            : (context, parent);
+
+        foreach (var attribute in element.Attributes())
+        {
+            if (attribute.Name.NamespaceName.Length > 0 || attribute.Name.LocalName == "xmlns") continue;
+
+            Check(element, attribute, childContext, childParent, unresolved);
+        }
+
+        foreach (var child in element.Elements()) Walk(child, childContext, childParent, unresolved);
+    }
+
+    private static Type? ItemTypeOf(XElement? owner, Type context, List<string> unresolved)
+    {
+        var source = owner?.Attribute("ItemsSource")?.Value;
+        if (source is null) return null;
+
+        var name = Path(source);
+        if (name is null) return null;
+
+        var member = Member(context, name);
+
+        if (member is null)
+        {
+            unresolved.Add($"{owner!.Name.LocalName}.ItemsSource: '{name}' is not a public member of {context.Name}");
+            return null;
+        }
+
+        var type = member is PropertyInfo property ? property.PropertyType : ((FieldInfo)member).FieldType;
+
+        return type.GetInterfaces().Append(type)
+            .FirstOrDefault(i => i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IEnumerable<>))
+            ?.GetGenericArguments()[0];
+    }
+
+    private static void Check(
+        XElement element, XAttribute attribute, Type context, Type? parent, List<string> unresolved)
+    {
+        var value = attribute.Value;
+        if (!value.StartsWith("{Binding", StringComparison.Ordinal)) return;
+
+        var path = Path(value);
+
+        // `{Binding}` binds the whole DataContext and names nothing to resolve.
+        if (path is null) return;
+
+        var (target, targetName) = path.StartsWith("$parent[", StringComparison.Ordinal)
+            ? (parent, "the parent DataContext")
+            : (context, context.Name);
+
+        Assert.NotNull(target);
+
+        var member = ParentPath(path) ?? path;
+
+        if (Member(target, member) is null)
+        {
+            unresolved.Add(
+                $"{element.Name.LocalName}.{attribute.Name.LocalName}={value}: "
+                + $"'{member}' is not a public member of {targetName}");
+        }
+    }
+
+    /// <summary>
+    /// The binding forms this file actually contains: <c>{Binding Name}</c>, the negation
+    /// <c>{Binding !Name}</c>, <c>{Binding}</c>, and
+    /// <c>{Binding $parent[ItemsControl].DataContext.Name}</c>. A form this does not recognise
+    /// fails loudly rather than being skipped: the whole path is looked up as a single member
+    /// name, so it lands in the unresolved list and someone has to teach this file about it.
+    /// </summary>
+    private static string? Path(string value)
+    {
+        var inner = value[1..^1].Trim();          // strip the braces
+        inner = inner["Binding".Length..].Trim(); // and the markup extension's name
+
+        // Bindings in this file carry no comma-separated parameters; if one ever does, only the
+        // path is examined.
+        var comma = inner.IndexOf(',', StringComparison.Ordinal);
+        if (comma >= 0) inner = inner[..comma].Trim();
+
+        return inner.Length == 0 ? null : inner.TrimStart('!');
+    }
+
+    private static string? ParentPath(string path)
+    {
+        var match = Regex.Match(path, @"^\$parent\[[^\]]+\]\.DataContext\.(?<member>[A-Za-z_][A-Za-z0-9_]*)$");
+
+        return match.Success ? match.Groups["member"].Value : null;
+    }
+
+    private static MemberInfo? Member(Type type, string name) =>
+        type.GetMember(name, BindingFlags.Public | BindingFlags.Instance)
+            .FirstOrDefault(m => m is PropertyInfo or FieldInfo);
+}

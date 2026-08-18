@@ -5,7 +5,10 @@
         Title="LamSims Updater">
   <DockPanel Margin="12">
 
-    <StackPanel DockPanel.Dock="Top" Spacing="6">
+    <!-- While shutdown waits for the runner the content stays visible and goes
+         inert. Bound on the three content blocks rather than on the DockPanel so the stopping
+         notice below is not dimmed along with the controls it explains. -->
+    <StackPanel DockPanel.Dock="Top" Spacing="6" IsEnabled="{Binding !IsShuttingDown}">
       <StackPanel Orientation="Horizontal" Spacing="8">
         <TextBlock Text="Game folder:" VerticalAlignment="Center" Width="110" />
         <TextBlock Text="{Binding GameDirectory}" VerticalAlignment="Center" Width="560" TextTrimming="CharacterEllipsis" />
@@ -60,7 +63,8 @@
       </StackPanel>
     </StackPanel>
 
-    <Grid DockPanel.Dock="Bottom" ColumnDefinitions="*,Auto,Auto,Auto,Auto" Margin="0,8,0,0">
+    <Grid DockPanel.Dock="Bottom" ColumnDefinitions="*,Auto,Auto,Auto,Auto" Margin="0,8,0,0"
+          IsEnabled="{Binding !IsShuttingDown}">
       <TextBlock Grid.Column="0" Text="{Binding StatusText}" VerticalAlignment="Center" />
       <Button Grid.Column="1" Content="Pause" Command="{Binding PauseCommand}" />
       <Button Grid.Column="2" Content="Resume" Command="{Binding ResumeCommand}" />
@@ -75,13 +79,27 @@
                Text="Finishing up — waiting for the current pack to stop…"
                IsVisible="{Binding IsShuttingDown}" />
 
-    <Panel>
+    <Panel IsEnabled="{Binding !IsShuttingDown}">
       <TextBlock Text="{Binding EmptyStateMessage}"
                  HorizontalAlignment="Center" VerticalAlignment="Center" />
       <ListBox ItemsSource="{Binding FilteredRows}">
         <ListBox.ItemTemplate>
           <DataTemplate>
             <StackPanel Spacing="2">
+              <!-- On the TEMPLATE ROOT, not on the ListBox. Compiled bindings are off in this
+                   project, so a ContextMenu attached to the ListBox binds against the inherited
+                   MainViewModel, where none of these three commands exist. It resolves to null
+                   at runtime with no build error and no exception, and every item is dead. Inside
+                   the template it inherits the row's DataContext. -->
+              <StackPanel.ContextMenu>
+                <ContextMenu>
+                  <MenuItem Header="Cancel" Command="{Binding CancelCommand}" />
+                  <MenuItem Header="Remove" Command="{Binding RemoveCommand}" />
+                  <!-- An Installed row's checkbox is disabled, and this is the only way
+                       to re-check it. -->
+                  <MenuItem Header="Reinstall anyway" Command="{Binding ReinstallCommand}" />
+                </ContextMenu>
+              </StackPanel.ContextMenu>
               <StackPanel Orientation="Horizontal" Spacing="8">
                 <CheckBox IsChecked="{Binding IsChecked}" IsEnabled="{Binding IsCheckable}" />
                 <TextBlock Text="{Binding Code}" Width="60" />
@@ -94,19 +112,8 @@
               <TextBlock Text="{Binding Message}" Margin="28,0,0,0" TextWrapping="Wrap" />
               <TextBlock Text="{Binding CurrentEntry}" Margin="28,0,0,0" TextTrimming="CharacterEllipsis" />
             </StackPanel>
-            <DataTemplate.DataType />
           </DataTemplate>
         </ListBox.ItemTemplate>
-        <ListBox.ContextMenu>
-          <ContextMenu>
-            <MenuItem Header="Cancel" Command="{Binding CancelCommand}" />
-            <MenuItem Header="Remove" Command="{Binding RemoveCommand}" />
-            <!-- An Installed row's checkbox is disabled, and this is the only way to
-                 re-check it. Without this item ForceCheckable is implemented, unit-tested, and
-                 unreachable from the application. -->
-            <MenuItem Header="Reinstall anyway" Command="{Binding ReinstallCommand}" />
-          </ContextMenu>
-        </ListBox.ContextMenu>
       </ListBox>
     </Panel>
 

@@ -8,6 +8,7 @@ namespace LamSims.App;
 public partial class MainWindow : Window
 {
     private readonly MainViewModel? _viewModel;
+    private bool _shutdownStarted;
     private bool _shutdownDone;
 
     public MainWindow() => AvaloniaXamlLoader.Load(this);
@@ -39,6 +40,16 @@ public partial class MainWindow : Window
         // thread inside the event.
         e.Cancel = true;
         base.OnClosing(e);
+
+        // A second click on the close button re-enters here while the first ShutdownAsync is
+        // still waiting for the installer. ShutdownAsync returns immediately on its own
+        // IsShuttingDown guard, so without this guard the second entry would set _shutdownDone
+        // and Close() mid-extract, exiting the process with the journal marker open and a
+        // Partial install on disk, which is the damage this guard exists to prevent. Only the
+        // call that started the shutdown may close the window.
+        if (_shutdownStarted) return;
+
+        _shutdownStarted = true;
 
         await _viewModel.ShutdownAsync();
         _shutdownDone = true;

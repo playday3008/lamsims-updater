@@ -6,11 +6,16 @@ namespace LamSims.App.Tests;
 /// <summary>
 /// Records every call in order. The recorded sequence is what the shutdown test asserts.
 /// </summary>
-public sealed class RecordingQueue : IQueueController
+/// <param name="calls">
+/// An externally owned log, so a test can interleave the queue's calls with something else's in
+/// one ordered list. Shutdown's ordering rule has no other observable: a flush recorded in its
+/// own list stays green however late it runs.
+/// </param>
+public sealed class RecordingQueue(List<string>? calls = null) : IQueueController
 {
     private readonly Channel<QueueUpdate> _updates = Channel.CreateUnbounded<QueueUpdate>();
 
-    public List<string> Calls { get; } = new();
+    public List<string> Calls { get; } = calls ?? new();
 
     public List<(string Code, string GameDirectory)> Enqueued { get; } = new();
 
@@ -40,7 +45,18 @@ public sealed class RecordingQueue : IQueueController
         return RemoveResult;
     }
 
-    public void CancelAll() => Calls.Add("CancelAll");
+    /// <summary>
+    /// Set to reproduce PackQueue.CancelAll's one throwing path: it ends in cts.Cancel(), which
+    /// runs registered cancellation callbacks on the calling thread and rethrows them wrapped.
+    /// </summary>
+    public Exception? CancelAllThrows { get; set; }
+
+    public void CancelAll()
+    {
+        Calls.Add("CancelAll");
+
+        if (CancelAllThrows is { } failure) throw failure;
+    }
 
     public void Complete() => Calls.Add("Complete");
 
