@@ -28,6 +28,13 @@ public sealed class TestFileServerOptions
     public string? ETag { get; set; } = "\"v1\"";
     public DateTimeOffset? LastModified { get; set; }
 
+    /// <summary>
+    /// Send the body without a Content-Length, as a chunked response does. Any intercepting
+    /// proxy or TLS-inspection appliance can produce this, and it skips every size gate that
+    /// reads the advertised length.
+    /// </summary>
+    public bool OmitContentLength { get; set; }
+
     /// <summary>Answer this many requests with 503 before serving normally. Decremented per request.</summary>
     public int FailNextRequests { get; set; }
 
@@ -213,7 +220,8 @@ public sealed class TestFileServer : IAsyncDisposable
             body = content;
         }
 
-        context.Response.ContentLength = body.LongLength;
+        if (!opts.OmitContentLength)
+            context.Response.ContentLength = body.LongLength;
 
         if (opts.DropAfterBytes is { } dropAfter && dropAfter < body.LongLength
             && opts.DropAfterBytesCount > 0)
