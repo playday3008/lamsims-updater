@@ -35,5 +35,13 @@ public sealed class AppPaths
     /// </summary>
     public string InstallStateDirectory => Path.Combine(Root, "installs");
 
+    /// <summary>
+    /// Where the EADM autostart value removed at install time is recorded, so removal can put it
+    /// back. Under the app's own root and not in the unlocker's config directory, because removal
+    /// deletes that directory wholesale and a backup stored there could not survive the operation
+    /// that needs to read it.
+    /// </summary>
+    public string UnlockerAutostartBackupFile => Path.Combine(Root, "unlocker-autostart.json");
+
     public void EnsureCreated() => Directory.CreateDirectory(Root);
 }

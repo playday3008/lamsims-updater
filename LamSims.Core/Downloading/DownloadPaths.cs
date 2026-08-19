@@ -30,6 +30,13 @@ public sealed class DownloadPaths
     public string ArchiveDigestFile(string code) => Path.Combine(Root, Validate(code) + ".zip.json");
 
     /// <summary>
+    /// The cache entry for one unlocker DLL. Through the same <c>Validate</c> guard as every other
+    /// member, because <see cref="OrphanCleaner"/> sweeps everything under <see cref="Root"/> and
+    /// a path that escaped Root would turn that sweep into a delete somewhere else.
+    /// </summary>
+    public string UnlockerAssetFile(string fileName) => Path.Combine(Root, Validate(fileName));
+
+    /// <summary>
     /// The advisory lock for one pack, held for its whole run. Beside the archive so a second
     /// instance pointed at the same download directory contends for the same file.
     /// </summary>
