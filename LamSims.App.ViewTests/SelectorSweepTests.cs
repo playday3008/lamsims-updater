@@ -74,6 +74,34 @@ public class SelectorSweepTests
         return segment.Split(' ', StringSplitOptions.RemoveEmptyEntries).Last().Split('.', ':', '#')[0];
     }
 
+    /// <summary>
+    /// Every complaint one selector earns. The character class is deliberately case-INSENSITIVE
+    /// while <see cref="KnownPseudoClasses"/> compares with Ordinal: Avalonia 12.0.4 parses
+    /// ":Pointerover" and ":POINTEROVER" without complaint and then silently never matches them,
+    /// so a lowercase-only pattern would skip the mis-cased typo entirely rather than reject it.
+    /// </summary>
+    private static IEnumerable<string> ProblemsWith(string selector)
+    {
+        var typeName = TargetTypeName(selector);
+
+        if (ResolveType(typeName) is null)
+        {
+            yield return $"selector '{selector}': '{typeName}' is not a type this application can see";
+        }
+
+        foreach (Match match in Regex.Matches(selector, @":(?<pseudo>[A-Za-z][A-Za-z-]*)"))
+        {
+            var pseudo = match.Groups["pseudo"].Value;
+
+            if (!KnownPseudoClasses.Contains(pseudo))
+            {
+                yield return $"selector '{selector}': ':{pseudo}' is not a pseudo-class this project "
+                             + "knows. If Avalonia really has it, add it to KnownPseudoClasses "
+                             + "deliberately.";
+            }
+        }
+    }
+
     [Fact]
     public void Every_selector_names_a_real_type_and_a_known_pseudo_class()
     {
@@ -83,30 +111,31 @@ public class SelectorSweepTests
         // check and the next one pass over an empty sequence.
         Assert.NotEmpty(selectors);
 
-        var problems = new List<string>();
-
-        foreach (var (selector, _) in selectors)
-        {
-            var typeName = TargetTypeName(selector);
-
-            if (ResolveType(typeName) is null)
-            {
-                problems.Add($"selector '{selector}': '{typeName}' is not a type this application can see");
-            }
-
-            foreach (Match match in Regex.Matches(selector, @":(?<pseudo>[a-z][a-z-]*)"))
-            {
-                var pseudo = match.Groups["pseudo"].Value;
-
-                if (!KnownPseudoClasses.Contains(pseudo))
-                {
-                    problems.Add($"selector '{selector}': ':{pseudo}' is not a pseudo-class this project "
-                                 + "knows. If Avalonia really has it, add it to KnownPseudoClasses "
-                                 + "deliberately.");
-                }
-            }
-        }
+        var problems = selectors.SelectMany(pair => ProblemsWith(pair.Selector)).ToList();
 
         Assert.True(problems.Count == 0, string.Join(Environment.NewLine, problems));
+    }
+
+    [Theory]
+    [InlineData("ListBoxItem:Pointerover")]
+    [InlineData("ListBoxItem:POINTEROVER")]
+    [InlineData("Button:hover")]
+    [InlineData("Button:pointerover /template/ ContentPresenter:Pressed")]
+    public void A_pseudo_class_avalonia_will_silently_ignore_is_reported(string selector)
+    {
+        // Measured against Avalonia 12.0.4 through AvaloniaRuntimeXamlLoader: each of these parses
+        // with no exception and then matches nothing, so the compiler cannot catch them and a
+        // rendering test would only see a style that quietly did not apply.
+        Assert.NotEmpty(ProblemsWith(selector));
+    }
+
+    [Theory]
+    [InlineData("ListBoxItem:pointerover")]
+    [InlineData("ListBoxItem:selected /template/ ContentPresenter#PART_ContentPresenter")]
+    [InlineData("Button:pointerover /template/ ContentPresenter")]
+    public void A_correctly_spelled_selector_is_not_reported(string selector)
+    {
+        // The contrast that stops the check above from passing by rejecting everything.
+        Assert.Empty(ProblemsWith(selector));
     }
 }

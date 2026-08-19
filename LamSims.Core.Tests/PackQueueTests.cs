@@ -535,6 +535,56 @@ public class PackQueueTests
     }
 
     [Fact(Timeout = 15000)]
+    public async Task A_pause_clears_progress_the_resumed_run_cannot_account_for()
+    {
+        using var temp = new TempDir();
+        var runner = new ScriptedRunner();
+        await using var queue = NewQueue(runner, temp);
+        var watcher = new UpdateWatcher(queue);
+        var run = queue.RunAsync(CancellationToken.None);
+
+        queue.Enqueue(Pack("EP01"), temp.Path);
+        var call = await runner.NextCallAsync();
+        call.Phase!.Report(PackPhase.Downloading);
+
+        // Bytes read but not yet committed to the chunk sidecar. ChunkFetcher reports Abandoned
+        // only for a validator mismatch or a retryable error, never for cancellation, and a
+        // resumed SegmentedDownloader rebuilds its baseline from committed chunks alone, so
+        // whatever the queue keeps here is progress the next run cannot account for.
+        call.Download!.Report(new DownloadProgress("EP01", 80_000_000, 128_000_000, 0, null));
+        await watcher.WaitForAsync(u => u.Items[0].BytesCompleted == 80_000_000);
+
+        queue.Pause();
+        await call.Result.Task;
+
+        // An item reading Queued is also what the original enqueue published, and that update is
+        // already in Seen, so waiting on it alone returns immediately with the wrong update. Only
+        // the pause requeue publishes Queued while the queue itself reads Paused.
+        await watcher.WaitForAsync(u =>
+            u.State == QueueState.Paused && u.Items[0].State == QueueItemState.Queued);
+
+        var paused = watcher.Seen
+            .Last(u => u.State == QueueState.Paused && u.Items[0].State == QueueItemState.Queued)
+            .Items[0];
+
+        // BytesCompleted is monotonic as a caller observes it, resting on Deliver's latch, which
+        // is per-tracker. A resumed run builds a new tracker, so carrying this figure across the
+        // pause makes a caller watch it fall. The state is asserted with the bytes, since the
+        // bytes alone would also hold for an item dropped from the queue altogether.
+        Assert.Equal(QueueItemState.Queued, paused.State);
+        Assert.Equal(0, paused.BytesCompleted);
+        Assert.Equal(0, paused.TotalBytes);
+
+        queue.Resume();
+        var again = await runner.NextCallAsync();
+        again.Result.SetResult(ScriptedRunner.Completed());
+
+        queue.Complete();
+        await run;
+        await watcher.Completion;
+    }
+
+    [Fact(Timeout = 15000)]
     public async Task Pause_mid_download_stops_the_transfer_and_requeues_the_pack()
     {
         using var temp = new TempDir();
@@ -1150,6 +1200,16 @@ public class PackQueueTests
         // Twice blocked is terminal: the user keeps it in view to read that error and queue it
         // again once the other copy has finished, so Remove refuses it as it refuses a Failed one.
         Assert.False(queue.Remove("EP01"));
+
+        // A consumer cannot read an attempt count, so the snapshot has to say which block it is
+        // looking at: the first is work still owed, the second is the queue standing down.
+        // Asserting only the last would also hold for a field that was true on both.
+        var blocked = watcher.Seen
+            .SelectMany(u => u.Items.Where(i => i.Code == "EP01" && i.State == QueueItemState.Blocked))
+            .ToArray();
+
+        Assert.False(blocked[0].IsFinal);
+        Assert.True(blocked[^1].IsFinal);
     }
 
     [Fact(Timeout = 15000)]

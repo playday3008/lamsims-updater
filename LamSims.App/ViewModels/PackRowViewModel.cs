@@ -59,11 +59,20 @@ public sealed partial class PackRowViewModel : ObservableObject
     /// </summary>
     private QueueItemState? _retiredState;
 
+    /// <summary>The queue's own verdict that it will not run this item again by itself.</summary>
+    private bool _isFinal;
+
     /// <summary>Null when the pack is not in the queue, or when a scan cleared a terminal overlay.</summary>
     public QueueItemState? QueueState { get; private set; }
 
+    /// <summary>
+    /// Blocked is offered as well as absent: <c>PackQueue.Enqueue</c> accepts a re-enqueue of a
+    /// blocked item, and MarkBlocked's text tells the user to do exactly that on both the first
+    /// block and the second. The checkbox is the only way to take it.
+    /// </summary>
     public bool IsCheckable =>
-        QueueState is null && (ForceCheckable || InstallState != PackInstallState.Installed);
+        (QueueState is null || QueueState is QueueItemState.Blocked)
+        && (ForceCheckable || InstallState != PackInstallState.Installed);
 
     public bool IsBusy => QueueState
         is QueueItemState.Verifying or QueueItemState.Downloading or QueueItemState.Installing;
@@ -79,8 +88,9 @@ public sealed partial class PackRowViewModel : ObservableObject
         is QueueItemState.Queued or QueueItemState.Verifying
         or QueueItemState.Downloading or QueueItemState.Installing;
 
-    // Blocked offers neither: a twice-blocked pack is terminal and a once-blocked one is not,
-    // and nothing in the snapshot distinguishes them, so both controls would silently no-op.
+    // Blocked offers neither, and IsFinal does not change that: Cancel and Remove both refuse a
+    // pack the queue is not running, so either control would silently no-op. Re-enqueueing is the
+    // escape core honours, and IsCheckable is where it is offered.
     public bool CanRemove => QueueState is QueueItemState.Queued;
 
     // Failed is tested before the warnings arm, and that order matters. PackWorkflow adds the
@@ -159,6 +169,7 @@ public sealed partial class PackRowViewModel : ObservableObject
         _entry = snapshot.CurrentEntry;
         _error = snapshot.Error;
         _warnings = snapshot.Warnings;
+        _isFinal = snapshot.IsFinal;
         _keptMessage = null;
         _keptKind = RowMessageKind.None;
 
@@ -201,10 +212,13 @@ public sealed partial class PackRowViewModel : ObservableObject
         _entry = null;
         _error = null;
         _warnings = Array.Empty<string>();
+        _isFinal = false;
     }
 
     private static bool IsTerminal(QueueItemState? state) =>
         state is QueueItemState.Completed or QueueItemState.Failed or QueueItemState.Cancelled;
+
+    private bool IsFinished => IsTerminal(QueueState) || _isFinal;
 
     private static string FormatEta(TimeSpan eta) =>
         eta.TotalHours >= 1 ? $"{(int)eta.TotalHours}h {eta.Minutes}m"
@@ -248,7 +262,7 @@ public sealed partial class PackRowViewModel : ObservableObject
         // A terminal row lets go of the queue's word for it at the next scan, so a finished,
         // failed or cancelled pack reads disk state rather than pinning the queue's verdict for
         // the rest of the session. Its message is kept, since the error is what explains the row.
-        if (IsTerminal(QueueState))
+        if (IsFinished)
         {
             _keptMessage = Message;
             _keptKind = MessageKind;

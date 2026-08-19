@@ -20,9 +20,10 @@ public class PackRowQueueTests
         TimeSpan? eta = null,
         string? entry = null,
         string? error = null,
-        IReadOnlyList<string>? warnings = null) =>
+        IReadOnlyList<string>? warnings = null,
+        bool isFinal = false) =>
         new("EP01", "Get to Work", state, done, total, rate, eta, entry, error,
-            warnings ?? Array.Empty<string>());
+            warnings ?? Array.Empty<string>()) { IsFinal = isFinal };
 
     private static PackScanResult Scan(PackInstallState state, params string[] missing) =>
         new("EP01", state, missing, null, null);
@@ -274,5 +275,45 @@ public class PackRowQueueTests
 
         Assert.Equal(QueueItemState.Completed, row.QueueState);
         Assert.Null(row.CurrentEntry);
+    }
+
+    [Fact]
+    public void A_blocked_pack_can_be_checked_again_because_that_is_the_escape_core_offers()
+    {
+        // PackQueue.Enqueue accepts a re-enqueue of a Blocked item, and MarkBlocked's text
+        // promises it on both the first block and the second. The checkbox is how the user takes
+        // it, so leaving the row unavailable makes core's own instruction impossible to follow.
+        var row = Row();
+        row.ApplyScan(Scan(PackInstallState.NotInstalled, "EP01"));
+        row.ApplyQueue(Snap(QueueItemState.Blocked, error: "Another copy is working on 'EP01'."));
+
+        // The pair matters: checkable *while still showing as blocked*. Asserting IsCheckable
+        // alone would pass if the overlay had simply been dropped.
+        Assert.Equal(QueueItemState.Blocked, row.QueueState);
+        Assert.True(row.IsCheckable);
+    }
+
+    [Fact]
+    public void A_scan_retires_a_blocked_overlay_the_queue_has_given_up_on()
+    {
+        var row = Row();
+        row.ApplyQueue(Snap(QueueItemState.Blocked, error: "still busy", isFinal: true));
+        row.ApplyScan(Scan(PackInstallState.NotInstalled, "EP01"));
+
+        Assert.Null(row.QueueState);
+        Assert.True(row.IsCheckable);
+    }
+
+    [Fact]
+    public void A_scan_keeps_a_blocked_overlay_the_queue_will_still_retry_by_itself()
+    {
+        // The contrast that gives the test above its meaning: a first block is not terminal, so
+        // the row must go on saying so rather than reading as untouched work.
+        var row = Row();
+        row.ApplyQueue(Snap(QueueItemState.Blocked, error: "will be retried", isFinal: false));
+        row.ApplyScan(Scan(PackInstallState.NotInstalled, "EP01"));
+
+        Assert.Equal(QueueItemState.Blocked, row.QueueState);
+        Assert.Equal("will be retried", row.StatusText);
     }
 }

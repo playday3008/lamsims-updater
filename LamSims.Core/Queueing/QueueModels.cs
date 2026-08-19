@@ -23,7 +23,16 @@ public sealed record QueueItemSnapshot(
     TimeSpan? Eta,
     string? CurrentEntry,
     string? Error,
-    IReadOnlyList<string> Warnings);
+    IReadOnlyList<string> Warnings)
+{
+    /// <summary>
+    /// The queue is done with this item and will not run it again on its own. True for
+    /// Completed, Failed and Cancelled, and for a Blocked item that has already spent its one
+    /// retry, which a consumer cannot otherwise tell from a Blocked item still awaiting one.
+    /// A re-enqueue is the only thing that revives either.
+    /// </summary>
+    public bool IsFinal { get; init; }
+}
 
 /// <summary>
 /// The complete state of the queue. Every update carries all of it, so a consumer replaces its

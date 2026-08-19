@@ -24,6 +24,30 @@ public class ThemeTests
         Assert.Equal(Color.Parse("#313244"), brush.Color);
     }
 
+    /// <summary>
+    /// The theme's ground, which the window's own controls never exercise. Palette.axaml overrides
+    /// no ComboBox key, so a ComboBox can only be themed through the palette handed to FluentTheme,
+    /// and that is what was broken: 29 System*Color keys sat in Application.Resources where they
+    /// resolved but where Fluent's own SystemControl*Brush definitions, which reference them with
+    /// StaticResource inside the theme's dictionary scope, could not see them. Measured then:
+    /// Background #66000000 behind White text.
+    /// </summary>
+    [AvaloniaFact]
+    public void A_control_with_no_per_control_override_takes_the_palette_ground()
+    {
+        var combo = new ComboBox();
+        var window = new Window { Width = 400, Height = 300, Content = combo };
+
+        window.Show();
+
+        // The pair. Foreground alone would also read #cdd6f4 from an inherited TextBlock brush;
+        // the background can only come from the ground.
+        Assert.Equal(Color.Parse("#cdd6f4"),
+            Assert.IsAssignableFrom<ISolidColorBrush>(combo.Foreground!).Color);
+        Assert.Equal(Color.Parse("#181825"),
+            Assert.IsAssignableFrom<ISolidColorBrush>(combo.Background!).Color);
+    }
+
     [AvaloniaFact]
     public void A_disabled_button_is_dimmed()
     {

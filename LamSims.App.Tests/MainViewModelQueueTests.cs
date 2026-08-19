@@ -4,8 +4,8 @@ namespace LamSims.App.Tests;
 
 public class MainViewModelQueueTests
 {
-    private static QueueItemSnapshot Snap(string code, QueueItemState state) =>
-        new(code, code, state, 0, 0, 0, null, null, null, Array.Empty<string>());
+    private static QueueItemSnapshot Snap(string code, QueueItemState state, bool isFinal = false) =>
+        new(code, code, state, 0, 0, 0, null, null, null, Array.Empty<string>()) { IsFinal = isFinal };
 
     [Fact]
     public void Search_filters_on_code_and_name_case_insensitively()
@@ -140,5 +140,35 @@ public class MainViewModelQueueTests
         Assert.Equal(2, vm.PendingCount);
         Assert.Equal(1, vm.FailedCount);
         Assert.Equal("Running — 2 left, 1 failed", vm.StatusText);
+    }
+
+    [Fact]
+    public void A_pack_the_queue_has_given_up_on_stops_counting_as_work_left()
+    {
+        // A twice-blocked pack is terminal to the queue, so counting it as pending pins
+        // CanChangeCatalog false for the rest of the session and takes away the one escape left.
+        var vm = TestHost.ViewModel(out var host);
+        using var _ = host;
+
+        vm.ApplyUpdate(new QueueUpdate(QueueState.Idle,
+            [Snap("EP01", QueueItemState.Blocked, isFinal: true)]));
+
+        Assert.Equal(0, vm.PendingCount);
+        Assert.True(vm.CanChangeCatalog);
+    }
+
+    [Fact]
+    public void A_pack_still_awaiting_its_retry_does_count_as_work_left()
+    {
+        // The contrast: a first block IS pending work, and changing the catalog under it would
+        // leave the queue running a pack this window no longer lists.
+        var vm = TestHost.ViewModel(out var host);
+        using var _ = host;
+
+        vm.ApplyUpdate(new QueueUpdate(QueueState.Idle,
+            [Snap("EP01", QueueItemState.Blocked, isFinal: false)]));
+
+        Assert.Equal(1, vm.PendingCount);
+        Assert.False(vm.CanChangeCatalog);
     }
 }

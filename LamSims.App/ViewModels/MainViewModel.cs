@@ -38,7 +38,7 @@ public sealed partial class MainViewModel : ObservableObject
         if (services.SettingsError is { } settingsError)
         {
             Banners.Add(new Banner("settings-load",
-                $"Your settings could not be read and defaults are in use: {settingsError}",
+                $"Your settings could not be fully applied and defaults are in use: {settingsError}",
                 BannerKind.Warning));
         }
     }
@@ -313,7 +313,9 @@ public sealed partial class MainViewModel : ObservableObject
 
     public void ApplyUpdate(QueueUpdate update)
     {
-        PendingCount = update.Items.Count(i => i.State
+        // IsFinal also excludes a twice-blocked pack, which the queue will not retry by itself.
+        // Counting one kept CanChangeCatalog false for the rest of the session.
+        PendingCount = update.Items.Count(i => !i.IsFinal && i.State
             is not (QueueItemState.Completed or QueueItemState.Failed or QueueItemState.Cancelled));
         FailedCount = update.Items.Count(i => i.State == QueueItemState.Failed);
 
@@ -478,7 +480,12 @@ public sealed partial class MainViewModel : ObservableObject
     {
         try
         {
-            await _services.Queue.RunAsync(ct);
+            // Task.Run, because StartAsync is awaited from MainWindow.OnOpened on the UI thread
+            // and nothing in LamSims.Core or LamSims.App calls ConfigureAwait, so without a hop
+            // the whole engine's continuations resume here and the hash and the extract do their
+            // work on the thread that draws. The token is not passed to Task.Run: an
+            // already-cancelled token would then fault this task rather than let RunAsync return.
+            await Task.Run(() => _services.Queue.RunAsync(ct));
         }
         catch (Exception e)
         {

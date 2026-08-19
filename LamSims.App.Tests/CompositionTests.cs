@@ -1,3 +1,4 @@
+using System.Text.Json;
 using LamSims.App;
 
 namespace LamSims.App.Tests;
@@ -19,6 +20,66 @@ public class CompositionTests
             Assert.StartsWith(root, services.Paths.Root, StringComparison.Ordinal);
             Assert.Equal(services.Paths.InstallStateDirectory, services.InstallState.Root);
             Assert.True(Directory.Exists(Path.Combine(root, "downloads")));
+
+            await services.Queue.DisposeAsync();
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact(Timeout = 15000)]
+    public async Task A_download_directory_that_cannot_be_created_banners_rather_than_killing_the_launch()
+    {
+        // The shipped case: the user puts downloads on a removable drive and unplugs it.
+        // Composition runs from OnFrameworkInitializationCompleted BEFORE MainWindow exists and
+        // Program.Main installs no handler, so throwing here means no window ever opens, and the
+        // setting that caused it can only be changed in that window. PackQueue already guards the
+        // same call so the queue can banner it; composition ran it first and unguarded.
+        var root = Directory.CreateTempSubdirectory("lamsims-composition").FullName;
+
+        try
+        {
+            // A file where the directory must go. Portable, and needs no permission change.
+            var unusable = Path.Combine(root, "unplugged");
+            File.WriteAllText(unusable, "");
+
+            Directory.CreateDirectory(Path.Combine(root, "config"));
+            File.WriteAllText(
+                Path.Combine(root, "config", "settings.json"),
+                $"{{\"downloadDirectory\":{JsonSerializer.Serialize(unusable)}}}");
+
+            var services = Composition.Build(commandLineCatalog: null, overrideRoot: root);
+
+            // The pair. "It did not throw" alone would also hold for a build that silently used
+            // some other directory and never told the user their setting was ignored.
+            Assert.NotNull(services.SettingsError);
+            Assert.Contains(unusable, services.SettingsError);
+            Assert.True(Directory.Exists(Path.Combine(root, "downloads")));
+
+            await services.Queue.DisposeAsync();
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [Fact(Timeout = 15000)]
+    public async Task A_configuration_root_that_cannot_be_created_banners_rather_than_killing_the_launch()
+    {
+        var root = Directory.CreateTempSubdirectory("lamsims-composition").FullName;
+
+        try
+        {
+            // A file where AppPaths.Root must go.
+            File.WriteAllText(Path.Combine(root, "config"), "");
+
+            var services = Composition.Build(commandLineCatalog: null, overrideRoot: root);
+
+            Assert.NotNull(services.SettingsError);
+            Assert.Contains("config", services.SettingsError);
 
             await services.Queue.DisposeAsync();
         }

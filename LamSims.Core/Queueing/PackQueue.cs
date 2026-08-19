@@ -66,7 +66,10 @@ public sealed class PackQueue : IAsyncDisposable
 
         public QueueItemSnapshot ToSnapshot() => new(
             Pack.Code, Pack.Name, State, BytesCompleted, TotalBytes,
-            BytesPerSecond, Eta, CurrentEntry, Error, Warnings);
+            BytesPerSecond, Eta, CurrentEntry, Error, Warnings)
+        {
+            IsFinal = IsTerminal(this),
+        };
     }
 
     /// <summary>
@@ -902,6 +905,18 @@ public sealed class PackQueue : IAsyncDisposable
             {
                 item.State = QueueItemState.Queued;
                 item.PausedOut = false;
+
+                // A resumed SegmentedDownloader rebuilds its baseline from committed chunks
+                // alone, and ChunkFetcher reports Abandoned only for a validator mismatch or a
+                // retryable error, never for the cancellation a pause raises. So every byte read
+                // into an uncommitted chunk is refetched, and keeping the figure here would make
+                // a caller watch BytesCompleted fall on resume. The re-enqueue path already draws
+                // this boundary in Reset.
+                item.BytesCompleted = 0;
+                item.TotalBytes = 0;
+                item.BytesPerSecond = 0;
+                item.Eta = null;
+                item.CurrentEntry = null;
             }
         }
     }

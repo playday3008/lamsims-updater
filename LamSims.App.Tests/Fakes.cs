@@ -25,23 +25,40 @@ public sealed class RecordingQueue(List<string>? calls = null) : IQueueControlle
 
     public void Publish(QueueUpdate update) => _updates.Writer.TryWrite(update);
 
+    /// <summary>
+    /// The managed thread RunAsync was entered on. Zero until it is. Recorded because the queue
+    /// must not run on the thread that started it: MainWindow.OnOpened awaits StartAsync on
+    /// Avalonia's UI thread, and nothing in LamSims.Core or LamSims.App calls ConfigureAwait.
+    /// </summary>
+    public int RunThreadId { get; private set; }
+
     public Task RunAsync(CancellationToken ct)
     {
-        Calls.Add("Run");
+        RunThreadId = Environment.CurrentManagedThreadId;
+        Add("Run");
         return Task.CompletedTask;
+    }
+
+    /// <summary>
+    /// RunAsync now arrives from the thread pool rather than the caller's thread, so the list has
+    /// more than one writer.
+    /// </summary>
+    private void Add(string call)
+    {
+        lock (Calls) Calls.Add(call);
     }
 
     public void Enqueue(PackEntry pack, string gameDirectory)
     {
-        Calls.Add($"Enqueue:{pack.Code}");
+        Add($"Enqueue:{pack.Code}");
         Enqueued.Add((pack.Code, gameDirectory));
     }
 
-    public void Cancel(string code) => Calls.Add($"Cancel:{code}");
+    public void Cancel(string code) => Add($"Cancel:{code}");
 
     public bool Remove(string code)
     {
-        Calls.Add($"Remove:{code}");
+        Add($"Remove:{code}");
         return RemoveResult;
     }
 
@@ -53,20 +70,20 @@ public sealed class RecordingQueue(List<string>? calls = null) : IQueueControlle
 
     public void CancelAll()
     {
-        Calls.Add("CancelAll");
+        Add("CancelAll");
 
         if (CancelAllThrows is { } failure) throw failure;
     }
 
-    public void Complete() => Calls.Add("Complete");
+    public void Complete() => Add("Complete");
 
-    public void Pause() => Calls.Add("Pause");
+    public void Pause() => Add("Pause");
 
-    public void Resume() => Calls.Add("Resume");
+    public void Resume() => Add("Resume");
 
     public ValueTask DisposeAsync()
     {
-        Calls.Add("Dispose");
+        Add("Dispose");
         _updates.Writer.TryComplete();
         return ValueTask.CompletedTask;
     }

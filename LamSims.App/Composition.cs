@@ -27,8 +27,14 @@ public static class Composition
     public static AppServices Build(
         string? commandLineCatalog, string? overrideRoot = null, IDelayProvider? delays = null)
     {
+        // Every directory this method creates is reported rather than thrown. Build runs from
+        // OnFrameworkInitializationCompleted before MainWindow exists and Program.Main installs no
+        // handler, so an exception here means the application never opens a window, including the
+        // window holding the setting that caused it.
+        var faults = new List<string>();
+
         var paths = new AppPaths(overrideRoot is null ? null : Path.Combine(overrideRoot, "config"));
-        paths.EnsureCreated();
+        TryCreate(paths.Root, paths.EnsureCreated, faults);
 
         var settingsStore = new SettingsStore(paths);
         var loaded = settingsStore.Load();
@@ -37,14 +43,22 @@ public static class Composition
         var options = settings.ToDownloadOptions();
         var http = HttpFactory.Create(options);
 
-        var downloadRoot = settings.DownloadDirectory
-            ?? (overrideRoot is null ? null : Path.Combine(overrideRoot, "downloads"));
+        // The composition's own default, which a test's overrideRoot redirects; the setting is
+        // the user's choice layered on top of it.
+        var defaultDownloadRoot = overrideRoot is null ? null : Path.Combine(overrideRoot, "downloads");
 
-        var downloadPaths = new DownloadPaths(downloadRoot);
+        var downloadPaths = new DownloadPaths(settings.DownloadDirectory ?? defaultDownloadRoot);
 
         // PackLock does not create the download root and throws DirectoryNotFoundException when
         // it is missing, so it is created here rather than being left to the queue's first run.
-        downloadPaths.EnsureCreated();
+        // A configured directory that cannot be created (a removable drive that is not plugged
+        // in) falls back to the default, because the alternative is not starting at all.
+        if (!TryCreate(downloadPaths.Root, downloadPaths.EnsureCreated, faults)
+            && settings.DownloadDirectory is not null)
+        {
+            downloadPaths = new DownloadPaths(defaultDownloadRoot);
+            TryCreate(downloadPaths.Root, downloadPaths.EnsureCreated, faults);
+        }
 
         var installState = new InstallStateStore(paths.InstallStateDirectory);
 
@@ -58,7 +72,7 @@ public static class Composition
             paths,
             settingsStore,
             settings,
-            loaded.Error,
+            Combine(loaded.Error, faults),
             new CatalogLoader(http, paths),
             installState,
             new PackQueueController(queue),
@@ -66,6 +80,28 @@ public static class Composition
             NullPickers.Instance,      // the window replaces this; it owns the TopLevel
             new SystemClock(),
             commandLineCatalog);
+    }
+
+    private static bool TryCreate(string root, Action create, List<string> faults)
+    {
+        try
+        {
+            create();
+            return true;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException
+                                 or ArgumentException or NotSupportedException)
+        {
+            faults.Add($"'{root}' could not be created: {e.Message}");
+            return false;
+        }
+    }
+
+    private static string? Combine(string? settingsError, List<string> faults)
+    {
+        var all = settingsError is null ? faults : faults.Prepend(settingsError).ToList();
+
+        return all.Count == 0 ? null : string.Join(" ", all);
     }
 }
 

@@ -57,37 +57,6 @@
   <SolidColorBrush x:Key="FlamingoBrush" Color="{StaticResource CatppuccinFlamingo}"/>
   <SolidColorBrush x:Key="RosewaterBrush" Color="{StaticResource CatppuccinRosewater}"/>
 
-  <!-- FluentTheme's ground. Overriding these means a control nobody thought about is themed by
-       default rather than left Fluent blue-on-grey. -->
-  <Color x:Key="SystemAltHighColor">#1e1e2e</Color>
-  <Color x:Key="SystemAltLowColor">#181825</Color>
-  <Color x:Key="SystemAltMediumColor">#1e1e2e</Color>
-  <Color x:Key="SystemAltMediumHighColor">#1e1e2e</Color>
-  <Color x:Key="SystemAltMediumLowColor">#181825</Color>
-  <Color x:Key="SystemBaseHighColor">#cdd6f4</Color>
-  <Color x:Key="SystemBaseLowColor">#45475a</Color>
-  <Color x:Key="SystemBaseMediumColor">#a6adc8</Color>
-  <Color x:Key="SystemBaseMediumHighColor">#bac2de</Color>
-  <Color x:Key="SystemBaseMediumLowColor">#6c7086</Color>
-  <Color x:Key="SystemChromeAltLowColor">#313244</Color>
-  <Color x:Key="SystemChromeBlackHighColor">#11111b</Color>
-  <Color x:Key="SystemChromeBlackLowColor">#11111b</Color>
-  <Color x:Key="SystemChromeBlackMediumColor">#11111b</Color>
-  <Color x:Key="SystemChromeBlackMediumLowColor">#11111b</Color>
-  <Color x:Key="SystemChromeDisabledHighColor">#45475a</Color>
-  <Color x:Key="SystemChromeDisabledLowColor">#6c7086</Color>
-  <Color x:Key="SystemChromeGrayColor">#7f849c</Color>
-  <Color x:Key="SystemChromeHighColor">#585b70</Color>
-  <Color x:Key="SystemChromeLowColor">#181825</Color>
-  <Color x:Key="SystemChromeMediumColor">#313244</Color>
-  <Color x:Key="SystemChromeMediumLowColor">#45475a</Color>
-  <Color x:Key="SystemChromeWhiteColor">#cdd6f4</Color>
-  <Color x:Key="SystemErrorTextColor">#f38ba8</Color>
-  <Color x:Key="SystemListLowColor">#313244</Color>
-  <Color x:Key="SystemListMediumColor">#45475a</Color>
-  <Color x:Key="SystemRegionColor">#1e1e2e</Color>
-  <Color x:Key="SystemRevealListLowColor">#313244</Color>
-  <Color x:Key="SystemRevealListMediumColor">#45475a</Color>
 
   <!-- Per-control surfaces the ground cannot get right. -->
   <SolidColorBrush x:Key="ButtonBackground" Color="{StaticResource CatppuccinSurface0}"/>

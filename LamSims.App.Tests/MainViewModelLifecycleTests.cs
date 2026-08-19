@@ -137,6 +137,10 @@ public class MainViewModelLifecycleTests
         await vm.StartAsync(CancellationToken.None);
         await vm.StartAsync(CancellationToken.None);
 
+        // RunAsync is dispatched to the pool rather than entered on the caller's thread, so it
+        // may not have been recorded by the time StartAsync returns.
+        await WaitUntil(() => host.Queue.Calls.Contains("Run"));
+
         Assert.Equal(["Run"], host.Queue.Calls);
 
         await vm.ShutdownAsync();
@@ -221,8 +225,12 @@ public class MainViewModelLifecycleTests
 
             try
             {
-                await WaitUntil(() => !vm.IsQueueAlive);
+                // Wait on the BANNER, not on IsQueueAlive: NoteQueueClosed clears the flag first
+                // and raises the banner second, so waiting on the flag can return between the two
+                // and read a banner list that is still empty.
+                await WaitUntil(() => vm.Banners.Any(b => b.Id == "queue"));
 
+                Assert.False(vm.IsQueueAlive);
                 Assert.Contains(vm.Banners, b => b.Id == "queue" && b.Kind == BannerKind.Error);
                 Assert.False(vm.AddSelectedCommand.CanExecute(null));
             }
@@ -251,7 +259,9 @@ public class MainViewModelLifecycleTests
 
         await vm.StartAsync(CancellationToken.None);
 
-        Assert.Contains("Run", host.Queue.Calls);
+        // The queue is started on the pool, so its first recorded call may trail StartAsync.
+        await WaitUntil(() => host.Queue.Calls.Contains("Run"));
+
         Assert.Single(vm.Rows);
         Assert.True(vm.ScanCount > 0);
 
@@ -259,5 +269,88 @@ public class MainViewModelLifecycleTests
         await WaitUntil(() => vm.PendingCount == 1);
 
         await vm.ShutdownAsync();
+    }
+
+    /// <summary>
+    /// One thread with a SynchronizationContext and a message pump: the shape of Avalonia's UI
+    /// thread, which makes a captured continuation land back on one thread.
+    /// </summary>
+    private sealed class UiThread : IDisposable
+    {
+        private readonly BlockingCollection<Action> _work = new();
+
+        public UiThread()
+        {
+            Thread = new Thread(() =>
+            {
+                SynchronizationContext.SetSynchronizationContext(new PumpContext(_work));
+
+                foreach (var job in _work.GetConsumingEnumerable()) job();
+            })
+            { IsBackground = true, Name = "test-ui" };
+
+            Thread.Start();
+        }
+
+        public Thread Thread { get; }
+
+        public void Post(Action job) => _work.Add(job);
+
+        public void Dispose() => _work.CompleteAdding();
+
+        private sealed class PumpContext(BlockingCollection<Action> work) : SynchronizationContext
+        {
+            public override void Post(SendOrPostCallback d, object? state)
+            {
+                try
+                {
+                    work.Add(() => d(state));
+                }
+                catch (InvalidOperationException)
+                {
+                    // The pump is closed; the test is over.
+                }
+            }
+        }
+    }
+
+    [Fact(Timeout = 15000)]
+    public async Task The_queue_does_not_run_on_the_thread_that_started_it()
+    {
+        // MainWindow.OnOpened awaits StartAsync on Avalonia's UI thread, where a
+        // SynchronizationContext is installed. Nothing in LamSims.Core or LamSims.App calls
+        // ConfigureAwait, so without a deliberate hop every continuation below RunAsync (the
+        // queue loop, PackWorkflow, Sha256Verifier's hash, ZipInstaller's extract) resumes on
+        // that one thread and does its work there in competition with rendering.
+        var vm = TestHost.ViewModel(out var host);
+        using var _h = host;
+        using var ui = new UiThread();
+
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        ui.Post(() => _ = StartOn(vm, started));
+
+        await started.Task;
+        await WaitUntil(() => host.Queue.RunThreadId != 0);
+
+        // The pair: it ran at all, and not there. Asserting only the thread would also hold for a
+        // queue that was never started, whose recorded id is zero and equals nothing.
+        Assert.Contains("Run", host.Queue.Calls);
+        Assert.NotEqual(ui.Thread.ManagedThreadId, host.Queue.RunThreadId);
+
+        await vm.ShutdownAsync();
+    }
+
+    private static async Task StartOn(MainViewModel vm, TaskCompletionSource started)
+    {
+        try
+        {
+            await vm.StartAsync(CancellationToken.None);
+            started.TrySetResult();
+        }
+        catch (Exception e)
+        {
+            started.TrySetException(e);
+        }
     }
 }

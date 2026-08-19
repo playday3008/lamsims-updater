@@ -15,6 +15,9 @@ public sealed class ViewHost : IDisposable
     public required MainViewModel ViewModel { get; init; }
     public required MainWindow Window { get; init; }
 
+    /// <summary>The recording queue behind the rows, for tests that invoke a control.</summary>
+    public required StubQueue Queue { get; init; }
+
     public static ViewHost Show(params PackEntry[] packs)
     {
         var root = Directory.CreateTempSubdirectory("lamsims-view").FullName;
@@ -22,23 +25,7 @@ public sealed class ViewHost : IDisposable
         var paths = new AppPaths(Path.Combine(root, "config"));
         paths.EnsureCreated();
 
-        var services = new AppServices(
-            paths,
-            new SettingsStore(paths),
-            new AppSettings(),
-            null,
-            // A real CatalogLoader over a real HttpClient, and safe only because Show() below
-            // constructs the window as `new MainWindow { DataContext = vm }`. That path never runs
-            // OnOpened's StartAsync, so nothing ever asks this loader for a URL. A future test that
-            // switched to the AppServices constructor would reach the public internet from a unit
-            // test — stub the loader before making that change, not after.
-            new CatalogLoader(new HttpClient(), paths),
-            new InstallStateStore(paths.InstallStateDirectory),
-            new StubQueue(),
-            new StubDispatcher(),
-            new StubPickers(),
-            new StubClock(),
-            null);
+        var (services, queue) = Services(paths);
 
         var viewModel = new MainViewModel(services, save: (_, _) => Task.CompletedTask);
         viewModel.BuildRows(packs);
@@ -46,7 +33,57 @@ public sealed class ViewHost : IDisposable
         var window = new MainWindow { DataContext = viewModel };
         window.Show();
 
-        return new ViewHost { Root = root, ViewModel = viewModel, Window = window };
+        return new ViewHost { Root = root, ViewModel = viewModel, Window = window, Queue = queue };
+    }
+
+    /// <summary>
+    /// The service graph both window constructors get. The CatalogLoader's HttpClient cannot leave
+    /// the machine: the shipped constructor DOES run OnOpened's StartAsync, which resolves a
+    /// catalog, so a loader over a live handler would put a unit test on the public internet.
+    /// </summary>
+    public static (AppServices Services, StubQueue Queue) Services(AppPaths paths)
+    {
+        var queue = new StubQueue();
+
+        return (new AppServices(
+            paths,
+            new SettingsStore(paths),
+            new AppSettings(),
+            null,
+            new CatalogLoader(new HttpClient(new OfflineHandler()), paths),
+            new InstallStateStore(paths.InstallStateDirectory),
+            queue,
+            new StubDispatcher(),
+            new StubPickers(),
+            new StubClock(),
+            null), queue);
+    }
+
+    /// <summary>
+    /// Runs dispatcher jobs until a condition holds. Headless has no message loop of its own, and
+    /// the shipped window's close is deliberately deferred behind an await, so nothing completes
+    /// without this. Bounded rather than timed: it never waits on the clock for a result.
+    ///
+    /// Yields per pass rather than spinning. This is also used to wait on work that runs on a
+    /// thread-pool thread (UnlockerViewModel's detection hops off the UI thread via Task.Run), and
+    /// RunJobs() on an empty queue returns almost immediately — a pure spin can burn all 20000
+    /// passes in a few milliseconds, well under thread-pool scheduling latency under load, before
+    /// the pool thread has even been scheduled to run the work whose completion this is waiting
+    /// for. Thread.Yield() gives that thread a chance to actually run between passes instead of
+    /// starving it. Not a timed wait: the iteration cap is still the only hang guard, and no clock
+    /// is read anywhere in this method.
+    /// </summary>
+    public static bool PumpUntil(Func<bool> condition, int passes = 20000)
+    {
+        for (var i = 0; i < passes; i++)
+        {
+            if (condition()) return true;
+
+            Dispatcher.UIThread.RunJobs();
+            Thread.Yield();
+        }
+
+        return condition();
     }
 
     public PackRowViewModel Row(string code) => ViewModel.RowFor(code)!;
@@ -89,8 +126,25 @@ public sealed class ViewHost : IDisposable
     }
 }
 
+/// <summary>
+/// Records what reached the queue. Empty bodies would let a control bound to the wrong method pass
+/// every rendering test: the binding resolves, the command runs, and nothing observes which one.
+/// </summary>
 public sealed class StubQueue : IQueueController
 {
+    private readonly List<string> _calls = new();
+
+    /// <summary>RunAsync arrives from the pool, so this has more than one writer.</summary>
+    public IReadOnlyList<string> Calls
+    {
+        get { lock (_calls) return _calls.ToArray(); }
+    }
+
+    private void Add(string call)
+    {
+        lock (_calls) _calls.Add(call);
+    }
+
     public IAsyncEnumerable<QueueUpdate> Updates => Empty();
 
     private static async IAsyncEnumerable<QueueUpdate> Empty()
@@ -99,23 +153,66 @@ public sealed class StubQueue : IQueueController
         yield break;
     }
 
-    public Task RunAsync(CancellationToken ct) => Task.Delay(Timeout.Infinite, ct);
+    private readonly TaskCompletionSource _stopped = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    public void Enqueue(PackEntry pack, string gameDirectory) { }
+    /// <summary>
+    /// Completes when the queue is stopped, as the real one does: <c>PackQueue.RunAsync</c> returns
+    /// from its finally once cancellation has been honoured. A task that never completed at all
+    /// would hang <c>ShutdownAsync</c>, which awaits it, and with it the window's deferred close.
+    /// </summary>
+    public Task RunAsync(CancellationToken ct)
+    {
+        Add("Run");
+        ct.Register(() => _stopped.TrySetResult());
 
-    public void Cancel(string code) { }
+        return _stopped.Task;
+    }
 
-    public bool Remove(string code) => true;
+    public void Enqueue(PackEntry pack, string gameDirectory) => Add($"Enqueue:{pack.Code}");
 
-    public void CancelAll() { }
+    public void Cancel(string code) => Add($"Cancel:{code}");
 
-    public void Complete() { }
+    public bool Remove(string code)
+    {
+        Add($"Remove:{code}");
+        return true;
+    }
 
-    public void Pause() { }
+    public void CancelAll()
+    {
+        Add("CancelAll");
+        _stopped.TrySetResult();
+    }
 
-    public void Resume() { }
+    public void Complete() => Add("Complete");
 
-    public ValueTask DisposeAsync() => ValueTask.CompletedTask;
+    public void Pause() => Add("Pause");
+
+    public void Resume() => Add("Resume");
+
+    /// <summary>
+    /// Set to keep a shutdown in flight, the way a real multi-gigabyte extract does. Without it a
+    /// stubbed shutdown finishes before a second close can arrive, so a test about what happens
+    /// DURING shutdown never reaches the state it names.
+    /// </summary>
+    public TaskCompletionSource? HoldDispose { get; set; }
+
+    public async ValueTask DisposeAsync()
+    {
+        Add("Dispose");
+
+        if (HoldDispose is not null) await HoldDispose.Task;
+
+        _stopped.TrySetResult();
+    }
+}
+
+/// <summary>Makes a view test structurally unable to reach the network.</summary>
+public sealed class OfflineHandler : HttpMessageHandler
+{
+    protected override Task<HttpResponseMessage> SendAsync(
+        HttpRequestMessage request, CancellationToken cancellationToken) =>
+        throw new HttpRequestException($"A view test must not reach the network ({request.RequestUri}).");
 }
 
 public sealed class StubDispatcher : IUiDispatcher
