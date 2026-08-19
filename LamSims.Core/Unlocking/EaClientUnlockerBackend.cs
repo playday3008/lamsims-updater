@@ -11,17 +11,11 @@ namespace LamSims.Core.Unlocking;
 /// only the filesystem and the seam and runs under a temp directory on any platform. The Windows
 /// surface is <see cref="WindowsUnlockerHost"/> alone.
 /// </summary>
-// CS9113 fires on a primary-constructor parameter this class does not yet read, and
-// TreatWarningsAsErrors makes that a build error. All four are read by the install and remove
-// sequences below; the suppression is scoped to the declaration alone rather than the file, and
-// exists only because those sequences and this declaration cannot land in the same edit.
-#pragma warning disable CS9113
 public sealed partial class EaClientUnlockerBackend(
     IUnlockerHost host,
     UnlockerPaths paths,
     AppPaths appPaths,
     IDelayProvider delays) : IUnlockerBackend
-#pragma warning restore CS9113
 {
     internal const string DllName = "version.dll";
     internal const string ScheduledTaskName = "copy_dlc_unlocker";
@@ -98,11 +92,361 @@ public sealed partial class EaClientUnlockerBackend(
             : new UnlockerStatus(UnlockerState.NotInstalled, null));
     }
 
-    public Task<UnlockerResult> InstallAsync(UnlockerTarget target, IUnlockerAssetSource assets,
-                                             IProgress<UnlockerProgress> progress, CancellationToken ct)
-        => throw new NotImplementedException();
+    internal const int InstallStepsEaApp = 10;
+    internal const int InstallStepsOrigin = 8;
 
-    public Task<UnlockerResult> RemoveAsync(UnlockerTarget target,
-                                            IProgress<UnlockerProgress> progress, CancellationToken ct)
-        => throw new NotImplementedException();
+    private static readonly TimeSpan KillTimeout = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan SettleDelay = TimeSpan.FromSeconds(1);
+
+    /// <summary>
+    /// Issues one report per step, naming the step about to run and counting those finished, plus a
+    /// final report at Total/Total. Without that trailing report a completed install would display
+    /// Total-1/Total and the bar would never fill.
+    /// </summary>
+    private sealed class Steps(IProgress<UnlockerProgress> progress, int total)
+    {
+        private int _done;
+
+        public void Begin(string step) => progress.Report(new UnlockerProgress(step, _done, total));
+        public void Done() => _done++;
+        public void Finish(string step) => progress.Report(new UnlockerProgress(step, _done, total));
+        public int Completed => _done;
+    }
+
+    public async Task<UnlockerResult> InstallAsync(UnlockerTarget target, IUnlockerAssetSource assets,
+                                                  IProgress<UnlockerProgress> progress,
+                                                  CancellationToken ct)
+    {
+        var ea = target.Client == ClientKind.EaApp;
+        var steps = new Steps(progress, ea ? InstallStepsEaApp : InstallStepsOrigin);
+        var warnings = new List<string>();
+
+        // Step 1. Checked before anything is mutated: without it the config files and the
+        // autostart change land and only the DLL copy into Program Files fails, leaving a
+        // half-installed unlocker.
+        steps.Begin("Checking administrator rights");
+        if (!host.IsElevated) return UnlockerResult.NeedsElevation();
+        steps.Done();
+
+        // Step 2. Before any mutation, so a digest mismatch or a dead mirror changes nothing.
+        steps.Begin("Fetching the unlocker");
+        string dll;
+        try
+        {
+            dll = await assets.GetDllAsync(target.Client, ct);
+        }
+        catch (Exception e) when (e is UnlockerAssetMismatchException or HttpRequestException
+                                       or IOException or SizeMismatchException)
+        {
+            return UnlockerResult.Fail(e.Message);
+        }
+        steps.Done();
+
+        // Step 3. A client that outlives its kill timeout still holds a lock on the directory
+        // step 7 writes into, so the survivors are reported here rather than surfacing there.
+        steps.Begin("Stopping the client");
+        var names = ProcessNames[target.Client];
+        if (host.RunningClientProcesses(names).Count > 0)
+        {
+            var survivors = host.KillClientProcesses(names, KillTimeout);
+            if (survivors.Count > 0)
+                return UnlockerResult.Fail(
+                    $"These processes are still running and hold the client directory open: " +
+                    $"{string.Join(", ", survivors)}. Close them and try again.");
+
+            await delays.DelayAsync(SettleDelay, ct);
+        }
+        steps.Done();
+
+        // Step 4. Its own report, not folded into step 5: every step must Begin exactly once, or
+        // Completed skips a number and the run emits one report fewer than Total + 1.
+        steps.Begin("Creating the configuration folder");
+        try
+        {
+            Directory.CreateDirectory(paths.ConfigDirectory);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return UnlockerResult.Fail(
+                $"'{paths.ConfigDirectory}' could not be created: {e.Message}");
+        }
+        steps.Done();
+
+        // Step 5. WriteAsync creates the directory too, which is idempotent and harmless.
+        steps.Begin("Writing the unlocker configuration");
+        try
+        {
+            await UnlockerConfigWriter.WriteAsync(paths, ct);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return UnlockerResult.Fail($"The unlocker configuration could not be written: {e.Message}");
+        }
+        steps.Done();
+
+        return await InstallRestAsync(target, dll, steps, warnings, ea, ct);
+    }
+
+    private async Task<UnlockerResult> InstallRestAsync(UnlockerTarget target, string dll, Steps steps,
+                                                       List<string> warnings, bool ea,
+                                                       CancellationToken ct)
+    {
+        // Step 6, non-fatal: nothing to remove is the normal case.
+        steps.Begin("Removing older unlocker files");
+        foreach (var name in new[] { "version_o.dll", "winhttp.dll", "winhttp_o.dll" })
+            TryDelete(Path.Combine(target.ClientPath, name), warnings);
+        try
+        {
+            foreach (var stale in Directory.GetFiles(target.ClientPath, "w_*.ini"))
+                TryDelete(stale, warnings);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            warnings.Add($"Older unlocker .ini files could not be listed: {e.Message}");
+        }
+        steps.Done();
+
+        // Step 7, fatal: without the DLL on disk nothing is installed, whatever else succeeded.
+        steps.Begin($"Copying {DllName}");
+        var installed = Path.Combine(target.ClientPath, DllName);
+        try
+        {
+            File.Copy(dll, installed, overwrite: true);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return UnlockerResult.Fail(
+                $"{DllName} could not be written to '{target.ClientPath}': {e.Message}", warnings);
+        }
+        steps.Done();
+
+        if (ea)
+        {
+            // Step 8, non-fatal. This copy is what survives an EA app self-update; without it the
+            // unlocker works now and stops working after the client updates itself. It is written
+            // from the verified bytes still in hand rather than re-read from disk.
+            steps.Begin("Copying to StagedEADesktop");
+            try
+            {
+                var parent = Directory.GetParent(target.ClientPath)?.FullName
+                    ?? throw new IOException($"'{target.ClientPath}' has no parent directory.");
+                var staged = Path.Combine(parent, "StagedEADesktop", "EA Desktop");
+                Directory.CreateDirectory(staged);
+                File.Copy(dll, Path.Combine(staged, DllName), overwrite: true);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                warnings.Add($"The StagedEADesktop copy failed, so the unlocker will need " +
+                             $"reinstalling after EA app updates itself: {e.Message}");
+            }
+            steps.Done();
+
+            // Step 9, non-fatal: the flag is a convenience and the install stands without it.
+            steps.Begin("Updating machine.ini");
+            try
+            {
+                if (!await IniFlagEditor.AddFlagAsync(paths.MachineIniFile, MachineIniFlag, ct)
+                    && !File.Exists(paths.MachineIniFile))
+                    warnings.Add($"machine.ini was not found at '{paths.MachineIniFile}', so it was " +
+                                 "left alone. This is not critical.");
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                warnings.Add($"machine.ini could not be updated: {e.Message}");
+            }
+            steps.Done();
+        }
+
+        // Step 10, non-fatal and reversible: the previous value is backed up first so removal can
+        // put it back, rather than leaving the user's login behaviour changed.
+        steps.Begin("Updating autostart");
+        try
+        {
+            var existing = host.ReadAutostartValue(AutostartValueName);
+            if (existing is not null)
+            {
+                Directory.CreateDirectory(appPaths.Root);
+                await AtomicFile.WriteAllTextAsync(appPaths.UnlockerAutostartBackupFile,
+                    System.Text.Json.JsonSerializer.Serialize(
+                        new AutostartBackup(AutostartValueName, existing)), ct);
+                host.RemoveAutostartValue(AutostartValueName);
+            }
+        }
+        // SecurityException is here on purpose: the host guards its registry READS but not its
+        // writes, because it holds no policy, and a group-policy-restricted Run key throws exactly
+        // this. Without it this non-fatal step would abort the install after the DLL is already in
+        // place.
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException
+                                      or System.Security.SecurityException)
+        {
+            warnings.Add($"The autostart entry could not be changed: {e.Message}");
+        }
+        steps.Done();
+
+        steps.Finish("Done");
+        return UnlockerResult.Ok(warnings);
+    }
+
+    private static void TryDelete(string path, List<string> warnings)
+    {
+        try
+        {
+            if (File.Exists(path)) File.Delete(path);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            warnings.Add($"'{Path.GetFileName(path)}' could not be removed: {e.Message}");
+        }
+    }
+
+    internal sealed record AutostartBackup(string Name, string Value);
+
+    internal const int RemoveStepsEaApp = 9;
+    internal const int RemoveStepsOrigin = 6;
+
+    public async Task<UnlockerResult> RemoveAsync(UnlockerTarget target,
+                                                 IProgress<UnlockerProgress> progress,
+                                                 CancellationToken ct)
+    {
+        var ea = target.Client == ClientKind.EaApp;
+        var steps = new Steps(progress, ea ? RemoveStepsEaApp : RemoveStepsOrigin);
+        var warnings = new List<string>();
+
+        // Step 1, before the elevation check on purpose: a machine with nothing installed must not
+        // raise a UAC prompt to tell the user there is nothing to do.
+        steps.Begin("Checking what is installed");
+        var installed = Path.Combine(target.ClientPath, DllName);
+        if (!File.Exists(installed))
+        {
+            steps.Done();
+            steps.Finish("Nothing to remove");
+            return UnlockerResult.Ok();
+        }
+        steps.Done();
+
+        steps.Begin("Checking administrator rights");
+        if (!host.IsElevated) return UnlockerResult.NeedsElevation();
+        steps.Done();
+
+        steps.Begin("Stopping the client");
+        var names = ProcessNames[target.Client];
+        if (host.RunningClientProcesses(names).Count > 0)
+        {
+            var survivors = host.KillClientProcesses(names, KillTimeout);
+            if (survivors.Count > 0)
+                return UnlockerResult.Fail(
+                    $"These processes are still running and hold the client directory open: " +
+                    $"{string.Join(", ", survivors)}. Close them and try again.");
+
+            await delays.DelayAsync(SettleDelay, ct);
+        }
+        steps.Done();
+
+        if (ea)
+        {
+            // Step 4. Nothing here ever creates this task, but one left by an older install must
+            // still be removed, or every upgrader keeps a stale elevated task forever.
+            steps.Begin("Removing the scheduled task");
+            try
+            {
+                host.DeleteScheduledTask(ScheduledTaskName);
+            }
+            catch (Exception e) when (e is InvalidOperationException or IOException)
+            {
+                warnings.Add($"The '{ScheduledTaskName}' scheduled task could not be removed: {e.Message}");
+            }
+            steps.Done();
+        }
+
+        // Step 5, fatal: if this fails the unlocker is still loaded and the user has been told it
+        // was removed.
+        steps.Begin($"Removing {DllName}");
+        try
+        {
+            File.Delete(installed);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return UnlockerResult.Fail($"{DllName} could not be removed from " +
+                                       $"'{target.ClientPath}': {e.Message}", warnings);
+        }
+        steps.Done();
+
+        if (ea)
+        {
+            steps.Begin("Cleaning up StagedEADesktop");
+            try
+            {
+                var parent = Directory.GetParent(target.ClientPath)?.FullName;
+                if (parent is not null)
+                {
+                    var staged = Path.Combine(parent, "StagedEADesktop");
+                    var inner = Path.Combine(staged, "EA Desktop");
+                    TryDelete(Path.Combine(inner, DllName), warnings);
+
+                    // Only when empty: the folder is EA's, and something else may legitimately
+                    // be staged there.
+                    foreach (var directory in new[] { inner, staged })
+                        if (Directory.Exists(directory) &&
+                            !Directory.EnumerateFileSystemEntries(directory).Any())
+                            Directory.Delete(directory);
+                }
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                warnings.Add($"StagedEADesktop could not be cleaned up: {e.Message}");
+            }
+            steps.Done();
+
+            steps.Begin("Restoring machine.ini");
+            try
+            {
+                await IniFlagEditor.RemoveFlagAsync(paths.MachineIniFile, MachineIniFlag, ct);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                warnings.Add($"machine.ini could not be restored: {e.Message}");
+            }
+            steps.Done();
+        }
+
+        // Step 8: this is what makes the unlocker a reversible change to the machine. It runs
+        // before the config directory is deleted, and the backup deliberately lives under AppPaths
+        // so that ordering is not load-bearing.
+        steps.Begin("Restoring autostart");
+        try
+        {
+            var backupFile = appPaths.UnlockerAutostartBackupFile;
+            if (File.Exists(backupFile))
+            {
+                var backup = System.Text.Json.JsonSerializer.Deserialize<AutostartBackup>(
+                    await File.ReadAllTextAsync(backupFile, ct));
+
+                if (backup is not null) host.WriteAutostartValue(backup.Name, backup.Value);
+                File.Delete(backupFile);
+            }
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException
+                                      or System.Text.Json.JsonException
+                                      or System.Security.SecurityException)
+        {
+            warnings.Add($"The autostart entry could not be restored: {e.Message}");
+        }
+        steps.Done();
+
+        steps.Begin("Removing the unlocker configuration");
+        try
+        {
+            if (Directory.Exists(paths.ConfigDirectory))
+                Directory.Delete(paths.ConfigDirectory, recursive: true);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            warnings.Add($"The unlocker configuration folder could not be removed: {e.Message}");
+        }
+        steps.Done();
+
+        steps.Finish("Done");
+        return UnlockerResult.Ok(warnings);
+    }
 }

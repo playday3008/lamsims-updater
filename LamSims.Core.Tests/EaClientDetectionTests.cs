@@ -116,4 +116,22 @@ public class EaClientDetectionTests
         Assert.Equal(UnlockerState.Installed,
                      (await backend.GetStatusAsync(target, CancellationToken.None)).State);
     }
+
+    // The detail is asserted alongside the state so an operator sees which directory vanished.
+    [Fact]
+    public async Task Status_is_unknown_when_the_client_directory_has_vanished()
+    {
+        using var dir = new TempDir();
+        var (backend, host) = Build(dir);
+        var exe = InstalledClient(dir, "client", "EADesktop.exe");
+        host.ClientPaths[ClientRegistryKey.EaDesktop] = exe;
+        var target = (await backend.DetectTargetsAsync(CancellationToken.None))[0];
+
+        Directory.Delete(target.ClientPath, recursive: true);
+
+        var status = await backend.GetStatusAsync(target, CancellationToken.None);
+
+        Assert.Equal(UnlockerState.Unknown, status.State);
+        Assert.Contains(target.ClientPath, status.Detail);
+    }
 }

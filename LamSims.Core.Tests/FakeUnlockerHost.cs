@@ -32,15 +32,26 @@ public sealed class FakeUnlockerHost : IUnlockerHost
         return AutostartValues.TryGetValue(name, out var v) ? v : null;
     }
 
+    /// <summary>
+    /// Set to make both autostart writes throw the way a group-policy-restricted Run key does. The
+    /// real host guards its read paths against SecurityException but not its writes, so the
+    /// backend's catch filters have to cover them.
+    /// </summary>
+    public bool ThrowSecurityOnAutostartWrite { get; set; }
+
     public void WriteAutostartValue(string name, string value)
     {
         Calls.Add($"WriteAutostart:{name}={value}");
+        if (ThrowSecurityOnAutostartWrite)
+            throw new System.Security.SecurityException("Requested registry access is not allowed.");
         AutostartValues[name] = value;
     }
 
     public void RemoveAutostartValue(string name)
     {
         Calls.Add($"RemoveAutostart:{name}");
+        if (ThrowSecurityOnAutostartWrite)
+            throw new System.Security.SecurityException("Requested registry access is not allowed.");
         AutostartValues.Remove(name);
     }
 

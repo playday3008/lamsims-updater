@@ -1,0 +1,190 @@
+using LamSims.Core.Unlocking;
+
+namespace LamSims.Core.Tests;
+
+public class EaClientRemoveTests
+{
+    private static Task<UnlockerResult> RemoveAsync(InstallFixture f, UnlockerTarget target)
+    {
+        f.Reports.Clear();
+        return f.Backend.RemoveAsync(target, new SyncProgress<UnlockerProgress>(f.Reports.Add),
+                                    CancellationToken.None);
+    }
+
+    [Fact]
+    public async Task Removing_what_is_not_installed_succeeds_without_touching_anything()
+    {
+        using var f = new InstallFixture();
+        var target = await f.TargetAsync();
+        var before = f.Snapshot();
+
+        var result = await RemoveAsync(f, target);
+
+        Assert.True(result.Success, result.Error);
+        Assert.Equal(before, f.Snapshot());
+        Assert.DoesNotContain(f.Host.Calls, c => c.StartsWith("Kill:", StringComparison.Ordinal));
+    }
+
+    // Step 1 probes before step 2 checks elevation, so a machine with nothing installed is not
+    // asked for administrator rights. IsElevated is cleared because both orders succeed with it set.
+    [Fact]
+    public async Task Nothing_installed_is_reported_without_demanding_elevation()
+    {
+        using var f = new InstallFixture();
+        f.Host.IsElevated = false;
+        var target = await f.TargetAsync();
+
+        var result = await RemoveAsync(f, target);
+
+        // Success alone would pass against an implementation that checked elevation first, so the
+        // flag is asserted with it.
+        Assert.True(result.Success, result.Error);
+        Assert.False(result.RequiresElevation);
+    }
+
+    [Fact]
+    public async Task Without_elevation_an_installed_unlocker_is_left_in_place()
+    {
+        using var f = new InstallFixture();
+        var target = await f.TargetAsync();
+        Assert.True((await f.InstallAsync(target)).Success);
+        f.Host.IsElevated = false;
+
+        var before = f.Snapshot();
+
+        var result = await RemoveAsync(f, target);
+
+        // The snapshot is checked too: a surviving DLL alone would pass against a removal that
+        // deleted the config directory before checking rights.
+        Assert.True(result.RequiresElevation);
+        Assert.True(File.Exists(Path.Combine(target.ClientPath, "version.dll")));
+        Assert.Equal(before, f.Snapshot());
+    }
+
+    // The port never creates this task, but it must delete one an upstream install left behind.
+    [Fact]
+    public async Task The_scheduled_task_upstream_created_is_deleted_on_an_ea_app_removal()
+    {
+        using var f = new InstallFixture();
+        var target = await f.TargetAsync();
+        await f.InstallAsync(target);
+
+        Assert.True((await RemoveAsync(f, target)).Success);
+
+        Assert.Contains("DeleteTask:copy_dlc_unlocker", f.Host.Calls);
+    }
+
+    [Fact]
+    public async Task An_origin_removal_does_not_touch_the_scheduler_or_machine_ini()
+    {
+        using var f = new InstallFixture(ClientKind.Origin);
+        var target = await f.TargetAsync();
+        await f.InstallAsync(target);
+
+        Assert.True((await RemoveAsync(f, target)).Success);
+
+        Assert.DoesNotContain(f.Host.Calls, c => c.StartsWith("DeleteTask", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task The_staged_copy_and_its_empty_directories_are_removed()
+    {
+        using var f = new InstallFixture();
+        var target = await f.TargetAsync();
+        await f.InstallAsync(target);
+        var parent = Directory.GetParent(target.ClientPath)!.FullName;
+
+        Assert.True((await RemoveAsync(f, target)).Success);
+
+        Assert.False(Directory.Exists(Path.Combine(parent, "StagedEADesktop")));
+    }
+
+    [Fact]
+    public async Task The_autostart_value_is_put_back_and_the_backup_deleted()
+    {
+        using var f = new InstallFixture();
+        const string original = @"C:\EA\EADesktop.exe -silent";
+        f.Host.AutostartValues["EADM"] = original;
+        var target = await f.TargetAsync();
+        await f.InstallAsync(target);
+        Assert.DoesNotContain("EADM", f.Host.AutostartValues.Keys);
+
+        Assert.True((await RemoveAsync(f, target)).Success);
+
+        Assert.Equal(original, f.Host.AutostartValues["EADM"]);
+        Assert.False(File.Exists(f.App.UnlockerAutostartBackupFile));
+    }
+
+    // Restoring the autostart value hits the same policy-restricted key, and step 8 is non-fatal.
+    // If SecurityException escapes, removal reports failure after removing everything.
+    [Fact]
+    public async Task A_registry_write_the_policy_forbids_warns_instead_of_failing_the_removal()
+    {
+        using var f = new InstallFixture();
+        f.Host.AutostartValues["EADM"] = @"C:\EA\EADesktop.exe";
+        var target = await f.TargetAsync();
+        Assert.True((await f.InstallAsync(target)).Success);
+
+        f.Host.ThrowSecurityOnAutostartWrite = true;
+
+        var result = await RemoveAsync(f, target);
+
+        Assert.True(result.Success, result.Error);
+        Assert.Contains(result.Warnings ?? [], w => w.Contains("autostart"));
+        Assert.False(File.Exists(Path.Combine(target.ClientPath, "version.dll")));
+    }
+
+    [Fact]
+    public async Task A_removal_with_no_backup_recorded_is_a_no_op_success()
+    {
+        using var f = new InstallFixture();
+        var target = await f.TargetAsync();
+        await f.InstallAsync(target);
+
+        var result = await RemoveAsync(f, target);
+
+        Assert.True(result.Success, result.Error);
+        Assert.DoesNotContain(f.Host.Calls, c => c.StartsWith("WriteAutostart", StringComparison.Ordinal));
+    }
+
+    // Matching roots before and after would pass against an install that did nothing, hence the
+    // mid-point assertion.
+    [Fact]
+    public async Task Install_then_remove_returns_every_guarded_root_to_its_prior_state()
+    {
+        using var f = new InstallFixture();
+        Directory.CreateDirectory(Path.GetDirectoryName(f.Paths.MachineIniFile)!);
+        await File.WriteAllBytesAsync(f.Paths.MachineIniFile,
+            System.Text.Encoding.UTF8.GetBytes("[machine]\r\nfoo=1\r\n"));
+        var machineIni = await File.ReadAllBytesAsync(f.Paths.MachineIniFile);
+        var target = await f.TargetAsync();
+        var before = f.Snapshot();
+
+        Assert.True((await f.InstallAsync(target)).Success);
+
+        // The mid-point: the install really did something.
+        Assert.NotEqual(before, f.Snapshot());
+        Assert.True(File.Exists(Path.Combine(target.ClientPath, "version.dll")));
+
+        Assert.True((await RemoveAsync(f, target)).Success);
+
+        Assert.Equal(before, f.Snapshot());
+        Assert.Equal(machineIni, await File.ReadAllBytesAsync(f.Paths.MachineIniFile));
+    }
+
+    [Theory]
+    [InlineData(ClientKind.EaApp, 9)]
+    [InlineData(ClientKind.Origin, 6)]
+    public async Task Removal_progress_runs_from_zero_to_total(ClientKind kind, int total)
+    {
+        using var f = new InstallFixture(kind);
+        var target = await f.TargetAsync();
+        await f.InstallAsync(target);
+
+        Assert.True((await RemoveAsync(f, target)).Success);
+
+        Assert.All(f.Reports, r => Assert.Equal(total, r.Total));
+        Assert.Equal(total + 1, f.Reports.Count);
+        Assert.Equal(total, f.Reports[^1].Completed);
+    }
+}
