@@ -72,6 +72,61 @@ public class MainWindowBindingTests
         }
     }
 
+    /// <summary>
+    /// An element carrying DataContext="{Binding Prop}" re-roots its subtree at Prop's declared type.
+    /// Without this the sweep resolves everything inside the unlocker region against MainViewModel and
+    /// reports all of it unresolved, and the tempting "fix" would be to stop checking the region at
+    /// all, which is how the row context menu shipped dead in the first place.
+    /// </summary>
+    [Fact]
+    public void A_nested_data_context_re_roots_the_expected_type_for_its_subtree()
+    {
+        var xml = XElement.Parse("""
+            <Border xmlns="https://github.com/avaloniaui" DataContext="{Binding Unlocker}">
+              <TextBlock IsVisible="{Binding IsSupported}" />
+            </Border>
+            """);
+
+        var unresolved = new List<string>();
+        Walk(xml, typeof(MainViewModel), parent: null, unresolved);
+
+        Assert.Empty(unresolved);
+    }
+
+    /// <summary>
+    /// The exemption: the DataContext attribute itself names a member of the OUTER type. Checking it
+    /// against the re-rooted type would report the very attribute that does the re-rooting.
+    /// </summary>
+    [Fact]
+    public void A_nested_data_context_still_catches_a_binding_the_inner_type_does_not_have()
+    {
+        var xml = XElement.Parse("""
+            <Border xmlns="https://github.com/avaloniaui" DataContext="{Binding Unlocker}">
+              <TextBlock IsVisible="{Binding NoSuchMember}" />
+            </Border>
+            """);
+
+        var unresolved = new List<string>();
+        Walk(xml, typeof(MainViewModel), parent: null, unresolved);
+
+        Assert.Contains(unresolved, u => u.Contains("NoSuchMember"));
+    }
+
+    [Fact]
+    public void A_nested_data_context_naming_a_member_that_does_not_exist_is_itself_reported()
+    {
+        var xml = XElement.Parse("""
+            <Border xmlns="https://github.com/avaloniaui" DataContext="{Binding NotAProperty}">
+              <TextBlock IsVisible="{Binding Anything}" />
+            </Border>
+            """);
+
+        var unresolved = new List<string>();
+        Walk(xml, typeof(MainViewModel), parent: null, unresolved);
+
+        Assert.Contains(unresolved, u => u.Contains("NotAProperty"));
+    }
+
     private static IEnumerable<XElement> Ancestry(XElement element)
     {
         for (var e = element.Parent; e is not null; e = e.Parent) yield return e;
@@ -80,21 +135,54 @@ public class MainWindowBindingTests
     private static void Walk(XElement element, Type context, Type? parent, List<string> unresolved)
     {
         // An `Owner.ItemTemplate` property element re-roots the DataContext at the item type of
-        // whatever the owner's ItemsSource binds to — MainViewModel.Banners gives Banner,
+        // whatever the owner's ItemsSource binds to: MainViewModel.Banners gives Banner,
         // FilteredRows gives PackRowViewModel. Derived by reflection rather than hard-coded, so
         // a template moved onto a different collection is followed rather than mis-checked.
-        var (childContext, childParent) = element.Name.LocalName.EndsWith(".ItemTemplate", StringComparison.Ordinal)
-            ? (ItemTypeOf(element.Parent, context, unresolved) ?? context, context)
-            : (context, parent);
+        // An explicit DataContext="{Binding Prop}" re-roots the subtree at Prop's declared type
+        // the same way.
+        var declared = element.Attribute("DataContext")?.Value;
+        var nested = declared is not null ? BoundMemberType(declared, context) : null;
+
+        var (childContext, childParent) =
+            element.Name.LocalName.EndsWith(".ItemTemplate", StringComparison.Ordinal)
+                ? (ItemTypeOf(element.Parent, context, unresolved) ?? context, context)
+                : nested is not null
+                    ? (nested, context)
+                    : (context, parent);
 
         foreach (var attribute in element.Attributes())
         {
             if (attribute.Name.NamespaceName.Length > 0 || attribute.Name.LocalName == "xmlns") continue;
 
-            Check(element, attribute, childContext, childParent, unresolved);
+            // The DataContext attribute names a member of the OUTER type, and is what re-roots the
+            // rest, so it is the one attribute checked against `context` rather than `childContext`.
+            var self = attribute.Name.LocalName == "DataContext" ? context : childContext;
+            var selfParent = attribute.Name.LocalName == "DataContext" ? parent : childParent;
+
+            Check(element, attribute, self, selfParent, unresolved);
         }
 
         foreach (var child in element.Elements()) Walk(child, childContext, childParent, unresolved);
+    }
+
+    /// <summary>
+    /// The declared type of the member a <c>{Binding Prop}</c> value names on <paramref name="context"/>,
+    /// or null when the value names nothing resolvable, in which case the caller leaves the subtree
+    /// rooted at the outer context and <see cref="Check"/> reports the attribute itself.
+    /// </summary>
+    private static Type? BoundMemberType(string value, Type context)
+    {
+        var path = Path(value);
+        if (path is null) return null;
+
+        var member = Member(context, path);
+
+        return member switch
+        {
+            PropertyInfo property => property.PropertyType,
+            FieldInfo field => field.FieldType,
+            _ => null,
+        };
     }
 
     private static Type? ItemTypeOf(XElement? owner, Type context, List<string> unresolved)

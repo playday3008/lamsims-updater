@@ -3,6 +3,7 @@ using LamSims.App.Services;
 using LamSims.App.ViewModels;
 using LamSims.Core.Installing;
 using LamSims.Core.Settings;
+using LamSims.Core.Unlocking;
 
 namespace LamSims.App.Tests;
 
@@ -30,7 +31,10 @@ public sealed class TestHost : IDisposable
         Func<AppSettings, CancellationToken, Task>? save = null,
         string? settingsError = null,
         Action<AppSettings>? seed = null,
-        IQueueController? queue = null)
+        IQueueController? queue = null,
+        UnlockerService? unlockerService = null,
+        IUnlockerHost? unlockerHost = null,
+        IUnlockerAssetSource? unlockerAssets = null)
     {
         var root = Directory.CreateTempSubdirectory("lamsims-vm").FullName;
         var game = Path.Combine(root, "game");
@@ -60,7 +64,13 @@ public sealed class TestHost : IDisposable
             new ImmediateDispatcher(),
             pickers,
             clock,
-            null);
+            null,
+            // A service with no backends reports IsSupported false, so the region hides itself
+            // and every pre-existing test is unaffected by this phase. A wiring test overrides
+            // one or all three to drive UnlockerViewModel through a real MainViewModel.
+            unlockerService ?? new UnlockerService([]),
+            unlockerHost ?? new FakeUnlockerHost { IsAvailable = false },
+            unlockerAssets ?? new StubUnlockerAssets());
 
         host = new TestHost
         {

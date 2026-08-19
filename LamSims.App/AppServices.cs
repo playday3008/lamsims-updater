@@ -2,13 +2,14 @@ using LamSims.App.Services;
 using LamSims.Core.Catalogs;
 using LamSims.Core.Installing;
 using LamSims.Core.Settings;
+using LamSims.Core.Unlocking;
 
 namespace LamSims.App;
 
 /// <summary>
-/// Everything the shell needs, assembled once. This record is final: a later change wanting
-/// another dependency should carry it on one it already has. A constructor that drifts between
-/// tasks is a defect this project has already paid for.
+/// Everything the shell needs, assembled once. A task must not add a dependency mid-phase: a
+/// constructor that drifts between tasks is a defect this project has already paid for. A new phase
+/// bringing a new subsystem may add one field, deliberately — Phase 4's unlocker is that case.
 /// </summary>
 public sealed record AppServices(
     AppPaths Paths,
@@ -21,4 +22,7 @@ public sealed record AppServices(
     IUiDispatcher Dispatcher,
     IPickerService Pickers,
     IClock Clock,
-    string? CommandLineCatalog);
+    string? CommandLineCatalog,
+    UnlockerService Unlocker,
+    IUnlockerHost UnlockerHost,
+    IUnlockerAssetSource UnlockerAssets);

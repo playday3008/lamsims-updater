@@ -41,7 +41,17 @@ public sealed partial class MainViewModel : ObservableObject
                 $"Your settings could not be fully applied and defaults are in use: {settingsError}",
                 BannerKind.Warning));
         }
+
+        Unlocker = new UnlockerViewModel(
+            services.Unlocker,
+            services.UnlockerAssets,
+            services.UnlockerHost,
+            services.Dispatcher,
+            shutdown: ShutdownAsync,
+            banner: Raise);
     }
+
+    public UnlockerViewModel Unlocker { get; }
 
     // These wrappers keep the three delegate fields read: a private field assigned and never
     // read is CS0414, and this repository builds warnings as errors. An uncalled private method
@@ -462,9 +472,36 @@ public sealed partial class MainViewModel : ObservableObject
         _queueRun = ObserveQueueAsync(ct);
         _bridgeRun = _bridge.RunAsync();
 
+        await DetectUnlockerAsync(ct);
+
         await LoadCatalogAsync(ct);
 
         if (!string.IsNullOrWhiteSpace(GameDirectory)) Scan();
+    }
+
+    /// <summary>
+    /// Runs before the catalog load: detection is at most three registry opens and a couple of
+    /// File.Exists calls, so it costs the catalog nothing and the region is populated by the time
+    /// the window is interactive. Without this call, IsSupported can be true with Targets empty,
+    /// which renders a DLC Unlocker section with no rows and no way to install anything.
+    ///
+    /// Guarded narrowly, matching FlushSettingsNowAsync above: IOException and
+    /// UnauthorizedAccessException are the only exceptions either unlocker backend surfaces, since
+    /// WindowsUnlockerHost swallows a missing or unreadable registry key and every read under
+    /// Unlocking/Wine catches IOException, UnauthorizedAccessException and JsonException at its
+    /// source. A bug elsewhere still crashes loudly instead of being absorbed as a banner.
+    /// </summary>
+    private async Task DetectUnlockerAsync(CancellationToken ct)
+    {
+        try
+        {
+            await Unlocker.RefreshAsync(ct);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            Raise(new Banner("unlocker-detect",
+                $"The DLC unlocker could not check your installed clients: {e.Message}", BannerKind.Warning));
+        }
     }
 
     /// <summary>

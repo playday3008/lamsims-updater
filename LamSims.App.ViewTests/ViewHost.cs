@@ -6,6 +6,7 @@ using LamSims.App.Services;
 using LamSims.App.ViewModels;
 using LamSims.Core.Installing;
 using LamSims.Core.Settings;
+using LamSims.Core.Unlocking;
 
 namespace LamSims.App.ViewTests;
 
@@ -18,14 +19,24 @@ public sealed class ViewHost : IDisposable
     /// <summary>The recording queue behind the rows, for tests that invoke a control.</summary>
     public required StubQueue Queue { get; init; }
 
-    public static ViewHost Show(params PackEntry[] packs)
+    public static ViewHost Show(params PackEntry[] packs) =>
+        Show(packs, unlockerService: null, unlockerHost: null, unlockerAssets: null);
+
+    /// <summary>
+    /// The three parameters default to the same inert values <see cref="Services"/> always used,
+    /// so this changes no existing call site. A distinct overload rather than trailing optional
+    /// parameters on the one above, because <c>params PackEntry[] packs</c> must be the last
+    /// parameter in its own signature.
+    /// </summary>
+    public static ViewHost Show(PackEntry[] packs, UnlockerService? unlockerService,
+        IUnlockerHost? unlockerHost, IUnlockerAssetSource? unlockerAssets)
     {
         var root = Directory.CreateTempSubdirectory("lamsims-view").FullName;
 
         var paths = new AppPaths(Path.Combine(root, "config"));
         paths.EnsureCreated();
 
-        var (services, queue) = Services(paths);
+        var (services, queue) = Services(paths, unlockerService, unlockerHost, unlockerAssets);
 
         var viewModel = new MainViewModel(services, save: (_, _) => Task.CompletedTask);
         viewModel.BuildRows(packs);
@@ -41,7 +52,9 @@ public sealed class ViewHost : IDisposable
     /// the machine: the shipped constructor DOES run OnOpened's StartAsync, which resolves a
     /// catalog, so a loader over a live handler would put a unit test on the public internet.
     /// </summary>
-    public static (AppServices Services, StubQueue Queue) Services(AppPaths paths)
+    public static (AppServices Services, StubQueue Queue) Services(AppPaths paths,
+        UnlockerService? unlockerService = null, IUnlockerHost? unlockerHost = null,
+        IUnlockerAssetSource? unlockerAssets = null)
     {
         var queue = new StubQueue();
 
@@ -56,7 +69,12 @@ public sealed class ViewHost : IDisposable
             new StubDispatcher(),
             new StubPickers(),
             new StubClock(),
-            null), queue);
+            null,
+            // No backend registered by default, so IsSupported is false and the region hides
+            // itself. A test that wants the region visible supplies its own recording backend.
+            unlockerService ?? new UnlockerService([]),
+            unlockerHost ?? new FakeUnlockerHost { IsAvailable = false },
+            unlockerAssets ?? new StubUnlockerAssets()), queue);
     }
 
     /// <summary>

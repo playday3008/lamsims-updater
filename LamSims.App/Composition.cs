@@ -5,6 +5,7 @@ using LamSims.Core.Downloading;
 using LamSims.Core.Installing;
 using LamSims.Core.Queueing;
 using LamSims.Core.Settings;
+using LamSims.Core.Unlocking;
 
 namespace LamSims.App;
 
@@ -62,11 +63,21 @@ public static class Composition
 
         var installState = new InstallStateStore(paths.InstallStateDirectory);
 
+        var effectiveDelays = delays ?? new SystemDelayProvider();
+
         var downloader = new SegmentedDownloader(
-            http, downloadPaths, options, RetryOptions.Default, delays ?? new SystemDelayProvider());
+            http, downloadPaths, options, RetryOptions.Default, effectiveDelays);
         var installer = new ZipInstaller(installState);
         var workflow = new PackWorkflow(downloader, installer, downloadPaths);
         var queue = new PackQueue(workflow, downloadPaths);
+
+        // The unlocker must not create its own HttpClient: it fetches over the same one the
+        // catalog and the queue use, so a test that redirects `http` redirects it too.
+        var unlockerHost = new WindowsUnlockerHost();
+        var unlockerAssets = new StaticUnlockerAssetSource(http, downloadPaths);
+        var unlockerBackend = new EaClientUnlockerBackend(
+            unlockerHost, new UnlockerPaths(), paths, effectiveDelays);
+        var unlockerService = new UnlockerService([unlockerBackend]);
 
         return new AppServices(
             paths,
@@ -79,7 +90,10 @@ public static class Composition
             new AvaloniaUiDispatcher(),
             NullPickers.Instance,      // the window replaces this; it owns the TopLevel
             new SystemClock(),
-            commandLineCatalog);
+            commandLineCatalog,
+            unlockerService,
+            unlockerHost,
+            unlockerAssets);
     }
 
     private static bool TryCreate(string root, Action create, List<string> faults)

@@ -46,6 +46,44 @@
         </StackPanel>
       </Expander>
 
+      <!-- Hidden entirely off Windows: no backend reports support, so there is nothing to show and
+           the DockPanel geometry is untouched. The nested DataContext is why the binding sweep
+           has to re-root; without that, every binding below would read as unresolved. -->
+      <Expander Header="DLC Unlocker" DataContext="{Binding Unlocker}"
+                IsVisible="{Binding IsSupported}">
+        <StackPanel Spacing="6">
+          <ItemsControl ItemsSource="{Binding Targets}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate>
+                <Grid ColumnDefinitions="*,Auto,Auto,Auto" ColumnSpacing="8">
+                  <StackPanel Grid.Column="0">
+                    <TextBlock Text="{Binding DisplayName}" />
+                    <TextBlock Text="{Binding ClientPath}" Classes="secondary"
+                               TextTrimming="CharacterEllipsis" />
+                  </StackPanel>
+                  <TextBlock Grid.Column="1" Text="{Binding StatusText}" VerticalAlignment="Center" />
+                  <Button Grid.Column="2" Content="Install" Command="{Binding InstallCommand}" />
+                  <Button Grid.Column="3" Content="Remove" Command="{Binding RemoveCommand}" />
+                </Grid>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+          <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8" IsVisible="{Binding IsBusy}">
+            <TextBlock Grid.Column="0" Text="{Binding CurrentStep}" VerticalAlignment="Center" />
+            <!-- Total is bound, not just Completed: the step-count contract Tasks 7 and 8 prove is
+                 only visible to a user if the bar knows where the end is. -->
+            <ProgressBar Grid.Column="1" Width="120" Minimum="0"
+                         Maximum="{Binding Total}" Value="{Binding Completed}"
+                         VerticalAlignment="Center" />
+            <TextBlock Grid.Column="2" VerticalAlignment="Center"
+                       Text="{Binding Completed}" />
+          </Grid>
+          <Button Content="Restart as administrator"
+                  Command="{Binding RelaunchElevatedCommand}"
+                  IsVisible="{Binding RequiresElevation}" />
+        </StackPanel>
+      </Expander>
+
       <ItemsControl ItemsSource="{Binding Banners}">
         <ItemsControl.ItemTemplate>
           <DataTemplate>
