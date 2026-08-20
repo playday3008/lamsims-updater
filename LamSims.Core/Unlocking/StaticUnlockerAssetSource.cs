@@ -53,7 +53,7 @@ public sealed class StaticUnlockerAssetSource(
         if (File.Exists(cached) && await MatchesAsync(cached, pin.Sha256, ct)) return cached;
 
         paths.EnsureCreated();
-        var temp = cached + ".incoming";
+        var temp = $"{cached}.{Path.GetRandomFileName()}.incoming";
 
         try
         {
@@ -107,6 +107,13 @@ public sealed class StaticUnlockerAssetSource(
 
                     await file.WriteAsync(buffer.AsMemory(0, read), ct);
                 }
+
+                // Flushed to disk before the rename, mirroring AtomicFile.WriteAllBytesAsync:
+                // without this the temp file's bytes can still be sitting in the page cache when
+                // the rename completes, and a power loss between the two can leave a truncated
+                // file at the pinned cache path.
+                await file.FlushAsync(ct);
+                file.Flush(flushToDisk: true);
             }
 
             var actual = await Sha256Verifier.ComputeAsync(temp, ct);

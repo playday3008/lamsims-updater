@@ -95,6 +95,8 @@ public class AtomicFileTests
     [InlineData("")]
     [InlineData("   ")]
     [InlineData("../escape.dll")]
+    [InlineData("..")]
+    [InlineData(".")]
     public void UnlockerAssetFile_rejects_a_name_that_could_escape_root(string name)
     {
         var paths = new DownloadPaths("/downloads");

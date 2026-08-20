@@ -81,9 +81,16 @@ public class EaClientRemoveTests
         var target = await f.TargetAsync();
         await f.InstallAsync(target);
 
+        // An Origin machine may still carry machine.ini from an earlier EA app install.
+        Directory.CreateDirectory(Path.GetDirectoryName(f.Paths.MachineIniFile)!);
+        await File.WriteAllTextAsync(f.Paths.MachineIniFile,
+                                     "[machine]\r\nmachine.bgsstandaloneenabled=0\r\n");
+        var before = await File.ReadAllBytesAsync(f.Paths.MachineIniFile);
+
         Assert.True((await RemoveAsync(f, target)).Success);
 
         Assert.DoesNotContain(f.Host.Calls, c => c.StartsWith("DeleteTask", StringComparison.Ordinal));
+        Assert.Equal(before, await File.ReadAllBytesAsync(f.Paths.MachineIniFile));
     }
 
     [Fact]
@@ -132,6 +139,28 @@ public class EaClientRemoveTests
         Assert.True(result.Success, result.Error);
         Assert.Contains(result.Warnings ?? [], w => w.Contains("autostart"));
         Assert.False(File.Exists(Path.Combine(target.ClientPath, "version.dll")));
+    }
+
+    /// <summary>
+    /// An EA app self-update can delete version.dll on its own, which is why the StagedEADesktop
+    /// copy exists. Step 1 must not read that as "nothing to remove": the install also flipped the
+    /// autostart value and left a backup, and a missing DLL undoes neither.
+    /// </summary>
+    [Fact]
+    public async Task A_dll_that_disappeared_on_its_own_still_gets_autostart_restored()
+    {
+        using var f = new InstallFixture();
+        const string original = @"C:\EA\EADesktop.exe -silent";
+        f.Host.AutostartValues["EADM"] = original;
+        var target = await f.TargetAsync();
+        Assert.True((await f.InstallAsync(target)).Success);
+        File.Delete(Path.Combine(target.ClientPath, "version.dll"));
+
+        var result = await RemoveAsync(f, target);
+
+        Assert.True(result.Success, result.Error);
+        Assert.Equal(original, f.Host.AutostartValues["EADM"]);
+        Assert.False(File.Exists(f.App.UnlockerAutostartBackupFile));
     }
 
     [Fact]
@@ -185,6 +214,95 @@ public class EaClientRemoveTests
 
         Assert.All(f.Reports, r => Assert.Equal(total, r.Total));
         Assert.Equal(total + 1, f.Reports.Count);
+        Assert.Equal(Enumerable.Range(0, total + 1), f.Reports.Select(r => r.Completed));
         Assert.Equal(total, f.Reports[^1].Completed);
+    }
+
+    // A backup that is kept makes step 1 find work on every later run, so removal demands
+    // elevation and stops the client each time while restoring nothing.
+    [Theory]
+    [InlineData("")]
+    [InlineData("null")]
+    [InlineData("{ not json")]
+    [InlineData("{\"Name\":\"EADM\"}")]
+    public async Task A_backup_that_cannot_be_used_is_discarded_so_removal_converges(string content)
+    {
+        using var f = new InstallFixture();
+        f.Host.AutostartValues["EADM"] = @"C:\EA\EADesktop.exe";
+        var target = await f.TargetAsync();
+        Assert.True((await f.InstallAsync(target)).Success);
+        await File.WriteAllTextAsync(f.App.UnlockerAutostartBackupFile, content);
+
+        var result = await RemoveAsync(f, target);
+
+        // Deleting the backup is what makes the second removal below a no-op.
+        Assert.True(result.Success, result.Error);
+        Assert.False(File.Exists(f.App.UnlockerAutostartBackupFile));
+
+        var second = await RemoveAsync(f, target);
+        Assert.True(second.Success, second.Error);
+        Assert.False(second.RequiresElevation);
+    }
+
+    /// <summary>
+    /// The client can re-create its own Run entry between install and removal, with a newer path.
+    /// Restoring the recorded value over it would silently downgrade the user's autostart.
+    /// </summary>
+    [Fact]
+    public async Task A_re_created_autostart_entry_is_not_overwritten_by_the_backup()
+    {
+        using var f = new InstallFixture();
+        f.Host.AutostartValues["EADM"] = @"C:\EA\old\EADesktop.exe";
+        var target = await f.TargetAsync();
+        Assert.True((await f.InstallAsync(target)).Success);
+        const string newer = @"C:\EA\new\EADesktop.exe -silent";
+        f.Host.AutostartValues["EADM"] = newer;
+
+        var result = await RemoveAsync(f, target);
+
+        // The backup is cleared even though the value is left alone, so removal converges.
+        Assert.Equal(newer, f.Host.AutostartValues["EADM"]);
+        Assert.False(File.Exists(f.App.UnlockerAutostartBackupFile));
+        Assert.True(result.Success, result.Error);
+    }
+
+    // With no autostart value there is no backup, and a self-update can delete version.dll, so
+    // the config directory has to be enough on its own for step 1 to find work.
+    [Fact]
+    public async Task The_config_directory_alone_is_enough_to_remove()
+    {
+        using var f = new InstallFixture();
+        var target = await f.TargetAsync();
+        Assert.True((await f.InstallAsync(target)).Success);
+        Assert.False(File.Exists(f.App.UnlockerAutostartBackupFile));
+        File.Delete(Path.Combine(target.ClientPath, "version.dll"));
+        var parent = Directory.GetParent(target.ClientPath)!.FullName;
+
+        Assert.True((await RemoveAsync(f, target)).Success);
+
+        // Either one alone would pass for an early return that happened to leave the other absent.
+        Assert.False(Directory.Exists(f.Paths.ConfigDirectory));
+        Assert.False(Directory.Exists(Path.Combine(parent, "StagedEADesktop")));
+    }
+
+    /// <summary>
+    /// StagedEADesktop is EA's folder, not ours, and upstream only deletes it when empty. Something
+    /// else may legitimately be staged there mid-update; a recursive delete would take it.
+    /// </summary>
+    [Fact]
+    public async Task Foreign_content_in_StagedEADesktop_survives_removal()
+    {
+        using var f = new InstallFixture();
+        var target = await f.TargetAsync();
+        await f.InstallAsync(target);
+        var inner = Path.Combine(Directory.GetParent(target.ClientPath)!.FullName,
+                                 "StagedEADesktop", "EA Desktop");
+        var foreign = Path.Combine(inner, "EADesktop.exe");
+        await File.WriteAllTextAsync(foreign, "not ours");
+
+        Assert.True((await RemoveAsync(f, target)).Success);
+
+        Assert.True(File.Exists(foreign));
+        Assert.False(File.Exists(Path.Combine(inner, "version.dll")));
     }
 }

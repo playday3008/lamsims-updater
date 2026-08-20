@@ -23,7 +23,11 @@ public class IniFlagEditorTests
 
         Assert.True(await IniFlagEditor.AddFlagAsync(path, Flag, CancellationToken.None));
 
-        Assert.Contains(Flag, await File.ReadAllTextAsync(path));
+        // The flag belongs under the section it qualifies, and a "contains" check would also pass
+        // for a line inserted above the header.
+        var lines = (await File.ReadAllTextAsync(path))
+            .Split('\n').Select(l => l.TrimEnd('\r')).Where(l => l.Length > 0).ToList();
+        Assert.Equal(Flag, lines[^1]);
     }
 
     [Fact]

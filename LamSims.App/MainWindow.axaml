@@ -68,15 +68,20 @@
               </DataTemplate>
             </ItemsControl.ItemTemplate>
           </ItemsControl>
-          <Grid ColumnDefinitions="*,Auto,Auto" ColumnSpacing="8" IsVisible="{Binding IsBusy}">
+          <Grid ColumnDefinitions="*,Auto,Auto,Auto,Auto" ColumnSpacing="8" IsVisible="{Binding IsBusy}">
             <TextBlock Grid.Column="0" Text="{Binding CurrentStep}" VerticalAlignment="Center" />
             <!-- Total is bound, not just Completed: the step-count contract Tasks 7 and 8 prove is
                  only visible to a user if the bar knows where the end is. -->
             <ProgressBar Grid.Column="1" Width="120" Minimum="0"
                          Maximum="{Binding Total}" Value="{Binding Completed}"
                          VerticalAlignment="Center" />
+            <!-- The denominator, not just the numerator: Total already reaches the bar's fill, but
+                 without this the text beside it shows "7" where the design shows "7/10". -->
             <TextBlock Grid.Column="2" VerticalAlignment="Center"
                        Text="{Binding Completed}" />
+            <TextBlock Grid.Column="3" VerticalAlignment="Center" Text="/" />
+            <TextBlock Grid.Column="4" VerticalAlignment="Center"
+                       Text="{Binding Total}" />
           </Grid>
           <Button Content="Restart as administrator"
                   Command="{Binding RelaunchElevatedCommand}"

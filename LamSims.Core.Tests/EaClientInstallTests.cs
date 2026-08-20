@@ -69,9 +69,13 @@ public sealed class StubAssetSource(string path) : IUnlockerAssetSource
 {
     public int Calls { get; private set; }
 
+    /// <summary>Set to make the fetch fail the way a refused or unreachable cache does.</summary>
+    public Exception? Throw { get; set; }
+
     public Task<string> GetDllAsync(ClientKind client, CancellationToken ct)
     {
         Calls++;
+        if (Throw is not null) throw Throw;
         return Task.FromResult(path);
     }
 }
@@ -356,5 +360,54 @@ public class EaClientInstallTests
             // Restore before the fixture disposes, or TempDir cannot delete the tree.
             File.SetUnixFileMode(target.ClientPath, unlocked);
         }
+    }
+
+    // UnauthorizedAccessException is not an IOException, so step 2's filter names it separately.
+    // Otherwise a refused download cache escapes past a caller chain that catches nothing.
+    [Fact]
+    public async Task A_refused_asset_cache_fails_the_install_instead_of_escaping()
+    {
+        using var f = new InstallFixture();
+        var target = await f.TargetAsync();
+        var before = f.Snapshot();
+        ((StubAssetSource)f.Assets).Throw =
+            new UnauthorizedAccessException("Access to the path is denied.");
+
+        var result = await f.Backend.InstallAsync(target, f.Assets,
+            new SyncProgress<UnlockerProgress>(f.Reports.Add), CancellationToken.None);
+
+        // The snapshot is checked too: the flag alone would pass for a step that failed after
+        // writing the DLL.
+        Assert.False(result.Success);
+        Assert.Contains("denied", result.Error);
+        Assert.Equal(before, f.Snapshot());
+    }
+
+    // Step 10 records the autostart value before removing it, both halves non-fatal. If the backup
+    // cannot be written the value has to stay, or nothing can restore it later.
+    [Fact]
+    [UnsupportedOSPlatform("windows")]
+    public async Task An_unwritable_backup_leaves_the_autostart_value_alone()
+    {
+        using var f = new InstallFixture();
+        const string original = @"C:\EA\EADesktop.exe";
+        f.Host.AutostartValues["EADM"] = original;
+        var target = await f.TargetAsync();
+
+        var mode = File.GetUnixFileMode(f.App.Root);
+        File.SetUnixFileMode(f.App.Root, UnixFileMode.UserRead | UnixFileMode.UserExecute);
+        UnlockerResult result;
+        try
+        {
+            result = await f.InstallAsync(target);
+        }
+        finally
+        {
+            File.SetUnixFileMode(f.App.Root, mode);
+        }
+
+        Assert.True(result.Success, result.Error);
+        Assert.Contains(result.Warnings ?? [], w => w.Contains("autostart"));
+        Assert.Equal(original, f.Host.AutostartValues["EADM"]);
     }
 }

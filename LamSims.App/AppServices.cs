@@ -7,9 +7,7 @@ using LamSims.Core.Unlocking;
 namespace LamSims.App;
 
 /// <summary>
-/// Everything the shell needs, assembled once. A task must not add a dependency mid-phase: a
-/// constructor that drifts between tasks is a defect this project has already paid for. A new phase
-/// bringing a new subsystem may add one field, deliberately — Phase 4's unlocker is that case.
+/// Everything the shell needs, assembled once.
 /// </summary>
 public sealed record AppServices(
     AppPaths Paths,

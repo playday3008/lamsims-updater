@@ -177,6 +177,43 @@ public class StaticUnlockerAssetSourceTests
     }
 
     /// <summary>
+    /// Two callers racing the same client must both succeed. A fixed temp name lets the loser's
+    /// FileMode.Create/FileShare.None open collide with the winner's still-open file, and the
+    /// loser's catch then unlinks whatever sits at that name, possibly the winner's temp, so both
+    /// fail. A per-call temp name has nothing to collide on.
+    /// </summary>
+    [Fact]
+    public async Task Two_concurrent_fetches_for_the_same_client_both_succeed()
+    {
+        using var dir = new TempDir();
+        var payload = Payload();
+
+        // Without the stall both fetches can serialise on a 4 KB local payload and the test passes
+        // against a fixed temp name too. With it, fetch A still holds its temp open (FileShare.None)
+        // while fetch B opens one, so a shared name collides every run. ReadTimeout must exceed
+        // StallFor or both time out.
+        await using var server = await TestFileServer.StartAsync(payload, new()
+        {
+            StallAfterBytes = 1024,
+            StallFor = TimeSpan.FromMilliseconds(300),
+        });
+        var retry = RetryOptions.Default with { ReadTimeout = TimeSpan.FromSeconds(5) };
+        var (sourceA, paths) = Build(server, dir, payload, retry: retry);
+        var (sourceB, _) = Build(server, dir, payload, retry: retry);
+
+        var results = await Task.WhenAll(
+            sourceA.GetDllAsync(ClientKind.EaApp, CancellationToken.None),
+            sourceB.GetDllAsync(ClientKind.EaApp, CancellationToken.None));
+
+        foreach (var path in results)
+        {
+            Assert.Equal(paths.UnlockerAssetFile("ea_app_version.dll"), path);
+            Assert.Equal(payload, await File.ReadAllBytesAsync(path));
+        }
+        Assert.Empty(Directory.GetFiles(paths.Root, "*.incoming"));
+    }
+
+    /// <summary>
     /// The pins the application ships with, asserted as constants. Fetching them would reach
     /// github.com and would fail the day upstream rotates the asset.
     /// </summary>

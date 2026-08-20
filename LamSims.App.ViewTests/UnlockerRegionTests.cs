@@ -137,6 +137,13 @@ public class UnlockerRegionTests
         var bar = ViewHost.Find<ProgressBar>(host.Window);
         Assert.Equal(5, bar.Maximum);
         Assert.Equal(3, bar.Value);
+
+        // The denominator must reach the UI too: Total already reaches the bar's fill through
+        // Maximum, but the text beside it must not show the numerator alone, or the user sees "3"
+        // where the design shows "3/5".
+        var texts = ProgressRow(host).Children.OfType<TextBlock>().Select(t => t.Text).ToList();
+        Assert.Contains("3", texts);
+        Assert.Contains("5", texts);
     }
 
     [AvaloniaFact]

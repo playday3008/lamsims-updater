@@ -94,31 +94,48 @@ public sealed class WindowsUnlockerHost : IUnlockerHost
         if (key?.GetValue(name) is not null) key.DeleteValue(name);
     }
 
-    public IReadOnlyList<string> RunningClientProcesses(IReadOnlyList<string> processNames) =>
-        Matching(processNames).Select(p => p.ProcessName).Distinct(StringComparer.Ordinal).ToList();
+    public IReadOnlyList<string> RunningClientProcesses(IReadOnlyList<string> processNames)
+    {
+        var matches = Matching(processNames);
+        try
+        {
+            return matches.Select(m => m.Name).Distinct(StringComparer.Ordinal).ToList();
+        }
+        finally
+        {
+            foreach (var (_, process) in matches) process.Dispose();
+        }
+    }
 
     public IReadOnlyList<string> KillClientProcesses(IReadOnlyList<string> processNames,
                                                     TimeSpan perProcessTimeout)
     {
         var survivors = new List<string>();
 
-        foreach (var process in Matching(processNames))
+        foreach (var (name, process) in Matching(processNames))
         {
             using (process)
             {
                 try
                 {
-                    process.Kill(entireProcessTree: true);
+                    // Not the process tree. The tree is whatever the client launched, and for the
+                    // EA app that includes the running game, so only the exactly named processes
+                    // are killed.
+                    process.Kill();
 
                     // The wait result is kept: a client that outlives its timeout still holds the
                     // client directory open, and the caller has to know that now.
                     if (!process.WaitForExit((int)perProcessTimeout.TotalMilliseconds))
-                        survivors.Add(process.ProcessName);
+                        survivors.Add(name);
                 }
-                catch (Exception e) when (e is InvalidOperationException or SystemException)
+                catch (Exception e) when (e is InvalidOperationException or SystemException
+                                              or AggregateException)
                 {
-                    // Already gone between enumeration and kill, or not ours to kill.
-                    if (!process.HasExited) survivors.Add(process.ProcessName);
+                    // Already gone between enumeration and kill, or not ours to kill. The probe needs
+                    // a guard of its own: it reads the process handle and can throw in turn, and an
+                    // exception raised inside a catch body is not filtered by that catch, so it
+                    // would leave the host entirely, past a caller chain that catches nothing.
+                    if (!HasExited(process)) survivors.Add(name);
                 }
             }
         }
@@ -126,14 +143,29 @@ public sealed class WindowsUnlockerHost : IUnlockerHost
         return survivors.Distinct(StringComparer.Ordinal).ToList();
     }
 
-    // Exact-name lookup only. The name set is the backend's (spec §4.2), so this file holds no
-    // policy at all — which is what makes it safe to ship without tests.
-    private static List<Process> Matching(IReadOnlyList<string> processNames) =>
+    /// <summary>Fails closed: a probe that cannot answer is treated as "still running", so the
+    /// install refuses rather than writing into a directory the client may still hold open.</summary>
+    private static bool HasExited(Process process)
+    {
+        try { return process.HasExited; }
+        catch (Exception e) when (e is InvalidOperationException or SystemException) { return false; }
+    }
+
+    // Exact-name lookup only; the name set belongs to the backend, so this file holds no policy.
+    // The name travels beside the handle because Process.ProcessName throws once the process has
+    // exited, which is exactly the moment the kill path needs to name it.
+    private static List<(string Name, Process Process)> Matching(IReadOnlyList<string> processNames) =>
         processNames
             .SelectMany(name =>
             {
-                try { return Process.GetProcessesByName(name); }
-                catch (InvalidOperationException) { return []; }
+                try
+                {
+                    return Process.GetProcessesByName(name).Select(p => (Name: name, Process: p));
+                }
+                catch (InvalidOperationException)
+                {
+                    return Enumerable.Empty<(string Name, Process Process)>();
+                }
             })
             .ToList();
 
@@ -141,25 +173,48 @@ public sealed class WindowsUnlockerHost : IUnlockerHost
     {
         if (!OperatingSystem.IsWindows()) return;
 
-        // schtasks rather than dahall's TaskScheduler package: a single delete is all that remains
-        // once the port stops creating the task, and this keeps the phase at zero new dependencies.
+        // schtasks rather than a task-scheduler package: a single delete is all that is needed, and
+        // it adds no dependency.
+        //
+        // Queried before deleted, because /Delete's exit code cannot tell "there was no task", the
+        // normal case here, from "you may not touch it", and its messages are localised. /Query
+        // settles the first question on its exit code alone, so a /Delete that fails afterwards is a
+        // real refusal, and the caller turns it into a warning rather than reporting a removal that
+        // did not happen.
+        if (Run("/Query", "/TN", name) != 0) return;
+        if (Run("/Delete", "/TN", name, "/F") != 0)
+            throw new IOException($"The '{name}' scheduled task exists but could not be deleted.");
+    }
+
+    /// <summary>schtasks' exit code, or a non-zero stand-in when it could not be started or outlived
+    /// its timeout. Every caller reads non-zero as "this did not happen".</summary>
+    private static int Run(params string[] arguments)
+    {
+        var info = new ProcessStartInfo("schtasks.exe")
+        {
+            UseShellExecute = false,
+            CreateNoWindow = true,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+        };
+        foreach (var argument in arguments) info.ArgumentList.Add(argument);
+
         try
         {
-            using var process = Process.Start(new ProcessStartInfo("schtasks.exe")
-            {
-                ArgumentList = { "/Delete", "/TN", name, "/F" },
-                UseShellExecute = false,
-                CreateNoWindow = true,
-                RedirectStandardOutput = true,
-                RedirectStandardError = true,
-            });
+            using var process = Process.Start(info);
+            if (process is null) return -1;
 
-            // A non-zero exit means the task was absent, which is the normal case and not an error.
-            process?.WaitForExit(10_000);
+            // Redirected streams have to be drained or the child blocks once a pipe buffer fills.
+            // One task's worth of output cannot fill either buffer, so reading them in turn is safe
+            // here in a way it would not be for an unbounded command.
+            process.StandardOutput.ReadToEnd();
+            process.StandardError.ReadToEnd();
+
+            return process.WaitForExit(10_000) ? process.ExitCode : -1;
         }
         catch (Exception e) when (e is System.ComponentModel.Win32Exception or InvalidOperationException)
         {
-            // Nothing to do: the caller treats this step as non-fatal.
+            return -1;
         }
     }
 
@@ -175,11 +230,22 @@ public sealed class WindowsUnlockerHost : IUnlockerHost
             // "runas" raises the UAC prompt. A declined prompt throws Win32Exception with
             // ERROR_CANCELLED (1223), which is a false return and not a failure: the caller must
             // stay running, because it has not shut anything down yet.
-            using var started = Process.Start(new ProcessStartInfo(exe)
+            var info = new ProcessStartInfo(exe)
             {
                 UseShellExecute = true,
                 Verb = "runas",
-            });
+
+                // Elevated ShellExecute does not reliably inherit the current directory, and the
+                // arguments below can name paths relative to it.
+                WorkingDirectory = Environment.CurrentDirectory,
+            };
+
+            // Forwarded, or the elevated instance comes up without the command-line catalog that
+            // outranks every other source, landing the user in a differently configured app.
+            foreach (var argument in Environment.GetCommandLineArgs().Skip(1))
+                info.ArgumentList.Add(argument);
+
+            using var started = Process.Start(info);
             return started is not null;
         }
         catch (System.ComponentModel.Win32Exception)

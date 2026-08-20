@@ -135,8 +135,12 @@ public sealed partial class EaClientUnlockerBackend(
         {
             dll = await assets.GetDllAsync(target.Client, ct);
         }
+        // UnauthorizedAccessException does not derive from IOException, and the asset source writes
+        // into a cache directory the user can point anywhere, so a refused cache is an ordinary
+        // failure of this step rather than a fault that should escape the operation.
         catch (Exception e) when (e is UnlockerAssetMismatchException or HttpRequestException
-                                       or IOException or SizeMismatchException)
+                                       or IOException or SizeMismatchException
+                                       or UnauthorizedAccessException)
         {
             return UnlockerResult.Fail(e.Message);
         }
@@ -313,10 +317,17 @@ public sealed partial class EaClientUnlockerBackend(
         var warnings = new List<string>();
 
         // Step 1, before the elevation check on purpose: a machine with nothing installed must not
-        // raise a UAC prompt to tell the user there is nothing to do.
+        // raise a UAC prompt to tell the user there is nothing to do. "Nothing installed" is not
+        // just an absent DLL, because an EA app self-update can delete it on its own (which is why
+        // the StagedEADesktop copy exists) and install also flipped the autostart value and wrote a
+        // backup. Any of those three surviving means there is still something to undo, or removal
+        // early-returns having restored nothing and the user's autostart stays broken.
         steps.Begin("Checking what is installed");
         var installed = Path.Combine(target.ClientPath, DllName);
-        if (!File.Exists(installed))
+        var somethingToRemove = File.Exists(installed)
+            || File.Exists(appPaths.UnlockerAutostartBackupFile)
+            || Directory.Exists(paths.ConfigDirectory);
+        if (!somethingToRemove)
         {
             steps.Done();
             steps.Finish("Nothing to remove");
@@ -363,7 +374,12 @@ public sealed partial class EaClientUnlockerBackend(
         steps.Begin($"Removing {DllName}");
         try
         {
-            File.Delete(installed);
+            // Guarded rather than bare: the probe above also proceeds when only the autostart backup
+            // survives, and in that case the client directory may be gone entirely. Windows'
+            // File.Delete raises DirectoryNotFoundException, an IOException, for a missing
+            // DIRECTORY though not for a missing file, which would fail this fatal step and leave
+            // the autostart unrestored.
+            if (File.Exists(installed)) File.Delete(installed);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
@@ -419,15 +435,42 @@ public sealed partial class EaClientUnlockerBackend(
             var backupFile = appPaths.UnlockerAutostartBackupFile;
             if (File.Exists(backupFile))
             {
-                var backup = System.Text.Json.JsonSerializer.Deserialize<AutostartBackup>(
-                    await File.ReadAllTextAsync(backupFile, ct));
+                AutostartBackup? backup;
+                try
+                {
+                    backup = System.Text.Json.JsonSerializer.Deserialize<AutostartBackup>(
+                        await File.ReadAllTextAsync(backupFile, ct));
+                }
+                catch (System.Text.Json.JsonException e)
+                {
+                    // An unreadable backup cannot restore anything, and leaving it on disk would
+                    // keep step 1 finding something to remove for ever, so every later removal
+                    // would demand elevation, stop the client and restore nothing.
+                    backup = null;
+                    warnings.Add($"The autostart backup could not be read, so it was discarded: {e.Message}");
+                }
 
-                if (backup is not null) host.WriteAutostartValue(backup.Name, backup.Value);
+                if (string.IsNullOrEmpty(backup?.Name) || backup.Value is null)
+                {
+                    if (backup is not null)
+                        warnings.Add("The autostart backup was incomplete, so it was discarded.");
+                }
+                // Only when the slot is still empty. The client can re-create its own Run entry with
+                // a newer path between install and removal, and restoring the recorded value over
+                // that would downgrade the user's autostart to a stale command line.
+                else if (host.ReadAutostartValue(backup.Name) is null)
+                {
+                    host.WriteAutostartValue(backup.Name, backup.Value);
+                }
+                else
+                {
+                    warnings.Add("The autostart entry had been re-created, so it was left as it is.");
+                }
+
                 File.Delete(backupFile);
             }
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException
-                                      or System.Text.Json.JsonException
                                       or System.Security.SecurityException)
         {
             warnings.Add($"The autostart entry could not be restored: {e.Message}");
