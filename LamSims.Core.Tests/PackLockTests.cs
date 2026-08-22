@@ -70,6 +70,9 @@ public class PackLockTests
     [UnsupportedOSPlatform("windows")]
     public void A_root_that_cannot_be_written_throws_rather_than_reporting_contention()
     {
+        // ReadOnlyDir locks the directory via File.SetUnixFileMode, which does not exist on Windows.
+        if (OperatingSystem.IsWindows()) return;
+
         using var temp = new TempDir();
         using var locked = new ReadOnlyDir(temp.Path);
         var paths = new DownloadPaths(locked.Child);

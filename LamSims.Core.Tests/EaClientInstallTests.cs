@@ -392,6 +392,9 @@ public class EaClientInstallTests
     [UnsupportedOSPlatform("windows")]
     public async Task An_unwritable_backup_leaves_the_autostart_value_alone()
     {
+        // File.SetUnixFileMode, used below to lock the backup directory, does not exist on Windows.
+        if (OperatingSystem.IsWindows()) return;
+
         using var f = new InstallFixture();
         const string original = @"C:\EA\EADesktop.exe";
         f.Host.Autostart("EADM", original);
