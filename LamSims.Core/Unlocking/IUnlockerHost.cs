@@ -1,3 +1,6 @@
+using System;
+using System.Collections.Generic;
+
 namespace LamSims.Core.Unlocking;
 
 public enum ClientRegistryKey { EaDesktop, OriginWow6432, Origin }

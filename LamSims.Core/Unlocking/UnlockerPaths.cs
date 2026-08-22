@@ -1,3 +1,6 @@
+using System;
+using System.IO;
+
 namespace LamSims.Core.Unlocking;
 
 /// <summary>

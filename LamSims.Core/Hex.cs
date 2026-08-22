@@ -1,3 +1,6 @@
+using System;
+using System.Linq;
+
 namespace LamSims.Core;
 
 internal static class Hex

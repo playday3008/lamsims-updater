@@ -1,8 +1,10 @@
+using LamSims.Core.Scanning;
+using System.Linq;
+using Xunit;
 using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
 using Avalonia.Media;
 using Avalonia.VisualTree;
-using LamSims.Core.Scanning;
 
 namespace LamSims.App.ViewTests;
 

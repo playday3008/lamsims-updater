@@ -1,3 +1,7 @@
+using System;
+using System.IO;
+using System.Threading;
+using System.Threading.Tasks;
 using System.Security.Cryptography;
 
 namespace LamSims.Core.Downloading;

@@ -1,3 +1,11 @@
+using LamSims.Core.Queueing;
+using LamSims.Core.Scanning;
+using System;
+using System.IO;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+using Xunit;
 using LamSims.App.Services;
 using LamSims.App.ViewModels;
 using LamSims.Core.Downloading;

@@ -1,3 +1,6 @@
+using System;
+using System.IO;
+using System.Threading;
 using System.Runtime.CompilerServices;
 using LamSims.Core.Downloading;
 using LamSims.Core.Queueing;

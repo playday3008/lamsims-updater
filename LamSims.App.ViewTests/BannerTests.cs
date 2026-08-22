@@ -1,3 +1,5 @@
+using System.Linq;
+using Xunit;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless.XUnit;

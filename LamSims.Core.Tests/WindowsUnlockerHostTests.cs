@@ -1,3 +1,5 @@
+using System;
+using Xunit;
 using System.Runtime.Versioning;
 using LamSims.Core.Unlocking;
 using Microsoft.Win32;

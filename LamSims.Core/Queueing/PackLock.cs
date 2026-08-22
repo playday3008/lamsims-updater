@@ -1,3 +1,5 @@
+using System;
+using System.IO;
 using LamSims.Core.Downloading;
 
 namespace LamSims.Core.Queueing;

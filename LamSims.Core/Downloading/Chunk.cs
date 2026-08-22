@@ -1,3 +1,6 @@
+using System;
+using System.Collections.Generic;
+
 namespace LamSims.Core.Downloading;
 
 /// <summary>A contiguous byte range of the archive, fetched by a single request.</summary>

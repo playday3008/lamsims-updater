@@ -1,3 +1,8 @@
+using LamSims.Core.Queueing;
+using LamSims.Core.Scanning;
+using System;
+using System.IO;
+using Xunit;
 using LamSims.App.ViewModels;
 
 namespace LamSims.App.Tests;

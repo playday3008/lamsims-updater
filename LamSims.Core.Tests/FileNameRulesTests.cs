@@ -1,3 +1,5 @@
+using System;
+using Xunit;
 using LamSims.Core;
 using LamSims.Core.Catalogs;
 using LamSims.Core.Downloading;

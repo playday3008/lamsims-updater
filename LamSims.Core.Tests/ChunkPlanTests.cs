@@ -1,3 +1,6 @@
+using System;
+using System.Linq;
+using Xunit;
 using LamSims.Core.Downloading;
 
 namespace LamSims.Core.Tests;

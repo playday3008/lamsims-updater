@@ -1,3 +1,4 @@
+using System;
 using LamSims.Core.Downloading;
 
 namespace LamSims.Core.Settings;

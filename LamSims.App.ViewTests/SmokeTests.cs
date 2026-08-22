@@ -1,3 +1,4 @@
+using Xunit;
 using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
 

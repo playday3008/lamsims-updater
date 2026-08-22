@@ -1,3 +1,7 @@
+using System;
+using System.IO;
+using System.Threading.Tasks;
+using Xunit;
 using System.Runtime.Versioning;
 using LamSims.Core.Downloading;
 using LamSims.Core.Queueing;

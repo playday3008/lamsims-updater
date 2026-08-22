@@ -1,3 +1,6 @@
+using System;
+using System.Linq;
+using Xunit;
 using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
 using Avalonia.VisualTree;

@@ -1,3 +1,7 @@
+using System;
+using System.Collections.Generic;
+using System.Linq;
+
 namespace LamSims.Core.Downloading;
 
 /// <summary>A chunk already on disk, and the mirror that served it.</summary>

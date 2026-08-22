@@ -1,3 +1,6 @@
+using System.Linq;
+using System.Threading.Tasks;
+using Xunit;
 using System.Collections.Concurrent;
 using LamSims.Core.Downloading;
 

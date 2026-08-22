@@ -1,9 +1,10 @@
+using LamSims.Core.Queueing;
+using Xunit;
 using Avalonia.Controls;
 using Avalonia.Controls.Presenters;
 using Avalonia.Controls.Primitives;
 using Avalonia.Headless.XUnit;
 using Avalonia.Media;
-using LamSims.Core.Queueing;
 
 namespace LamSims.App.ViewTests;
 

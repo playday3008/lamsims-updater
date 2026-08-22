@@ -1,3 +1,8 @@
+using LamSims.Core.Catalogs;
+using System;
+using System.Collections.Generic;
+using System.Threading;
+using System.Threading.Tasks;
 using LamSims.Core;
 using LamSims.Core.Downloading;
 using LamSims.Core.Installing;

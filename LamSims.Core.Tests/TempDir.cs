@@ -1,3 +1,5 @@
+using System;
+using System.IO;
 using System.Runtime.Versioning;
 
 namespace LamSims.Core.Tests;

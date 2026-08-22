@@ -1,3 +1,5 @@
+using LamSims.Core.Scanning;
+using Xunit;
 using LamSims.App.ViewModels;
 
 namespace LamSims.App.Tests;

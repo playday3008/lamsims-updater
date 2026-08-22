@@ -1,3 +1,5 @@
+using System.IO;
+
 namespace LamSims.Core.Downloading;
 
 public sealed class InsufficientDiskSpaceException : IOException

@@ -1,3 +1,6 @@
+using System;
+using System.IO;
+using Xunit;
 using LamSims.Core.Settings;
 
 namespace LamSims.Core.Tests;

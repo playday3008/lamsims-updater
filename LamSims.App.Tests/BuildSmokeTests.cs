@@ -1,3 +1,6 @@
+using System.Threading.Tasks;
+using Xunit;
+
 namespace LamSims.App.Tests;
 
 public class BuildSmokeTests

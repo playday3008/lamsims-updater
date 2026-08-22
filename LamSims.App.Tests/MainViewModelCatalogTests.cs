@@ -1,3 +1,12 @@
+using LamSims.Core.Catalogs;
+using LamSims.Core.Queueing;
+using LamSims.Core.Scanning;
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Threading;
+using System.Threading.Tasks;
+using Xunit;
 using LamSims.App.ViewModels;
 
 namespace LamSims.App.Tests;

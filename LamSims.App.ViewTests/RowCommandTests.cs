@@ -1,3 +1,8 @@
+using LamSims.Core.Queueing;
+using LamSims.Core.Scanning;
+using System;
+using System.Linq;
+using Xunit;
 using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
 

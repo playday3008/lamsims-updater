@@ -1,3 +1,5 @@
+using System.Collections.Generic;
+using Xunit;
 using System.Xml.Linq;
 
 namespace LamSims.App.Tests;

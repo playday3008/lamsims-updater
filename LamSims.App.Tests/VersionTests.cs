@@ -1,3 +1,5 @@
+using System;
+using Xunit;
 using LamSims.App.ViewModels;
 
 namespace LamSims.App.Tests;

@@ -1,3 +1,5 @@
+using System;
+
 namespace LamSims.App.Services;
 
 public interface IUiDispatcher

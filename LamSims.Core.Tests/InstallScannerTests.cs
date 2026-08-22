@@ -1,3 +1,10 @@
+using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
+using Xunit;
 using System.Runtime.Versioning;
 using LamSims.Core.Catalogs;
 using LamSims.Core.Installing;

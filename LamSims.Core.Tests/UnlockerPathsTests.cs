@@ -1,3 +1,6 @@
+using System;
+using System.IO;
+using Xunit;
 using LamSims.Core.Settings;
 using LamSims.Core.Unlocking;
 
