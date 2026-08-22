@@ -24,6 +24,11 @@ public class DiskSpaceTests
     [Fact]
     public void Measures_the_mount_holding_the_path_not_the_os_root()
     {
+        // Unix-only by construction: "/" is the OS root here, and DriveInfo rejects it on
+        // Windows, where the equivalent question is answered by
+        // PlatformSemanticsTests.DriveInfo_normalises_a_directory_to_its_volume_root.
+        if (OperatingSystem.IsWindows()) return;
+
         // Path.GetPathRoot returns "/" for every absolute path on Unix, so measuring the
         // path root would silently report the OS filesystem for a downloads directory on
         // any other mount. Skipped on machines with only one mount, where the two agree.

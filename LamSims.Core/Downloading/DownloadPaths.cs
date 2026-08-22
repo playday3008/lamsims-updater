@@ -1,3 +1,7 @@
+using System;
+using System.IO;
+using LamSims.Core;
+
 namespace LamSims.Core.Downloading;
 
 /// <summary>
@@ -48,12 +52,18 @@ public sealed class DownloadPaths
     {
         if (string.IsNullOrWhiteSpace(code))
             throw new ArgumentException("Pack code must not be blank.", nameof(code));
-        if (code.AsSpan().IndexOfAny(Path.GetInvalidFileNameChars()) >= 0)
+        if (FileNameRules.HasInvalidCharacter(code))
             throw new ArgumentException($"Pack code '{code}' contains path characters.", nameof(code));
         // "." and ".." carry no invalid filename character, so the check above lets them through
         // and Path.Combine resolves them to Root itself or to its parent.
         if (code is "." or "..")
             throw new ArgumentException($"Pack code '{code}' is a directory reference.", nameof(code));
+        if (FileNameRules.IsReservedDeviceName(code))
+            throw new ArgumentException(
+                $"Pack code '{code}' is a reserved device name.", nameof(code));
+        if (FileNameRules.HasTrailingDotOrSpace(code))
+            throw new ArgumentException(
+                $"Pack code '{code}' ends with a dot or a space.", nameof(code));
         return code;
     }
 }

@@ -103,14 +103,18 @@ public static class CatalogParser
             throw new InvalidEntryException("The entry is not a JSON object.");
 
         var code = RequiredString(element, "code");
-        if (code.AsSpan().IndexOfAny(Path.GetInvalidFileNameChars()) >= 0
+        if (FileNameRules.HasInvalidCharacter(code)
             || code.Contains(Path.DirectorySeparatorChar)
             || code.Contains(Path.AltDirectorySeparatorChar)
-            || code is "." or "..")
+            || code is "." or ".."
+            || FileNameRules.IsReservedDeviceName(code)
+            || FileNameRules.HasTrailingDotOrSpace(code))
         {
-            // The code names files on disk, so a code carrying path characters is a path
-            // traversal in a file the application downloads by itself.
-            throw new InvalidEntryException($"The 'code' value '{code}' contains path characters.");
+            // The code names files on disk: path characters allow traversal outside the
+            // download directory, a reserved device name redirects the write to hardware
+            // instead of a file, and a trailing dot or space collides with the same code
+            // stripped of it once Windows normalizes the path.
+            throw new InvalidEntryException($"The 'code' value '{code}' is not a usable file name.");
         }
 
         var name = RequiredString(element, "name");
@@ -190,8 +194,10 @@ public static class CatalogParser
         {
             var name = candidate.ValueKind == JsonValueKind.String ? candidate.GetString() : null;
 
-            if (string.IsNullOrWhiteSpace(name) || name.AsSpan().IndexOfAny(Path.GetInvalidFileNameChars()) >= 0
-                || name is "." or "..")
+            if (string.IsNullOrWhiteSpace(name) || FileNameRules.HasInvalidCharacter(name)
+                || name is "." or ".."
+                || FileNameRules.IsReservedDeviceName(name)
+                || FileNameRules.HasTrailingDotOrSpace(name))
             {
                 throw new InvalidEntryException($"The installDirs value '{name}' is not a plain directory name.");
             }

@@ -147,7 +147,7 @@ public class CatalogParserTests
         var result = CatalogParser.Parse(Json(Pack(code: "..")));
 
         Assert.Empty(result.Catalog.Packs);
-        Assert.Contains("path characters", Assert.Single(result.Rejected).Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("not a usable file name", Assert.Single(result.Rejected).Reason, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]
@@ -156,7 +156,7 @@ public class CatalogParserTests
         var result = CatalogParser.Parse(Json(Pack(code: ".")));
 
         Assert.Empty(result.Catalog.Packs);
-        Assert.Contains("path characters", Assert.Single(result.Rejected).Reason, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("not a usable file name", Assert.Single(result.Rejected).Reason, StringComparison.OrdinalIgnoreCase);
     }
 
     [Fact]

@@ -4,13 +4,19 @@ namespace LamSims.Core.Tests;
 
 public class AppPathsTests
 {
+    // The expected path is spelled out rather than reusing AppPaths' own expression: on Unix,
+    // ApplicationData follows XDG_CONFIG_HOME when set and falls back to ~/.config.
     [Fact]
-    public void Defaults_under_the_application_data_directory()
+    public void Defaults_under_the_users_config_directory()
     {
         var paths = new AppPaths();
+        var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        var xdg = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
 
-        var expected = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "lamsims-updater");
+        var expected = OperatingSystem.IsWindows()
+            ? Path.Combine(home, "AppData", "Roaming", "lamsims-updater")
+            : Path.Combine(string.IsNullOrEmpty(xdg) ? Path.Combine(home, ".config") : xdg,
+                           "lamsims-updater");
 
         Assert.Equal(expected, paths.Root);
     }
