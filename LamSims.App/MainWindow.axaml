@@ -55,36 +55,57 @@
       <Expander Header="DLC Unlocker" DataContext="{Binding Unlocker}"
                 IsVisible="{Binding IsSupported}">
         <StackPanel Spacing="6">
+          <Grid ColumnDefinitions="Auto,Auto,*" ColumnSpacing="8">
+            <Button Grid.Column="0" Content="Select all"
+                    Command="{Binding SelectAllCommand}" />
+            <Button Grid.Column="1" Content="Select none"
+                    Command="{Binding SelectNoneCommand}" />
+          </Grid>
           <ItemsControl ItemsSource="{Binding Targets}">
             <ItemsControl.ItemTemplate>
               <DataTemplate>
-                <Grid ColumnDefinitions="*,Auto,Auto,Auto" ColumnSpacing="8">
-                  <StackPanel Grid.Column="0">
-                    <TextBlock Text="{Binding DisplayName}" />
+                <Grid ColumnDefinitions="Auto,*,Auto" ColumnSpacing="8">
+                  <CheckBox Grid.Column="0" IsChecked="{Binding IsSelected}"
+                            IsEnabled="{Binding !IsBusy}" VerticalAlignment="Center" />
+                  <StackPanel Grid.Column="1">
+                    <!-- Title, not DisplayName: one flat property so the binding sweep can
+                         resolve it, and it is where the environment appears off Windows. -->
+                    <TextBlock Text="{Binding Title}" TextTrimming="CharacterEllipsis" />
                     <TextBlock Text="{Binding ClientPath}" Classes="secondary"
                                TextTrimming="CharacterEllipsis" />
+                    <!-- Per row rather than a banner: banners key by id, so a batch's warnings
+                         would collapse to whichever target reported last. -->
+                    <TextBlock Text="{Binding Warning}" Classes="secondary" TextWrapping="Wrap"
+                               IsVisible="{Binding Warning, Converter={x:Static ObjectConverters.IsNotNull}}" />
                   </StackPanel>
-                  <TextBlock Grid.Column="1" Text="{Binding StatusText}" VerticalAlignment="Center" />
-                  <Button Grid.Column="2" Content="Install" Command="{Binding InstallCommand}" />
-                  <Button Grid.Column="3" Content="Remove" Command="{Binding RemoveCommand}" />
+                  <!-- Trimmed: a failed operation puts its error message here. -->
+                  <TextBlock Grid.Column="2" Text="{Binding StatusText}" MaxWidth="220"
+                             TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
                 </Grid>
               </DataTemplate>
             </ItemsControl.ItemTemplate>
           </ItemsControl>
-          <Grid ColumnDefinitions="*,Auto,Auto,Auto,Auto" ColumnSpacing="8" IsVisible="{Binding IsBusy}">
-            <TextBlock Grid.Column="0" Text="{Binding CurrentStep}" VerticalAlignment="Center" />
-            <!-- Total is bound, not just Completed: the step-count contract Tasks 7 and 8 prove is
+          <Grid ColumnDefinitions="Auto,Auto,*" ColumnSpacing="8">
+            <Button Grid.Column="0" Content="Install selected"
+                    Command="{Binding InstallSelectedCommand}" />
+            <Button Grid.Column="1" Content="Remove selected"
+                    Command="{Binding RemoveSelectedCommand}" />
+          </Grid>
+          <Grid ColumnDefinitions="Auto,*,Auto,Auto,Auto,Auto" ColumnSpacing="8"
+                IsVisible="{Binding IsBusy}">
+            <TextBlock Grid.Column="0" Text="{Binding BatchPosition}" Classes="secondary"
+                       VerticalAlignment="Center" />
+            <TextBlock Grid.Column="1" Text="{Binding CurrentStep}" VerticalAlignment="Center" />
+            <!-- Total is bound, not just Completed: the step count each operation publishes is
                  only visible to a user if the bar knows where the end is. -->
-            <ProgressBar Grid.Column="1" Width="120" Minimum="0"
+            <ProgressBar Grid.Column="2" Width="120" Minimum="0"
                          Maximum="{Binding Total}" Value="{Binding Completed}"
                          VerticalAlignment="Center" />
-            <!-- The denominator, not just the numerator: Total already reaches the bar's fill, but
-                 without this the text beside it shows "7" where the design shows "7/10". -->
-            <TextBlock Grid.Column="2" VerticalAlignment="Center"
-                       Text="{Binding Completed}" />
-            <TextBlock Grid.Column="3" VerticalAlignment="Center" Text="/" />
-            <TextBlock Grid.Column="4" VerticalAlignment="Center"
-                       Text="{Binding Total}" />
+            <!-- The denominator, not just the numerator: Total already reaches the bar's fill,
+                 but without this the text beside it shows "7" where the design shows "7/10". -->
+            <TextBlock Grid.Column="3" VerticalAlignment="Center" Text="{Binding Completed}" />
+            <TextBlock Grid.Column="4" VerticalAlignment="Center" Text="/" />
+            <TextBlock Grid.Column="5" VerticalAlignment="Center" Text="{Binding Total}" />
           </Grid>
           <Button Content="Restart as administrator"
                   Command="{Binding RelaunchElevatedCommand}"

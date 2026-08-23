@@ -12,7 +12,7 @@ namespace LamSims.App.ViewTests;
 /// <summary>
 /// The DLC Unlocker region. Every case below EXECUTES a command and reads what it reached, rather
 /// than checking a Command's bound name, which is the only way to catch an
-/// InstallCommand/RemoveCommand swap.
+/// InstallSelectedCommand/RemoveSelectedCommand swap.
 /// </summary>
 public class UnlockerRegionTests
 {
@@ -49,12 +49,6 @@ public class UnlockerRegionTests
         return host;
     }
 
-    private static Button RowButton(ViewHost host, UnlockerTarget target, string content) =>
-        ViewHost.Find<Button>(host.Window, b =>
-            b.Content as string == content
-            && b.DataContext is UnlockerTargetViewModel row
-            && row.ClientPath == target.ClientPath);
-
     private static Grid ProgressRow(ViewHost host) =>
         ViewHost.Find<Grid>(host.Window, g => g.Children.OfType<ProgressBar>().Any());
 
@@ -76,8 +70,9 @@ public class UnlockerRegionTests
     {
         var target = Target("/clients/origin", "Origin", ClientKind.Origin);
         using var host = ShowExpanded(out var backend, target);
+        host.ViewModel.Unlocker.Targets[0].IsSelected = true;
 
-        RowButton(host, target, "Install").Command!.Execute(null);
+        ViewHost.Find<Button>(host.Window, b => b.Content as string == "Install selected").Command!.Execute(null);
         Assert.True(ViewHost.PumpUntil(() => !host.ViewModel.Unlocker.IsBusy),
             "the install never finished: " + string.Join(",", backend.Calls));
 
@@ -91,8 +86,9 @@ public class UnlockerRegionTests
     {
         var target = Target("/clients/origin", "Origin", ClientKind.Origin);
         using var host = ShowExpanded(out var backend, target);
+        host.ViewModel.Unlocker.Targets[0].IsSelected = true;
 
-        RowButton(host, target, "Remove").Command!.Execute(null);
+        ViewHost.Find<Button>(host.Window, b => b.Content as string == "Remove selected").Command!.Execute(null);
         Assert.True(ViewHost.PumpUntil(() => !host.ViewModel.Unlocker.IsBusy),
             "the remove never finished: " + string.Join(",", backend.Calls));
 
@@ -100,10 +96,32 @@ public class UnlockerRegionTests
         Assert.DoesNotContain("Install:/clients/origin", backend.Calls);
     }
 
+    // Every other test in this file sets IsSelected/IsBusy on the view model directly and never
+    // touches the checkbox itself, so nothing else would notice IsChecked="{Binding IsSelected}"
+    // or IsEnabled="{Binding !IsBusy}" being deleted from the template. This drives the CONTROL,
+    // both directions, so a deleted binding fails here instead of shipping silently.
+    [AvaloniaFact]
+    public void The_row_checkbox_binds_its_selection_and_its_enabled_state()
+    {
+        var target = Target("/clients/origin", "Origin", ClientKind.Origin);
+        using var host = ShowExpanded(out _, target);
+        var row = host.ViewModel.Unlocker.Targets[0];
+        var box = host.Window.GetVisualDescendants().OfType<CheckBox>()
+            .First(c => c.DataContext is UnlockerTargetViewModel r && r.ClientPath == target.ClientPath);
+
+        box.IsChecked = true;
+        host.Pump();
+        Assert.True(row.IsSelected);
+
+        row.IsBusy = true;
+        host.Pump();
+        Assert.False(box.IsEnabled);
+    }
+
     /// <summary>
     /// Sets the view model's own progress fields directly rather than driving a real operation:
-    /// UnlockerViewModelTests already proves RunAsync populates them correctly from a backend, so
-    /// this only needs to prove the XAML binds to them.
+    /// UnlockerViewModelTests already proves RunBatchAsync populates them correctly from a
+    /// backend, so this only needs to prove the XAML binds to them.
     /// </summary>
     [AvaloniaFact]
     public void The_progress_line_appears_while_busy_and_shows_the_current_step()
@@ -159,7 +177,8 @@ public class UnlockerRegionTests
         Assert.False(button.IsVisible);
 
         backend.NextResult = UnlockerResult.NeedsElevation();
-        RowButton(host, target, "Install").Command!.Execute(null);
+        host.ViewModel.Unlocker.Targets[0].IsSelected = true;
+        ViewHost.Find<Button>(host.Window, b => b.Content as string == "Install selected").Command!.Execute(null);
         Assert.True(ViewHost.PumpUntil(() => !host.ViewModel.Unlocker.IsBusy));
 
         Assert.True(button.IsVisible);
@@ -176,11 +195,10 @@ public class UnlockerRegionTests
         var second = Target("/clients/origin", "Origin", ClientKind.Origin);
         using var host = ShowExpanded(out _, first, second);
 
-        var installButtons = host.Window.GetVisualDescendants().OfType<Button>()
-            .Where(b => b.Content as string == "Install")
-            .ToList();
+        var boxes = host.Window.GetVisualDescendants().OfType<CheckBox>()
+            .Where(c => c.DataContext is UnlockerTargetViewModel).ToList();
 
-        Assert.Equal(2, installButtons.Count);
+        Assert.Equal(2, boxes.Count);
     }
 
     /// <summary>

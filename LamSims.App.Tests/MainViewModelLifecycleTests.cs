@@ -388,7 +388,8 @@ public class MainViewModelLifecycleTests
             unlockerService: new LamSims.Core.Unlocking.UnlockerService([backend]));
         using var _h = host;
         await vm.Unlocker.RefreshAsync(CancellationToken.None);
-        var install = vm.Unlocker.Targets[0].InstallCommand.ExecuteAsync(null);
+        vm.Unlocker.Targets[0].IsSelected = true;
+        var install = vm.Unlocker.InstallSelectedCommand.ExecuteAsync(null);
         await WaitUntil(() => backend.Calls.Count > 0);
 
         var shutdown = vm.ShutdownAsync();

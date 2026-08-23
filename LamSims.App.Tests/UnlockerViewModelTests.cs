@@ -69,8 +69,7 @@ public class UnlockerViewModelTests
     public void Title_is_the_display_name_alone_when_there_is_no_environment()
     {
         var row = new UnlockerTargetViewModel(
-            new UnlockerTarget("windows-native", ClientKind.EaApp, @"C:\EA", "EA app"),
-            _ => Task.CompletedTask, _ => Task.CompletedTask);
+            new UnlockerTarget("windows-native", ClientKind.EaApp, @"C:\EA", "EA app"));
 
         Assert.Equal("EA app", row.Title);
     }
@@ -80,8 +79,7 @@ public class UnlockerViewModelTests
     {
         var row = new UnlockerTargetViewModel(
             new UnlockerTarget("wine-prefix", ClientKind.EaApp, "/pfx/EA", "EA app",
-                Environment: new TargetEnvironment(EnvironmentSource.Lutris, "ea-app")),
-            _ => Task.CompletedTask, _ => Task.CompletedTask);
+                Environment: new TargetEnvironment(EnvironmentSource.Lutris, "ea-app")));
 
         Assert.Equal("EA app (Lutris, ea-app)", row.Title);
     }
@@ -96,16 +94,16 @@ public class UnlockerViewModelTests
         await vm.RefreshAsync(CancellationToken.None);
 
         var row = Assert.Single(vm.Targets);
-        Assert.Equal("EA app", row.DisplayName);
+        Assert.Equal("EA app", row.Title);
         Assert.Equal("/clients/ea", row.ClientPath);
         Assert.Equal("Installed", row.StatusText);
     }
 
-    // ---- pair: InstallCommand must reach the SERVICE with the ROW'S OWN target, never the
-    // collection's first entry. Asserting only the verb ("Install ran") would also pass a row
-    // wired to its neighbour's data context. ----
+    // ---- pair: InstallSelectedCommand must reach the SERVICE with the SELECTED ROW'S OWN target,
+    // never the collection's first entry. Asserting only the verb ("Install ran") would also pass
+    // a row wired to its neighbour's data context. ----
     [Fact]
-    public async Task InstallCommand_reaches_InstallAsync_with_this_rows_own_target()
+    public async Task Installing_a_selected_row_reaches_InstallAsync_with_that_rows_target()
     {
         var first = Target("/clients/ea", "EA app", ClientKind.EaApp);
         var second = Target("/clients/origin", "Origin", ClientKind.Origin);
@@ -114,14 +112,15 @@ public class UnlockerViewModelTests
         await vm.RefreshAsync(CancellationToken.None);
 
         var row = vm.Targets.Single(t => t.ClientPath == "/clients/origin");
-        await row.InstallCommand.ExecuteAsync(null);
+        row.IsSelected = true;
+        await vm.InstallSelectedCommand.ExecuteAsync(null);
 
         Assert.Contains("Install:/clients/origin", backend.Calls);
         Assert.DoesNotContain("Install:/clients/ea", backend.Calls);
     }
 
     [Fact]
-    public async Task RemoveCommand_reaches_RemoveAsync_with_this_rows_own_target()
+    public async Task Removing_a_selected_row_reaches_RemoveAsync_with_that_rows_target()
     {
         var first = Target("/clients/ea", "EA app", ClientKind.EaApp);
         var second = Target("/clients/origin", "Origin", ClientKind.Origin);
@@ -130,7 +129,8 @@ public class UnlockerViewModelTests
         await vm.RefreshAsync(CancellationToken.None);
 
         var row = vm.Targets.Single(t => t.ClientPath == "/clients/origin");
-        await row.RemoveCommand.ExecuteAsync(null);
+        row.IsSelected = true;
+        await vm.RemoveSelectedCommand.ExecuteAsync(null);
 
         Assert.Contains("Remove:/clients/origin", backend.Calls);
         Assert.DoesNotContain("Remove:/clients/ea", backend.Calls);
@@ -142,13 +142,14 @@ public class UnlockerViewModelTests
         var target = Target();
         var backend = new RecordingUnlockerBackend(target);
         // Asymmetric on purpose: a terminal report of 3/3 cannot tell Completed from Total, so
-        // swapping the two assignments in RunAsync would leave this test green.
+        // swapping the two assignments in RunBatchAsync would leave this test green.
         backend.ToReport.Add(new UnlockerProgress("Stopping the client", 1, 7));
         backend.ToReport.Add(new UnlockerProgress("Done", 5, 7));
         var vm = Build(backend);
         await vm.RefreshAsync(CancellationToken.None);
 
-        await vm.Targets[0].InstallCommand.ExecuteAsync(null);
+        vm.Targets[0].IsSelected = true;
+        await vm.InstallSelectedCommand.ExecuteAsync(null);
 
         Assert.Equal("Done", vm.CurrentStep);
         Assert.Equal(5, vm.Completed);
@@ -156,7 +157,7 @@ public class UnlockerViewModelTests
     }
 
     [Fact]
-    public async Task IsBusy_is_true_during_the_operation_and_disables_both_row_commands()
+    public async Task IsBusy_is_true_during_the_operation_and_disables_the_batch_commands()
     {
         var target = Target();
         var backend = new RecordingUnlockerBackend(target);
@@ -165,29 +166,30 @@ public class UnlockerViewModelTests
         var vm = Build(backend);
         await vm.RefreshAsync(CancellationToken.None);
         var row = vm.Targets[0];
+        row.IsSelected = true;
 
-        var running = row.InstallCommand.ExecuteAsync(null);
+        var running = vm.InstallSelectedCommand.ExecuteAsync(null);
 
         // SetBusy(true) runs synchronously before the operation's Task.Run yields, so this holds
         // without waiting: the caller does not get its Task back until that point is reached.
         Assert.True(vm.IsBusy);
         Assert.True(row.IsBusy);
-        Assert.False(row.InstallCommand.CanExecute(null));
-        Assert.False(row.RemoveCommand.CanExecute(null));
+        Assert.False(vm.InstallSelectedCommand.CanExecute(null));
+        Assert.False(vm.RemoveSelectedCommand.CanExecute(null));
 
         hold.SetResult();
         await running;
 
         Assert.False(vm.IsBusy);
         Assert.False(row.IsBusy);
-        Assert.True(row.InstallCommand.CanExecute(null));
-        Assert.True(row.RemoveCommand.CanExecute(null));
+        Assert.True(vm.InstallSelectedCommand.CanExecute(null));
+        Assert.True(vm.RemoveSelectedCommand.CanExecute(null));
     }
 
-    // Gap 2 from review round 1: SetBusy's loop was only ever exercised with one row in the
-    // collection, so a regression narrowing it to just the acted-on row would have passed. This
-    // needs a SECOND, untouched row to prove the busy state (and the disabled commands) is
-    // shared across every row, not scoped to the one the operation is running against.
+    // SetBusy's loop needs more than one row to be observable: with a single row in the collection,
+    // an implementation that marked only the acted-on row passes. A second, untouched row is what
+    // proves the busy state is shared across every row rather than scoped to the one the operation
+    // is running against.
     [Fact]
     public async Task Acting_on_one_row_disables_every_other_row_too()
     {
@@ -200,19 +202,20 @@ public class UnlockerViewModelTests
         await vm.RefreshAsync(CancellationToken.None);
         var rowActedOn = vm.Targets.Single(t => t.ClientPath == "/clients/ea");
         var rowBystander = vm.Targets.Single(t => t.ClientPath == "/clients/origin");
+        rowActedOn.IsSelected = true;
 
-        var running = rowActedOn.InstallCommand.ExecuteAsync(null);
+        var running = vm.InstallSelectedCommand.ExecuteAsync(null);
 
         Assert.True(rowBystander.IsBusy);
-        Assert.False(rowBystander.InstallCommand.CanExecute(null));
-        Assert.False(rowBystander.RemoveCommand.CanExecute(null));
+        Assert.False(vm.InstallSelectedCommand.CanExecute(null));
+        Assert.False(vm.RemoveSelectedCommand.CanExecute(null));
 
         hold.SetResult();
         await running;
 
         Assert.False(rowBystander.IsBusy);
-        Assert.True(rowBystander.InstallCommand.CanExecute(null));
-        Assert.True(rowBystander.RemoveCommand.CanExecute(null));
+        Assert.True(vm.InstallSelectedCommand.CanExecute(null));
+        Assert.True(vm.RemoveSelectedCommand.CanExecute(null));
     }
 
     // ---- pair: a RequiresElevation result must both raise the banner AND arm the relaunch
@@ -228,7 +231,8 @@ public class UnlockerViewModelTests
 
         Assert.False(vm.RelaunchElevatedCommand.CanExecute(null));
 
-        await vm.Targets[0].InstallCommand.ExecuteAsync(null);
+        vm.Targets[0].IsSelected = true;
+        await vm.InstallSelectedCommand.ExecuteAsync(null);
 
         Assert.True(vm.RequiresElevation);
         Assert.True(vm.RelaunchElevatedCommand.CanExecute(null));
@@ -268,7 +272,8 @@ public class UnlockerViewModelTests
         var vm = Build(backend, host: host, shutdown: shutdown.RunAsync,
                        exit: () => order.Add("Exit"));
         await vm.RefreshAsync(CancellationToken.None);
-        await vm.Targets[0].InstallCommand.ExecuteAsync(null);
+        vm.Targets[0].IsSelected = true;
+        await vm.InstallSelectedCommand.ExecuteAsync(null);
 
         await vm.RelaunchElevatedCommand.ExecuteAsync(null);
 
@@ -291,7 +296,8 @@ public class UnlockerViewModelTests
         var banners = new List<Banner>();
         var vm = Build(backend, host: host, shutdown: shutdown.RunAsync, banner: banners.Add);
         await vm.RefreshAsync(CancellationToken.None);
-        await vm.Targets[0].InstallCommand.ExecuteAsync(null);
+        vm.Targets[0].IsSelected = true;
+        await vm.InstallSelectedCommand.ExecuteAsync(null);
 
         await vm.RelaunchElevatedCommand.ExecuteAsync(null);
 
@@ -348,12 +354,12 @@ public class UnlockerViewModelTests
         var backend = new RecordingUnlockerBackend(Target());
         var vm = Build(backend);
         await vm.RefreshAsync(CancellationToken.None);
-        var row = vm.Targets[0];
+        vm.Targets[0].IsSelected = true;
 
         using var ui = new UiThread();
         var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        ui.Post(() => _ = RunOn(row, started));
+        ui.Post(() => _ = RunOn(vm, started));
 
         await started.Task;
 
@@ -364,11 +370,11 @@ public class UnlockerViewModelTests
         Assert.NotEqual(ui.Thread.ManagedThreadId, backend.OperationThreadId);
     }
 
-    private static async Task RunOn(UnlockerTargetViewModel row, TaskCompletionSource started)
+    private static async Task RunOn(UnlockerViewModel vm, TaskCompletionSource started)
     {
         try
         {
-            await row.InstallCommand.ExecuteAsync(null);
+            await vm.InstallSelectedCommand.ExecuteAsync(null);
             started.TrySetResult();
         }
         catch (Exception e)
@@ -386,7 +392,8 @@ public class UnlockerViewModelTests
         var backend = new RecordingUnlockerBackend(Target()) { NextResult = UnlockerResult.NeedsElevation() };
         var vm = Build(backend, host: host, exit: () => order.Add("Exit"));
         await vm.RefreshAsync(CancellationToken.None);
-        await vm.Targets[0].InstallCommand.ExecuteAsync(null);
+        vm.Targets[0].IsSelected = true;
+        await vm.InstallSelectedCommand.ExecuteAsync(null);
 
         await vm.RelaunchElevatedCommand.ExecuteAsync(null);
 
@@ -401,8 +408,9 @@ public class UnlockerViewModelTests
         backend.Hold = hold;
         var vm = Build(backend);
         await vm.RefreshAsync(CancellationToken.None);
+        vm.Targets[0].IsSelected = true;
 
-        var install = vm.Targets[0].InstallCommand.ExecuteAsync(null);
+        var install = vm.InstallSelectedCommand.ExecuteAsync(null);
         var drain = vm.DrainAsync();
 
         // The pair: it is still waiting while the operation runs AND it finishes when the operation
@@ -420,13 +428,14 @@ public class UnlockerViewModelTests
         backend.ToReport.Add(new UnlockerProgress("Done", 4, 4));
         var vm = Build(backend);
         await vm.RefreshAsync(CancellationToken.None);
-        await vm.Targets[0].InstallCommand.ExecuteAsync(null);
+        vm.Targets[0].IsSelected = true;
+        await vm.InstallSelectedCommand.ExecuteAsync(null);
         Assert.Equal(4, vm.Completed);
 
         var hold = new TaskCompletionSource();
         backend.Hold = hold;
         backend.ToReport.Clear();
-        var second = vm.Targets[0].InstallCommand.ExecuteAsync(null);
+        var second = vm.InstallSelectedCommand.ExecuteAsync(null);
 
         // Read DURING the second run, before it reports anything of its own: without the reset the
         // row would still be showing the first run's "Done 4/4".
@@ -535,18 +544,18 @@ public class UnlockerViewModelTests
     }
 
     // CanRunBatch's own !IsBusy term is unpinned without this: AsyncRelayCommand's ExecutionTask
-    // guard only blocks re-entry on the SAME command instance, and a running PER-ROW command is a
+    // guard only blocks re-entry on the SAME command instance, and RemoveSelectedCommand is a
     // different instance from InstallSelectedCommand. Only this type's own IsBusy flag, shared by
-    // both, catches a batch command left enabled while an unrelated row operation is in flight.
+    // both, catches the remove batch left enabled while the install batch is in flight.
     [Fact]
-    public async Task A_running_per_row_command_disables_the_batch_commands_too()
+    public async Task A_running_install_batch_disables_the_remove_batch_too()
     {
         var (vm, backend, _) = await BuildBatchAsync(TwoTargets());
         var hold = new TaskCompletionSource();
         backend.Hold = hold;
         vm.Targets[0].IsSelected = true;
 
-        var running = vm.Targets[0].InstallCommand.ExecuteAsync(null);
+        var running = vm.InstallSelectedCommand.ExecuteAsync(null);
 
         Assert.False(vm.InstallSelectedCommand.CanExecute(null));
         Assert.False(vm.RemoveSelectedCommand.CanExecute(null));
@@ -777,7 +786,8 @@ public class MainViewModelUnlockerWiringTests
         using var _h = hostFixture;
 
         await vm.Unlocker.RefreshAsync(CancellationToken.None);
-        await vm.Unlocker.Targets[0].InstallCommand.ExecuteAsync(null);
+        vm.Unlocker.Targets[0].IsSelected = true;
+        await vm.Unlocker.InstallSelectedCommand.ExecuteAsync(null);
         Assert.True(vm.Unlocker.RelaunchElevatedCommand.CanExecute(null));
 
         await vm.Unlocker.RelaunchElevatedCommand.ExecuteAsync(null);
@@ -802,7 +812,8 @@ public class MainViewModelUnlockerWiringTests
 
         await vm.Unlocker.RefreshAsync(CancellationToken.None);
 
-        await vm.Unlocker.Targets[0].InstallCommand.ExecuteAsync(null);
+        vm.Unlocker.Targets[0].IsSelected = true;
+        await vm.Unlocker.InstallSelectedCommand.ExecuteAsync(null);
 
         // Only a banner that reached MainViewModel.Banners through the real Raise proves the
         // wiring; Raise dismissing by id is also what keeps a second elevation report from
