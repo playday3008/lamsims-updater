@@ -144,4 +144,60 @@ public class OrphanCleanerTests
         // A blank code cannot name an archive, and asking DownloadPaths for one throws.
         Assert.Empty(cleaner.CleanOrphans(new HashSet<string> { "EP01" }));
     }
+
+    /// <summary>
+    /// An unlocker asset temp names no pack, so the code-keyed arms never see it.
+    /// StaticUnlockerAssetSource deletes its own on the paths it can observe, but its TryDelete
+    /// swallows a refused delete, so a temp also survives an unwritable root — not only a kill.
+    /// Nothing else in the tree collects them, and they are up to the pinned DLL size each.
+    /// </summary>
+    [Fact]
+    public void CleanAssetTemps_deletes_a_temp_a_dead_fetch_left_behind()
+    {
+        using var temp = new TempDir();
+        temp.Write("ea_app_version.dll.a1b2c3d4.incoming", "half a dll");
+
+        var deleted = new OrphanCleaner(new DownloadPaths(temp.Path)).CleanAssetTemps();
+
+        Assert.Equal([temp.File("ea_app_version.dll.a1b2c3d4.incoming")], deleted);
+        Assert.False(File.Exists(temp.File("ea_app_version.dll.a1b2c3d4.incoming")));
+    }
+
+    /// <summary>
+    /// The two sweeps are separate because they are safe at different moments, and this is the
+    /// assertion that keeps them separate. CleanOrphans runs off any catalog that loads, which a
+    /// user can trigger mid-session with an unlocker fetch already in flight; a temp carries no
+    /// code, so no set of known codes protects it, and deleting a live one fails that install.
+    /// </summary>
+    [Fact]
+    public void CleanOrphans_leaves_an_asset_temp_alone()
+    {
+        using var temp = new TempDir();
+        temp.Write("ea_app_version.dll.a1b2c3d4.incoming", "being written right now");
+
+        var deleted = new OrphanCleaner(new DownloadPaths(temp.Path))
+            .CleanOrphans(new HashSet<string> { "EP01" });
+
+        Assert.Empty(deleted);
+        Assert.True(File.Exists(temp.File("ea_app_version.dll.a1b2c3d4.incoming")));
+    }
+
+    /// <summary>
+    /// The temp sweep takes the temps and nothing else: the cached asset is what a temp BECOMES,
+    /// and a partial download belongs to the other sweep, which alone knows the live codes.
+    /// </summary>
+    [Fact]
+    public void CleanAssetTemps_leaves_the_cached_asset_and_the_partials_alone()
+    {
+        using var temp = new TempDir();
+        var paths = new DownloadPaths(temp.Path);
+        paths.EnsureCreated();
+        File.WriteAllText(paths.UnlockerAssetFile("ea_app_version.dll"), "the real one");
+        temp.Write("EP99.part", "x");
+
+        Assert.Empty(new OrphanCleaner(paths).CleanAssetTemps());
+
+        Assert.True(File.Exists(paths.UnlockerAssetFile("ea_app_version.dll")));
+        Assert.True(File.Exists(temp.File("EP99.part")));
+    }
 }

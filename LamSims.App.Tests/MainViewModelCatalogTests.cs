@@ -80,6 +80,62 @@ public class MainViewModelCatalogTests
     }
 
     [Fact(Timeout = 15000)]
+    public async Task A_loaded_catalog_sweeps_partials_for_packs_it_no_longer_lists()
+    {
+        // OrphanCleaner shipped unreferenced: nothing in the app ever called it, so a .part file
+        // for a de-listed pack was unreachable from inside the app and never reclaimed. The pair:
+        // the stale partial goes AND the listed pack's partial stays, which is what proves the
+        // sweep is driven by the catalog's codes rather than deleting everything it finds.
+        var vm = TestHost.ViewModel(out var host, resolve: _ =>
+            Task.FromResult(new CatalogResolution(
+                CatalogStatus.Loaded,
+                new CatalogLoadResult(new Catalog(1, null, [Packs.Entry()]), []),
+                new CatalogSource(CatalogSourceKind.Settings, "/tmp/catalog.json"), null, null)));
+        using var _h = host;
+
+        var listed = host.DownloadPaths.PartFile("EP01");
+        var delisted = host.DownloadPaths.PartFile("EP99");
+        File.WriteAllText(listed, "");
+        File.WriteAllText(delisted, "");
+
+        await vm.LoadCatalogAsync(CancellationToken.None);
+
+        Assert.False(File.Exists(delisted));
+        Assert.True(File.Exists(listed));
+        Assert.Equal(1, vm.OrphansSwept);
+    }
+
+    /// <summary>
+    /// The asset-temp sweep hangs off StartAsync, not off a catalog load, because it is only safe
+    /// before anything can fetch. Both halves: the temp goes AND a de-listed pack's partial stays,
+    /// which is what proves this is the temp sweep and not the catalog-driven one running early —
+    /// the catalog never loads here, so the orphan sweep cannot have run at all.
+    /// </summary>
+    [Fact(Timeout = 15000)]
+    public async Task Starting_sweeps_an_asset_temp_without_waiting_for_a_catalog()
+    {
+        var vm = TestHost.ViewModel(out var host, resolve: _ =>
+            Task.FromResult(new CatalogResolution(
+                CatalogStatus.Empty, null,
+                new CatalogSource(CatalogSourceKind.Settings, ""), null, null)));
+        using var _h = host;
+
+        host.DownloadPaths.EnsureCreated();
+        var temp = host.DownloadPaths.UnlockerAssetFile("ea_app_version.dll") + ".a1b2c3d4.incoming";
+        var partial = host.DownloadPaths.PartFile("EP99");
+        File.WriteAllText(temp, "half a dll");
+        File.WriteAllText(partial, "");
+
+        await vm.StartAsync(CancellationToken.None);
+
+        Assert.False(File.Exists(temp));
+        Assert.Equal(1, vm.AssetTempsSwept);
+        Assert.True(File.Exists(partial));
+
+        await vm.ShutdownAsync();
+    }
+
+    [Fact(Timeout = 15000)]
     public async Task Rejected_entries_are_one_banner_and_do_not_block_the_rest()
     {
         var vm = TestHost.ViewModel(out var host, resolve: _ =>

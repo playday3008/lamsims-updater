@@ -91,7 +91,8 @@ public sealed class TestHost : IDisposable
             unlockerHost ?? new FakeUnlockerHost { IsAvailable = false },
             unlockerAssets ?? new StubUnlockerAssets(),
             downloadPaths,
-            downloadOptions);
+            downloadOptions,
+            new OrphanCleaner(downloadPaths));
 
         host = new TestHost
         {

@@ -26,4 +26,5 @@ public sealed record AppServices(
     IUnlockerHost UnlockerHost,
     IUnlockerAssetSource UnlockerAssets,
     DownloadPaths DownloadPaths,
-    DownloadOptions DownloadOptions);
+    DownloadOptions DownloadOptions,
+    OrphanCleaner Orphans);

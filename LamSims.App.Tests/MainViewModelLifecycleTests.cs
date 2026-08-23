@@ -147,6 +147,25 @@ public class MainViewModelLifecycleTests
     }
 
     [Fact(Timeout = 15000)]
+    public async Task The_settings_debounce_gets_a_driver_at_start_and_loses_it_at_shutdown()
+    {
+        // The debounce promises a write shortly after a change, and nothing was delivering it: a
+        // queued save only ever reached disk through a graceful close, so a setting changed before
+        // a reboot or a kill was discarded. The pair: it starts AND it stops, because a timer left
+        // running past shutdown races the final flush.
+        var vm = TestHost.ViewModel(out var host);
+        using var _h = host;
+
+        Assert.False(vm.SettingsTimerRunning);
+
+        await vm.StartAsync(CancellationToken.None);
+        Assert.True(vm.SettingsTimerRunning);
+
+        await vm.ShutdownAsync();
+        Assert.False(vm.SettingsTimerRunning);
+    }
+
+    [Fact(Timeout = 15000)]
     public async Task Shutdown_is_idempotent()
     {
         var vm = TestHost.ViewModel(out var host);

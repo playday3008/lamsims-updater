@@ -68,6 +68,11 @@ public sealed class ViewHost : IDisposable
     {
         var queue = new StubQueue();
 
+        // Under the caller's temp root: the view model retargets this instance, and the real
+        // default would put download directories in the developer's profile. One instance, shared
+        // with the cleaner, because a retarget has to move both.
+        var downloadPaths = new DownloadPaths(Path.Combine(paths.Root, "downloads"));
+
         return (new AppServices(
             paths,
             new SettingsStore(paths),
@@ -85,10 +90,9 @@ public sealed class ViewHost : IDisposable
             unlockerService ?? new UnlockerService([]),
             unlockerHost ?? new FakeUnlockerHost { IsAvailable = false },
             unlockerAssets ?? new StubUnlockerAssets(),
-            // Under the caller's temp root: the view model retargets this instance, and the real
-            // default would put download directories in the developer's profile.
-            new DownloadPaths(Path.Combine(paths.Root, "downloads")),
-            new DownloadOptions()), queue);
+            downloadPaths,
+            new DownloadOptions(),
+            new OrphanCleaner(downloadPaths)), queue);
     }
 
     /// <summary>

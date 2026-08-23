@@ -102,7 +102,8 @@ public static class Composition
             unlockerHost,
             unlockerAssets,
             downloadPaths,
-            options);
+            options,
+            new OrphanCleaner(downloadPaths));
     }
 
     private static bool TryCreate(string root, Action create, List<string> faults)

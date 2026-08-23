@@ -144,7 +144,41 @@ public sealed partial class MainViewModel : ObservableObject
         }
     }
 
+    private bool _sweptOrphans;
+
+    internal int OrphansSwept { get; private set; }
+
+    /// <summary>
+    /// Startup cleanup, which is what OrphanCleaner was written for and what nothing was calling:
+    /// a .part file for a pack the catalog no longer lists is unreachable from inside the app and
+    /// grows without bound. Once per session, and only off a catalog that actually loaded, because
+    /// the known codes are what protect every pack still listed. Archives are never touched.
+    /// </summary>
+    private void SweepOrphansOnce(IReadOnlySet<string> knownCodes)
+    {
+        if (_sweptOrphans) return;
+
+        _sweptOrphans = true;
+
+        try
+        {
+            OrphansSwept = _services.Orphans.CleanOrphans(knownCodes).Count;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            // Best effort. Failing to reclaim space is not worth interrupting a catalog load.
+        }
+    }
+
     private void QueueSave() => _saveDueAt = _services.Clock.UtcNow + SaveDebounce;
+
+    private Timer? _saveTimer;
+
+    /// <summary>
+    /// Whether the debounce actually has a driver. Asserted rather than waited on: the tick is
+    /// real time, and this suite does not sleep.
+    /// </summary>
+    internal bool SettingsTimerRunning => _saveTimer is not null;
 
     /// <summary>Writes a pending change only once the debounce has elapsed. Driven by a timer.</summary>
     public Task FlushDueSettingsAsync(CancellationToken ct) =>
@@ -250,6 +284,7 @@ public sealed partial class MainViewModel : ObservableObject
                         BannerKind.Warning));
                 }
 
+                SweepOrphansOnce(load.Catalog.KnownCodes);
                 break;
 
             case CatalogStatus.Empty:
@@ -571,11 +606,42 @@ public sealed partial class MainViewModel : ObservableObject
         _queueRun = ObserveQueueAsync(ct);
         _bridgeRun = _bridge.RunAsync();
 
+        // The debounce promises a write shortly after the change, and nothing was delivering it:
+        // a queued save only ever reached disk through a graceful close, so a slider moved before
+        // a reboot, a logout or a kill was silently discarded. FlushDueSettingsAsync is a no-op
+        // until the debounce elapses, so ticking at the debounce interval costs nothing.
+        _saveTimer = new Timer(
+            _ => _services.Dispatcher.Post(() => _ = FlushDueSettingsAsync(CancellationToken.None)),
+            null, SaveDebounce, SaveDebounce);
+
+        SweepAssetTemps();
+
         await DetectUnlockerAsync(ct);
 
         await LoadCatalogAsync(ct);
 
         if (!string.IsNullOrWhiteSpace(GameDirectory)) Scan();
+    }
+
+    internal int AssetTempsSwept { get; private set; }
+
+    /// <summary>
+    /// Here rather than beside the orphan sweep below, and before detection rather than after,
+    /// because this one is only safe while no fetch can have started: an asset temp carries no
+    /// pack code, so nothing tells a live one from an abandoned one. Nothing above this line can
+    /// reach an unlocker install — detection does not fetch, and the shell is not interactive
+    /// until this method returns.
+    /// </summary>
+    private void SweepAssetTemps()
+    {
+        try
+        {
+            AssetTempsSwept = _services.Orphans.CleanAssetTemps().Count;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            // Best effort, like the orphan sweep: reclaiming space is not worth failing a start.
+        }
     }
 
     /// <summary>
@@ -654,6 +720,13 @@ public sealed partial class MainViewModel : ObservableObject
         if (IsShuttingDown) return;
 
         IsShuttingDown = true;
+
+        // Stopped before the flush below, so the tick cannot race it and write twice.
+        if (_saveTimer is { } saveTimer)
+        {
+            _saveTimer = null;
+            await saveTimer.DisposeAsync();
+        }
 
         // First, and before anything is torn down: an unlocker operation cannot be cancelled, and
         // the process exiting inside its File.Copy is the damage the shutdown wait exists to prevent.
