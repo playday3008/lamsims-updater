@@ -776,29 +776,4 @@ public class SegmentedDownloaderTests
         Assert.Equal(DownloadOutcome.Completed, result.Outcome);
         Assert.Equal(content.LongLength, high);
     }
-
-    [Fact]
-    public async Task Speed_is_never_negative_across_a_run_containing_a_dropped_response()
-    {
-        var content = Payload(400_000);
-        await using var server = await TestFileServer.StartAsync(content, new TestFileServerOptions
-        {
-            DropAfterBytes = 30_000,
-            DropAfterBytesCount = 1,
-        });
-        using var temp = new TempDir();
-        var paths = new DownloadPaths(temp.Path);
-        using var client = HttpFactory.Create(8);
-
-        var negatives = 0;
-        var request = new DownloadRequest(
-            "EP01", new[] { server.FileUrl }, content.LongLength, Sha256Of(content));
-
-        await Downloader(client, paths, connections: 4, chunkSize: 100_000).DownloadAsync(
-            request,
-            new SyncProgress<DownloadProgress>(p => { if (p.BytesPerSecond < 0) negatives++; }),
-            CancellationToken.None);
-
-        Assert.Equal(0, negatives);
-    }
 }

@@ -306,6 +306,11 @@ public class CatalogLoaderTests
         Assert.Equal(CatalogStatus.Failed, resolution.Status);
         Assert.Contains(url, resolution.Error);
         Assert.False(File.Exists(paths.CatalogCacheFile));
+
+        // The cap's own message, matching the local test. Without it this passes with the memory
+        // bound deleted: 1.2 MB of zero bytes is not JSON, so the parser fails anyway and Failed,
+        // the url in the error and the absent cache all still hold.
+        Assert.Contains("exceeds", resolution.Error);
     }
 
     [Fact]
