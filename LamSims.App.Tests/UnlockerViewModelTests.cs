@@ -535,12 +535,15 @@ public class UnlockerViewModelTests
     [Fact]
     public async Task A_batch_with_nothing_selected_does_nothing()
     {
-        var (vm, backend, _) = await BuildBatchAsync(TwoTargets());
+        var (vm, backend, banners) = await BuildBatchAsync(TwoTargets());
 
         Assert.False(vm.InstallSelectedCommand.CanExecute(null));
         await vm.InstallSelectedCommand.ExecuteAsync(null);
 
+        // The banner list too: without the rows.Length == 0 guard the loop is empty anyway, so the
+        // call count alone passes while the user is told "0 of 0 targets installed".
         Assert.Empty(backend.Calls);
+        Assert.Empty(banners);
     }
 
     // CanRunBatch's own !IsBusy term is unpinned without this: AsyncRelayCommand's ExecutionTask

@@ -26,8 +26,8 @@ public sealed record TargetEnvironment(EnvironmentSource Source, string Detail, 
 }
 
 /// <summary>
-/// One place the unlocker can be installed. A list because a backend may find several, one per
-/// Wine prefix for instance; the EA-client backend returns zero or one.
+/// One place the unlocker can be installed. A list because a backend may find several: one per
+/// Wine prefix for instance, and the EA-client backend returns one per installed EA client.
 /// </summary>
 public sealed record UnlockerTarget(string BackendId, ClientKind Client, string ClientPath,
                                    string DisplayName, string? PrefixPath = null,

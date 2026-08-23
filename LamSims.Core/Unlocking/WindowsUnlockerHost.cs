@@ -66,7 +66,7 @@ public sealed class WindowsUnlockerHost : IUnlockerHost
         catch (Exception e) when (e is System.Security.SecurityException or UnauthorizedAccessException
                                       or IOException)
         {
-            // A missing or unreadable key must not throw: detection walks all three in order.
+            // A missing or unreadable key must not throw: detection walks every candidate in order.
             return null;
         }
     }

@@ -78,9 +78,13 @@
                     <TextBlock Text="{Binding Warning}" Classes="secondary" TextWrapping="Wrap"
                                IsVisible="{Binding Warning, Converter={x:Static ObjectConverters.IsNotNull}}" />
                   </StackPanel>
-                  <!-- Trimmed: a failed operation puts its error message here. -->
+                  <!-- Wrapped, not trimmed: a failed operation puts its error message here, and
+                       those interpolate paths and exception messages. There is no banner left to
+                       carry them and no tooltip anywhere in this window, so trimming to the 220
+                       cap would show the user "Instal…" and nothing else. The pack list wraps its
+                       own status for the same reason. -->
                   <TextBlock Grid.Column="2" Text="{Binding StatusText}" MaxWidth="220"
-                             TextTrimming="CharacterEllipsis" VerticalAlignment="Center" />
+                             TextWrapping="Wrap" VerticalAlignment="Center" />
                 </Grid>
               </DataTemplate>
             </ItemsControl.ItemTemplate>

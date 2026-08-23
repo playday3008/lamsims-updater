@@ -202,8 +202,10 @@ public class UnlockerRegionTests
     }
 
     /// <summary>
-    /// The row template's three TextBlocks, read as rendered. Nothing else in the suite looks at
-    /// them, so a deleted or re-pointed status TextBlock would ship in silence.
+    /// The row template's four TextBlocks, read as rendered: name, path, warning and status.
+    /// Nothing else in the suite looks at them, so a deleted or re-pointed status TextBlock would
+    /// ship in silence, and deleting the warning line leaves every per-target warning invisible
+    /// while the view-model tests, which only read the property, stay green.
     /// </summary>
     [AvaloniaFact]
     public void Each_row_renders_its_name_its_path_and_its_status()
@@ -224,5 +226,32 @@ public class UnlockerRegionTests
             Assert.Contains(target.ClientPath, texts);
             Assert.Contains("Not installed", texts);
         }
+
+        // Two rows, each with its own warning, both visible at once: warnings are per row because a
+        // banner keys by id and a batch would collapse them to whichever target reported last.
+        const string ea = "the staged copy failed";
+        const string origin = "machine.ini was not found";
+        host.ViewModel.Unlocker.Targets[0].Warning = ea;
+        host.ViewModel.Unlocker.Targets[1].Warning = origin;
+        host.Pump();
+
+        // IsVisible as well as the text: a TextBlock still carries its Text when collapsed, so the
+        // text alone would pass with the ObjectConverters.IsNotNull binding deleted or inverted.
+        var warnings = ((string[])[ea, origin]).Select(text =>
+            ViewHost.Find<TextBlock>(host.Window,
+                t => t.DataContext is UnlockerTargetViewModel && t.Text == text)).ToList();
+        Assert.All(warnings, w => Assert.True(w.IsVisible));
+
+        // And back: with no warning the line must collapse rather than leave a blank row.
+        host.ViewModel.Unlocker.Targets[0].Warning = null;
+        host.ViewModel.Unlocker.Targets[1].Warning = null;
+        host.Pump();
+        Assert.All(warnings, w => Assert.False(w.IsVisible));
+
+        // Nothing else in the suite executes or even looks for the two selection buttons, so they
+        // could be dropped from the XAML in silence.
+        Assert.NotNull(ViewHost.Find<Button>(host.Window,
+            b => b.Content as string == "Select all"));
+        Assert.NotNull(ViewHost.Find<Button>(host.Window, b => b.Content as string == "Select none"));
     }
 }

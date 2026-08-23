@@ -29,7 +29,8 @@ public interface IUnlockerHost
     bool IsElevated { get; }
 
     /// <summary>The ClientPath value, or null when the key or the value is absent. Must not throw
-    /// for a missing key: detection walks all three in order.</summary>
+    /// for a missing key: detection walks every candidate key in order, and a machine with one
+    /// client installed misses most of them.</summary>
     string? ReadClientPath(ClientRegistryKey key);
 
     /// <summary>The value with its kind, or null when absent. Non-null for a value of ANY type,

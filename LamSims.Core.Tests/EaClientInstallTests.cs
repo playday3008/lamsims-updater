@@ -20,6 +20,7 @@ public sealed class InstallFixture : IDisposable
     public UnlockerPaths Paths { get; }
     public AppPaths App { get; }
     public EaClientUnlockerBackend Backend { get; }
+    public UnlockerInstallRecordStore Records { get; }
     public IUnlockerAssetSource Assets { get; }
     public string DllSource { get; }
 
@@ -45,7 +46,11 @@ public sealed class InstallFixture : IDisposable
         File.WriteAllBytes(DllSource, [0x4D, 0x5A, 0x90, 0x00]);
         Assets = new StubAssetSource(DllSource);
 
-        Backend = new EaClientUnlockerBackend(Host, Paths, App, Delays);
+        // The store is constructed here and injected rather than left to the backend's own
+        // fallback, so the optional-store parameter has a live caller and its non-null branch is
+        // the one every test below runs through.
+        Records = new UnlockerInstallRecordStore(App);
+        Backend = new EaClientUnlockerBackend(Host, Paths, App, Delays, Records);
     }
 
     public Task<UnlockerTarget> TargetAsync() =>
@@ -717,5 +722,71 @@ public sealed class MultiClientStateTests
         Assert.True(result.Success);
         Assert.True(Directory.Exists(fixture.Paths.ConfigDirectory));
         Assert.Contains(result.Warnings ?? [], w => w.Contains("could not be determined"));
+    }
+
+    // Detection dedups by PATH, not by kind, so two installs of the SAME kind are reachable: the
+    // EA app's two registry views can name two different directories that both exist. Every piece
+    // of state is keyed by ClientKind, so the record store cannot tell those two apart at all - the
+    // second install overwrites the first record, and Others() excludes the caller's own kind by
+    // construction, so both record-based guards answer "nobody else". Only a sibling test by path
+    // keeps this from deleting the configuration the other directory's version.dll still reads,
+    // which is the very defect this work exists to fix.
+    [Fact]
+    public async Task Removing_one_of_two_ea_app_installs_leaves_the_shared_configuration()
+    {
+        using var fixture = new InstallFixture();
+        var second = Path.Combine(fixture.Dir.Path, "Program Files", "EA Desktop (x86)", "EA Desktop");
+        Directory.CreateDirectory(second);
+        fixture.Host.ClientPaths[ClientRegistryKey.EaDesktopWow6432] =
+            Path.Combine(second, "EADesktop.exe");
+
+        var targets = await fixture.Backend.DetectTargetsAsync(CancellationToken.None);
+        Assert.Equal(2, targets.Count);
+        // The premise: two targets of one kind at two paths. Without it the test would pass for
+        // the ordinary two-client reason.
+        Assert.All(targets, t => Assert.Equal(ClientKind.EaApp, t.Client));
+        foreach (var target in targets)
+            Assert.True((await fixture.InstallAsync(target)).Success);
+
+        Assert.True((await fixture.RemoveAsync(targets[1])).Success);
+
+        Assert.True(Directory.Exists(fixture.Paths.ConfigDirectory));
+        Assert.Equal(UnlockerState.Installed,
+            (await fixture.Backend.GetStatusAsync(targets[0], CancellationToken.None)).State);
+    }
+
+    // The one production shape in which "no record" carries the restore on its own, and the one
+    // where the value is otherwise lost for good. EA owns the backup but its record is corrupt, so
+    // it can claim nothing; Origin is recorded, never owned the backup, and its removal sees EA's
+    // unreadable record as "cannot tell", so it restores nothing and leaves the backup on disk.
+    // EA's own removal then reads null - which is not the same as "not the owner" - and that is the
+    // last claim left. Every other test reaching mayRestore also satisfies the "last removal in the
+    // scope" disjunct, so this is the only one that fails when `record is null ||` is deleted.
+    [Fact]
+    public async Task A_corrupt_record_still_restores_the_autostart_value_after_a_sibling_left()
+    {
+        using var fixture = new InstallFixture();
+        fixture.Host.Autostart(EaClientUnlockerBackend.AutostartValueName, @"C:\EA\EADesktop.exe");
+        fixture.AddOrigin();
+        var targets = await fixture.Backend.DetectTargetsAsync(CancellationToken.None);
+        foreach (var target in targets)
+            Assert.True((await fixture.InstallAsync(target)).Success);
+
+        var own = Directory.GetFiles(fixture.App.UnlockerInstallDirectory)
+            .First(f => Path.GetFileName(f).EndsWith("-eaapp.json", StringComparison.Ordinal));
+        await File.WriteAllTextAsync(own, "{ not json");
+
+        // Origin first, and it must leave both the value and the backup exactly as they are: this
+        // is what makes EA's removal the last chance to put the value back.
+        Assert.True((await fixture.RemoveAsync(targets[1])).Success);
+        Assert.False(fixture.Host.AutostartValues.ContainsKey(
+            EaClientUnlockerBackend.AutostartValueName));
+        Assert.True(File.Exists(fixture.App.UnlockerAutostartBackupFile));
+
+        Assert.True((await fixture.RemoveAsync(targets[0])).Success);
+
+        Assert.True(fixture.Host.AutostartValues.TryGetValue(
+            EaClientUnlockerBackend.AutostartValueName, out var restored));
+        Assert.Equal(@"C:\EA\EADesktop.exe", restored.Value);
     }
 }

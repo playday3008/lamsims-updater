@@ -30,6 +30,13 @@ public sealed record UnlockerInstallRecord(string ClientPath, ClientKind Client,
 /// </summary>
 public sealed class UnlockerInstallRecordStore(AppPaths paths)
 {
+    /// <summary>
+    /// Known limitation: records are keyed per <see cref="ClientKind"/>, so two installs of the
+    /// SAME kind in one scope (two EA app directories, say) share one record file and the second
+    /// overwrites the first. Nothing here can see such a sibling, which is why the caller's
+    /// shared-configuration decision also tests for an installed sibling DLL by path; that check,
+    /// not this store, is what protects the shared configuration in that case.
+    /// </summary>
     private string FileFor(string scope, ClientKind client) =>
         Path.Combine(paths.UnlockerInstallDirectory, $"{Key(scope)}-{Name(client)}.json");
 

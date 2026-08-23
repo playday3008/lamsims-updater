@@ -59,8 +59,8 @@ public sealed partial class EaClientUnlockerBackend(
     private static readonly (ClientRegistryKey Key, ClientKind Kind, string Display)[] Candidates =
     [
         // The EA app's two registry views first, then Origin's. Order decides which of two views
-        // naming one directory survives deduplication, so the non-Wow6432 view of each client
-        // comes first.
+        // naming one directory survives deduplication, so the EA app's non-Wow6432 view comes
+        // first. Origin's pair is the other way round, kept exactly as upstream had it.
         (ClientRegistryKey.EaDesktop, ClientKind.EaApp, "EA app"),
         (ClientRegistryKey.EaDesktopWow6432, ClientKind.EaApp, "EA app"),
         (ClientRegistryKey.OriginWow6432, ClientKind.Origin, "Origin"),
@@ -601,12 +601,19 @@ public sealed partial class EaClientUnlockerBackend(
             // that as "nobody" destroys the other client's configuration exactly as an
             // unconditional delete of the shared directory would.
             //
-            // The records are not the whole answer. No install made by the shipped build wrote
-            // one, so on the entire existing two-client population the store answers "nobody
-            // else" with complete confidence while the other client's DLL is on disk. The DLL
-            // itself is the ground truth, so it is consulted too.
-            var siblingInstalled = (await DetectTargetsAsync(ct))
-                .Any(t => t.Client != target.Client && File.Exists(Path.Combine(t.ClientPath, DllName)));
+            // The records are not the whole answer, and for one shape they are no answer at all.
+            // No install made by the shipped build wrote a record, so on the entire existing
+            // two-client population the store answers "nobody else" with complete confidence
+            // while the other client's DLL is on disk. And the store keys a record by ClientKind,
+            // so it cannot see a sibling of the SAME kind at another path at all: two EA app
+            // directories share one record file, and Others() excludes the caller's own kind by
+            // construction. In both shapes the DLL on disk is the only ground truth, so the
+            // sibling test is by PATH rather than by kind.
+            var self = PathIdentity.Canonical(target.ClientPath) ?? target.ClientPath;
+            var siblingInstalled = (await DetectTargetsAsync(ct)).Any(t =>
+                !string.Equals(PathIdentity.Canonical(t.ClientPath) ?? t.ClientPath, self,
+                               StringComparison.OrdinalIgnoreCase)
+                && File.Exists(Path.Combine(t.ClientPath, DllName)));
 
             if (!others.Complete)
                 warnings.Add("Whether another client still needs the unlocker configuration could " +
