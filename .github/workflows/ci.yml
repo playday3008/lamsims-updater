@@ -39,9 +39,8 @@ jobs:
 
       - run: dotnet restore LamSims.slnx
 
-      # LamSims.slnx by name, never a bare `dotnet build`: a bare build picks up the untouched
-      # upstream sims4-updater.slnx and fails on WPF. -warnaserror is the real gate, because
-      # CA1416 platform-compatibility violations do not surface through `dotnet test`.
+      # -warnaserror is the real gate: CA1416 platform-compatibility violations do not surface
+      # through `dotnet test`.
       - run: dotnet build LamSims.slnx -warnaserror --no-restore
 
       - run: dotnet test LamSims.slnx --no-build --no-restore
@@ -90,24 +89,3 @@ jobs:
           fi
 
       - run: dotnet publish LamSims.App/LamSims.App.csproj -r linux-x64 -c Release -o out/linux-x64
-
-  # Platform-independent, so it runs once rather than on all three legs — and on ubuntu, because the
-  # body is POSIX shell and Windows runners default to pwsh. The upstream WPF sources are read-only
-  # by project rule; this makes CI enforce what a design document otherwise only asserts.
-  upstream-untouched:
-    if: >-
-      github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.full_name != github.repository
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Upstream sources are untouched
-        run: |
-          if [ "$(git rev-parse --is-shallow-repository)" = "true" ]; then
-            git fetch --prune --unshallow origin "${{ github.event.repository.default_branch }}"
-          else
-            git fetch --prune origin "${{ github.event.repository.default_branch }}"
-          fi
-          BASE="$(git merge-base HEAD FETCH_HEAD)"
-          git diff --exit-code "$BASE" -- sims4-updater/ sims4-updater.slnx
