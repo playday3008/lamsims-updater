@@ -40,6 +40,29 @@ public class UnlockerViewModelTests
         Assert.Empty(vm.Targets);
     }
 
+    // The Windows shape: the EA-client backend leaves Environment null, and such a row must render
+    // as the display name alone, with no trailing parenthesis.
+    [Fact]
+    public void Title_is_the_display_name_alone_when_there_is_no_environment()
+    {
+        var row = new UnlockerTargetViewModel(
+            new UnlockerTarget("windows-native", ClientKind.EaApp, @"C:\EA", "EA app"),
+            _ => Task.CompletedTask, _ => Task.CompletedTask);
+
+        Assert.Equal("EA app", row.Title);
+    }
+
+    [Fact]
+    public void Title_appends_the_environment_in_parentheses_when_there_is_one()
+    {
+        var row = new UnlockerTargetViewModel(
+            new UnlockerTarget("wine-prefix", ClientKind.EaApp, "/pfx/EA", "EA app",
+                Environment: new TargetEnvironment(EnvironmentSource.Lutris, "ea-app")),
+            _ => Task.CompletedTask, _ => Task.CompletedTask);
+
+        Assert.Equal("EA app (Lutris, ea-app)", row.Title);
+    }
+
     [Fact]
     public async Task RefreshAsync_builds_one_row_per_detected_target()
     {

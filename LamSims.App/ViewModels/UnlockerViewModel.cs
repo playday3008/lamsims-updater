@@ -19,6 +19,15 @@ public sealed partial class UnlockerTargetViewModel(
     public string DisplayName => Target.DisplayName;
     public string ClientPath => Target.ClientPath;
 
+    /// <summary>
+    /// One flat property, not a dotted binding path. MainWindowBindingTests resolves a binding
+    /// path as a single member of its data context and fails loudly on anything else, so
+    /// {Binding Environment.Describe()} would be reported as unresolved.
+    /// </summary>
+    public string Title => Target.Environment is { } environment
+        ? $"{Target.DisplayName} ({environment.Describe()})"
+        : Target.DisplayName;
+
     [ObservableProperty]
     private string _statusText = "Checking…";
 

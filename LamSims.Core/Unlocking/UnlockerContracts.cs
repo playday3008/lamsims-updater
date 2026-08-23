@@ -9,12 +9,29 @@ public enum ClientKind { EaApp, Origin }
 
 public enum UnlockerState { NotInstalled, Installed, Unknown }
 
+public enum EnvironmentSource { Wine, Steam, Lutris, Heroic, Bottles }
+
+/// <summary>
+/// Where a target lives, when the client name alone cannot say. Structured rather than a display
+/// string so a list can group or sort by source without parsing its own labels apart.
+/// </summary>
+/// <param name="Flatpak">
+/// A launcher's native and Flatpak installs produce prefixes whose source and detail are
+/// identical, so this is what separates their rows.
+/// </param>
+public sealed record TargetEnvironment(EnvironmentSource Source, string Detail, bool Flatpak = false)
+{
+    public string Describe() =>
+        Flatpak ? $"{Source} (Flatpak), {Detail}" : $"{Source}, {Detail}";
+}
+
 /// <summary>
 /// One place the unlocker can be installed. A list because a backend may find several, one per
 /// Wine prefix for instance; the EA-client backend returns zero or one.
 /// </summary>
 public sealed record UnlockerTarget(string BackendId, ClientKind Client, string ClientPath,
-                                   string DisplayName, string? PrefixPath = null);
+                                   string DisplayName, string? PrefixPath = null,
+                                   TargetEnvironment? Environment = null);
 
 /// <summary>
 /// Carries no version and no Outdated state, because the unlocker exposes nothing to detect a
