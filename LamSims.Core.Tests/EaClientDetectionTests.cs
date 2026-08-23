@@ -31,6 +31,7 @@ public class EaClientDetectionTests
 
     [Theory]
     [InlineData(ClientRegistryKey.EaDesktop, ClientKind.EaApp, "EA app")]
+    [InlineData(ClientRegistryKey.EaDesktopWow6432, ClientKind.EaApp, "EA app")]
     [InlineData(ClientRegistryKey.OriginWow6432, ClientKind.Origin, "Origin")]
     [InlineData(ClientRegistryKey.Origin, ClientKind.Origin, "Origin")]
     public async Task Each_key_alone_yields_its_client(ClientRegistryKey key, ClientKind kind,
@@ -49,10 +50,11 @@ public class EaClientDetectionTests
         Assert.Equal(Path.Combine(dir.Path, "client"), target.ClientPath);
     }
 
-    // Asserting the count as well as the kind: returning both clients would still satisfy a
-    // "contains EaApp" check.
+    // Both the count and the order. Returning one target satisfies "contains EaApp", and
+    // returning them in registry-dictionary order satisfies "contains both", so neither of
+    // those alone would catch a regression to first-hit-wins.
     [Fact]
-    public async Task Ea_desktop_wins_when_more_than_one_key_is_present()
+    public async Task Both_clients_are_returned_when_both_are_present()
     {
         using var dir = new TempDir();
         var (backend, host) = Build(dir);
@@ -61,8 +63,65 @@ public class EaClientDetectionTests
 
         var targets = await backend.DetectTargetsAsync(CancellationToken.None);
 
-        Assert.Single(targets);
+        Assert.Equal(2, targets.Count);
         Assert.Equal(ClientKind.EaApp, targets[0].Client);
+        Assert.Equal(ClientKind.Origin, targets[1].Client);
+        Assert.Equal(Path.Combine(dir.Path, "ea"), targets[0].ClientPath);
+        Assert.Equal(Path.Combine(dir.Path, "origin"), targets[1].ClientPath);
+    }
+
+    // The Origin 64-bit and 32-bit views name one directory on a real machine, so accumulation
+    // without deduplication shows every Origin install twice. Both keys hold the same string
+    // here, so which entry won is not observable; ordering is asserted by
+    // Both_clients_are_returned_when_both_are_present instead.
+    [Fact]
+    public async Task Two_registry_views_of_one_directory_yield_one_target()
+    {
+        using var dir = new TempDir();
+        var (backend, host) = Build(dir);
+        var shared = InstalledClient(dir, "origin", "Origin.exe");
+        host.ClientPaths[ClientRegistryKey.OriginWow6432] = shared;
+        host.ClientPaths[ClientRegistryKey.Origin] = shared;
+
+        var targets = await backend.DetectTargetsAsync(CancellationToken.None);
+
+        Assert.Equal(ClientKind.Origin, Assert.Single(targets).Client);
+        Assert.Equal(Path.Combine(dir.Path, "origin"), targets[0].ClientPath);
+    }
+
+    // The same for the EA app's two views, which a real 64-bit prefix carries: the EA Desktop
+    // key and its Wow6432Node counterpart both name EADesktop.exe.
+    [Fact]
+    public async Task Two_ea_app_views_of_one_directory_yield_one_target()
+    {
+        using var dir = new TempDir();
+        var (backend, host) = Build(dir);
+        var shared = InstalledClient(dir, "ea", "EADesktop.exe");
+        host.ClientPaths[ClientRegistryKey.EaDesktop] = shared;
+        host.ClientPaths[ClientRegistryKey.EaDesktopWow6432] = shared;
+
+        var targets = await backend.DetectTargetsAsync(CancellationToken.None);
+
+        Assert.Equal(ClientKind.EaApp, Assert.Single(targets).Client);
+    }
+
+    // Deduplication runs on PathIdentity semantics, not string equality. A registry that spells
+    // one directory two ways is the normal case, and an ordinal HashSet would let it through.
+    [Fact]
+    public async Task Deduplication_ignores_case_differences_in_the_registry_value()
+    {
+        using var dir = new TempDir();
+        var (backend, host) = Build(dir);
+        var directory = Path.Combine(dir.Path, "origin");
+        Directory.CreateDirectory(directory);
+        var shouted = Path.Combine(dir.Path, "ORIGIN");
+        Directory.CreateDirectory(shouted);
+        host.ClientPaths[ClientRegistryKey.OriginWow6432] = Path.Combine(directory, "Origin.exe");
+        host.ClientPaths[ClientRegistryKey.Origin] = Path.Combine(shouted, "Origin.exe");
+
+        var targets = await backend.DetectTargetsAsync(CancellationToken.None);
+
+        Assert.Single(targets);
     }
 
     [Fact]

@@ -47,8 +47,11 @@ public sealed partial class EaClientUnlockerBackend(
 
     private static readonly (ClientRegistryKey Key, ClientKind Kind, string Display)[] Candidates =
     [
-        // EA app first, then Origin's 64-bit view, then its 32-bit one.
+        // The EA app's two registry views first, then Origin's. Order decides which of two views
+        // naming one directory survives deduplication, so the non-Wow6432 view of each client
+        // comes first.
         (ClientRegistryKey.EaDesktop, ClientKind.EaApp, "EA app"),
+        (ClientRegistryKey.EaDesktopWow6432, ClientKind.EaApp, "EA app"),
         (ClientRegistryKey.OriginWow6432, ClientKind.Origin, "Origin"),
         (ClientRegistryKey.Origin, ClientKind.Origin, "Origin"),
     ];
@@ -56,6 +59,9 @@ public sealed partial class EaClientUnlockerBackend(
     public Task<IReadOnlyList<UnlockerTarget>> DetectTargetsAsync(CancellationToken ct)
     {
         if (!host.IsAvailable) return Task.FromResult<IReadOnlyList<UnlockerTarget>>([]);
+
+        var found = new List<UnlockerTarget>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var (key, kind, display) in Candidates)
         {
@@ -65,11 +71,17 @@ public sealed partial class EaClientUnlockerBackend(
             var directory = ClientDirectoryOf(value);
             if (directory is null) continue;
 
-            return Task.FromResult<IReadOnlyList<UnlockerTarget>>(
-                [new UnlockerTarget(Id, kind, directory, display)]);
+            // Two registry views routinely name one directory, and the first-hit return this
+            // replaced collapsed them by accident. Canonical form under OrdinalIgnoreCase, the
+            // rule PathIdentity documents for every catalog-to-filesystem comparison; a
+            // ToLowerInvariant plus Ordinal pair disagrees with it on some characters.
+            var identity = PathIdentity.Canonical(directory);
+            if (identity is null || !seen.Add(identity)) continue;
+
+            found.Add(new UnlockerTarget(Id, kind, directory, display));
         }
 
-        return Task.FromResult<IReadOnlyList<UnlockerTarget>>([]);
+        return Task.FromResult<IReadOnlyList<UnlockerTarget>>(found);
     }
 
     /// <summary>

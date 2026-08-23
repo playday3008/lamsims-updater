@@ -3,7 +3,7 @@ using System.Collections.Generic;
 
 namespace LamSims.Core.Unlocking;
 
-public enum ClientRegistryKey { EaDesktop, OriginWow6432, Origin }
+public enum ClientRegistryKey { EaDesktop, EaDesktopWow6432, OriginWow6432, Origin }
 
 /// <summary>
 /// How the autostart value was stored. It has to survive the round trip: a REG_EXPAND_SZ read

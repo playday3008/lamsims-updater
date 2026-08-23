@@ -25,6 +25,7 @@ public sealed class WindowsUnlockerHost : IUnlockerHost
     private static readonly Dictionary<ClientRegistryKey, string> Keys = new()
     {
         [ClientRegistryKey.EaDesktop] = @"SOFTWARE\Electronic Arts\EA Desktop",
+        [ClientRegistryKey.EaDesktopWow6432] = @"SOFTWARE\WOW6432Node\Electronic Arts\EA Desktop",
         [ClientRegistryKey.OriginWow6432] = @"SOFTWARE\WOW6432Node\Origin",
         [ClientRegistryKey.Origin] = @"SOFTWARE\Origin",
     };
