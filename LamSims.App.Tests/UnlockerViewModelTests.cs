@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
@@ -25,6 +26,28 @@ public class UnlockerViewModelTests
         new(new UnlockerService([backend]), new StubUnlockerAssets(), host ?? new FakeUnlockerHost(),
             new ImmediateDispatcher(), shutdown ?? (() => Task.CompletedTask), exit ?? (() => { }),
             banner ?? (_ => { }));
+
+    private static async Task<(UnlockerViewModel Vm, RecordingUnlockerBackend Backend,
+                              List<Banner> Banners)> BuildBatchAsync(params UnlockerTarget[] targets)
+    {
+        var backend = new RecordingUnlockerBackend(targets);
+        var banners = new List<Banner>();
+        var vm = Build(backend, banner: banners.Add);
+        await vm.RefreshAsync(CancellationToken.None);
+        return (vm, backend, banners);
+    }
+
+    private static UnlockerTarget[] TwoTargets() =>
+        [Target("/clients/ea", "EA app", ClientKind.EaApp),
+         Target("/clients/origin", "Origin", ClientKind.Origin)];
+
+    // Three targets cannot have three distinct ClientKinds: the enum has two members, so two of
+    // these targets share a Client. The two EA rows are indistinguishable by Client, so ClientPath
+    // is the only selector that generalises to any target in the set.
+    private static UnlockerTarget[] ThreeTargets() =>
+        [Target("/clients/ea", "EA app", ClientKind.EaApp),
+         Target("/clients/origin", "Origin", ClientKind.Origin),
+         Target("/clients/ea2", "EA app", ClientKind.EaApp)];
 
     [Fact]
     public async Task Unsupported_service_reports_no_targets_and_no_support()
@@ -413,6 +436,318 @@ public class UnlockerViewModelTests
 
         hold.SetResult();
         await second;
+    }
+
+    [Fact]
+    public async Task Select_all_and_none_set_every_row()
+    {
+        var (vm, _, _) = await BuildBatchAsync(TwoTargets());
+
+        vm.SelectAllCommand.Execute(null);
+        Assert.All(vm.Targets, t => Assert.True(t.IsSelected));
+
+        vm.SelectNoneCommand.Execute(null);
+        Assert.All(vm.Targets, t => Assert.False(t.IsSelected));
+    }
+
+    // The rows own the selection and the region owns the commands, so the region has to observe
+    // the rows. Asserting only the disabled state passes against a region that never
+    // re-evaluates CanExecute, which is a permanently dead Install button.
+    [Fact]
+    public async Task Ticking_one_row_enables_the_batch_commands()
+    {
+        var (vm, _, _) = await BuildBatchAsync(TwoTargets());
+        var installRaised = 0;
+        var removeRaised = 0;
+        vm.InstallSelectedCommand.CanExecuteChanged += (_, _) => installRaised++;
+        vm.RemoveSelectedCommand.CanExecuteChanged += (_, _) => removeRaised++;
+
+        Assert.False(vm.InstallSelectedCommand.CanExecute(null));
+
+        vm.Targets[0].IsSelected = true;
+
+        Assert.True(installRaised > 0);
+        Assert.True(removeRaised > 0);
+        Assert.True(vm.InstallSelectedCommand.CanExecute(null));
+        Assert.True(vm.RemoveSelectedCommand.CanExecute(null));
+    }
+
+    // RefreshAsync replaces the rows, so it must stop listening to the old ones or a stale row
+    // keeps poking the live commands. Counting subscriptions is not observable; poking the
+    // discarded row is.
+    [Fact]
+    public async Task A_row_discarded_by_a_refresh_no_longer_drives_the_commands()
+    {
+        var (vm, _, _) = await BuildBatchAsync(TwoTargets());
+        var stale = vm.Targets[0];
+        await vm.RefreshAsync(CancellationToken.None);
+
+        var raised = 0;
+        vm.InstallSelectedCommand.CanExecuteChanged += (_, _) => raised++;
+        stale.IsSelected = true;
+
+        Assert.Equal(0, raised);
+        Assert.False(vm.InstallSelectedCommand.CanExecute(null));
+    }
+
+    // Two targets share the configuration directory and the asset cache, and the engine assumes
+    // one operation at a time. A handshake, not a counter: Hold keeps target 1 in flight, so
+    // "target 2 has not started" is a fact rather than a race. A Task.WhenAll implementation
+    // records both calls before the release and fails.
+    [Fact]
+    public async Task A_batch_runs_its_targets_one_at_a_time()
+    {
+        var (vm, backend, _) = await BuildBatchAsync(TwoTargets());
+
+        // Observed through OnEnter into a list this test owns, never by reading backend.Calls
+        // mid-flight: Calls is appended from a pool thread, so enumerating it while a second
+        // target might be running can throw "collection was modified".
+        var entered = new List<string>();
+        var first = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+        backend.OnEnter = t => { lock (entered) entered.Add(t.ClientPath); first.TrySetResult(); };
+        backend.Hold = new TaskCompletionSource();
+
+        vm.SelectAllCommand.Execute(null);
+        var batch = vm.InstallSelectedCommand.ExecuteAsync(null);
+        await first.Task;
+
+        lock (entered) Assert.Equal(["/clients/ea"], entered);
+
+        // The deterministic discriminator: Task.WhenAll evaluates every loop body before its
+        // first await, so it would already have advanced the position past target 1.
+        Assert.Equal("Target 1 of 2", vm.BatchPosition);
+
+        backend.Hold.SetResult();
+        await batch;
+
+        Assert.Equal(["Install:/clients/ea", "Install:/clients/origin"], backend.Calls);
+    }
+
+    [Fact]
+    public async Task A_batch_with_nothing_selected_does_nothing()
+    {
+        var (vm, backend, _) = await BuildBatchAsync(TwoTargets());
+
+        Assert.False(vm.InstallSelectedCommand.CanExecute(null));
+        await vm.InstallSelectedCommand.ExecuteAsync(null);
+
+        Assert.Empty(backend.Calls);
+    }
+
+    // CanRunBatch's own !IsBusy term is unpinned without this: AsyncRelayCommand's ExecutionTask
+    // guard only blocks re-entry on the SAME command instance, and a running PER-ROW command is a
+    // different instance from InstallSelectedCommand. Only this type's own IsBusy flag, shared by
+    // both, catches a batch command left enabled while an unrelated row operation is in flight.
+    [Fact]
+    public async Task A_running_per_row_command_disables_the_batch_commands_too()
+    {
+        var (vm, backend, _) = await BuildBatchAsync(TwoTargets());
+        var hold = new TaskCompletionSource();
+        backend.Hold = hold;
+        vm.Targets[0].IsSelected = true;
+
+        var running = vm.Targets[0].InstallCommand.ExecuteAsync(null);
+
+        Assert.False(vm.InstallSelectedCommand.CanExecute(null));
+        Assert.False(vm.RemoveSelectedCommand.CanExecute(null));
+
+        hold.SetResult();
+        await running;
+
+        Assert.True(vm.InstallSelectedCommand.CanExecute(null));
+        Assert.True(vm.RemoveSelectedCommand.CanExecute(null));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public async Task A_mixed_selection_reaches_every_selected_target(bool remove)
+    {
+        var (vm, backend, _) = await BuildBatchAsync(TwoTargets());
+        vm.SelectAllCommand.Execute(null);
+
+        await (remove ? vm.RemoveSelectedCommand : vm.InstallSelectedCommand).ExecuteAsync(null);
+
+        var verb = remove ? "Remove" : "Install";
+        Assert.Equal([$"{verb}:/clients/ea", $"{verb}:/clients/origin"], backend.Calls);
+    }
+
+    // Aborting at target 1 of 3 would leave two rows with no outcome and nothing saying why. The
+    // failing target is picked by ClientPath because the two EA rows share a Client — ClientPath
+    // is the only property that singles out one target regardless of position.
+    [Fact]
+    public async Task A_failing_target_does_not_stop_the_batch()
+    {
+        var (vm, backend, banners) = await BuildBatchAsync(ThreeTargets());
+        backend.ResultFor = t => t.ClientPath == "/clients/origin"
+            ? UnlockerResult.Fail("mirror refused")
+            : UnlockerResult.Ok();
+
+        vm.SelectAllCommand.Execute(null);
+        await vm.InstallSelectedCommand.ExecuteAsync(null);
+
+        Assert.Equal(3, backend.Calls.Count);
+        Assert.Equal("Not installed", vm.Targets[0].StatusText);
+        Assert.Equal("mirror refused", vm.Targets[1].StatusText);
+        Assert.Contains(banners, b => b.Text.Contains("2 of 3"));
+    }
+
+    // A returned failure and a thrown one reach the loop by different paths, and the row-scoped
+    // guarantee above covers only the returned one. Without a per-row boundary the throw abandons
+    // the for entirely: the target behind it is never attempted and no summary is posted, so the
+    // user is left looking at a row that still reads "Not installed" with nothing saying why.
+    [Fact]
+    public async Task A_thrown_failure_does_not_stop_the_batch()
+    {
+        var (vm, backend, banners) = await BuildBatchAsync(ThreeTargets());
+        backend.ThrowFor = t => t.ClientPath == "/clients/origin"
+            ? new IOException("the prefix went away")
+            : null;
+
+        vm.SelectAllCommand.Execute(null);
+        await vm.InstallSelectedCommand.ExecuteAsync(null);
+
+        Assert.Equal(3, backend.Calls.Count);
+        Assert.Contains("the prefix went away", vm.Targets[1].StatusText);
+        Assert.Contains(banners, b => b.Text.Contains("2 of 3"));
+    }
+
+    // The batch re-reads each row's status once its operation finishes. GetStatusAsync has no
+    // suspension point on either real backend — the service delegates, and both backends return
+    // Task.FromResult after doing their work — so awaiting it directly runs the Wine backend's
+    // prefix reopen and registry reads on the thread that draws. OperationThreadId cannot see this
+    // call, which is why the fake records status threads separately.
+    [Fact]
+    public async Task The_batch_status_read_does_not_run_on_the_thread_that_started_it()
+    {
+        var (vm, backend, _) = await BuildBatchAsync(TwoTargets());
+        var beforeBatch = backend.StatusThreadIds.Count;
+
+        using var ui = new UiThread();
+        var finished = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        ui.Post(() => _ = RunBatchOn(vm, finished));
+
+        await finished.Task;
+
+        // Both halves are asserted: that the reads happened at all, and that neither landed on the
+        // UI thread. Without the count, an implementation that never read a status would pass.
+        var duringBatch = backend.StatusThreadIds.Skip(beforeBatch).ToArray();
+        Assert.Equal(2, duringBatch.Length);
+        Assert.DoesNotContain(ui.Thread.ManagedThreadId, duringBatch);
+    }
+
+    private static async Task RunBatchOn(UnlockerViewModel vm, TaskCompletionSource finished)
+    {
+        try
+        {
+            vm.SelectAllCommand.Execute(null);
+            await vm.InstallSelectedCommand.ExecuteAsync(null);
+            finished.TrySetResult();
+        }
+        catch (Exception e)
+        {
+            finished.TrySetException(e);
+        }
+    }
+
+    // Elevation is the one exception: it is true of every target, so the batch stops and the rest
+    // are never invoked. Asserting only that the prompt appeared passes against an
+    // implementation that ran all three first.
+    [Fact]
+    public async Task Elevation_aborts_the_batch_without_touching_the_rest()
+    {
+        var (vm, backend, banners) = await BuildBatchAsync(ThreeTargets());
+        backend.NextResult = UnlockerResult.NeedsElevation();
+
+        vm.SelectAllCommand.Execute(null);
+        await vm.InstallSelectedCommand.ExecuteAsync(null);
+
+        Assert.Equal(["Install:/clients/ea"], backend.Calls);
+        Assert.True(vm.RequiresElevation);
+        Assert.True(vm.RelaunchElevatedCommand.CanExecute(null));
+        Assert.Single(banners, b => b.Id == "unlocker-elevation");
+        Assert.DoesNotContain(banners, b => b.Id == "unlocker-summary");
+    }
+
+    // Banners key by id so a repeated cause replaces its predecessor, which in a batch left only
+    // the last target's warning visible. Asserting one warning is visible passes against exactly
+    // that bug.
+    [Fact]
+    public async Task Every_target_keeps_its_own_warning()
+    {
+        var (vm, backend, _) = await BuildBatchAsync(TwoTargets());
+        backend.ResultFor = t => UnlockerResult.Ok([$"{t.ClientPath} warned"]);
+
+        vm.SelectAllCommand.Execute(null);
+        await vm.InstallSelectedCommand.ExecuteAsync(null);
+
+        Assert.Equal("/clients/ea warned", vm.Targets[0].Warning);
+        Assert.Equal("/clients/origin warned", vm.Targets[1].Warning);
+    }
+
+    [Fact]
+    public async Task The_batch_reports_its_position_and_clears_it_afterwards()
+    {
+        var (vm, backend, _) = await BuildBatchAsync(TwoTargets());
+        var seen = new List<string?>();
+        backend.OnEnter = _ => seen.Add(vm.BatchPosition);
+
+        vm.SelectAllCommand.Execute(null);
+        await vm.InstallSelectedCommand.ExecuteAsync(null);
+
+        Assert.Equal(["Target 1 of 2", "Target 2 of 2"], seen);
+        Assert.Null(vm.BatchPosition);
+    }
+
+    // The inner step bar is per target, so it must restart rather than carry the previous
+    // target's finished count into the next one's first frame. ToReport makes target 1 finish at
+    // "Done" 4/4, and OnEnter fires before the replay, so a missing reset on any one of the three
+    // fields — CurrentStep, Completed, Total — is visible here. A single-field capture (Completed
+    // alone) cannot catch a dropped CurrentStep or Total reset, so all three are pinned together.
+    [Fact]
+    public async Task Each_target_restarts_the_step_counter()
+    {
+        var (vm, backend, _) = await BuildBatchAsync(TwoTargets());
+        backend.ToReport.Add(new UnlockerProgress("Done", 4, 4));
+        var atEntry = new List<(string? Step, int Completed, int Total)>();
+        backend.OnEnter = _ => atEntry.Add((vm.CurrentStep, vm.Completed, vm.Total));
+
+        vm.SelectAllCommand.Execute(null);
+        await vm.InstallSelectedCommand.ExecuteAsync(null);
+
+        Assert.Equal([(null, 0, 0), (null, 0, 0)], atEntry);
+    }
+
+    // Mirrors DrainAsync_completes_only_once_the_operation_has above, at the batch grain: without
+    // Start assigning _operation, MainViewModel's shutdown (MainViewModel.cs:713) would stop
+    // waiting for a batch still in flight — the same half-written version.dll failure _operation's
+    // own doc comment cites. The re-entrant ExecuteAsync call, made without awaiting the first,
+    // also pins Start's IsBusy ternary: reassigning _operation to a re-entrant call's own
+    // already-completed task would make this drain forget the batch that is still running.
+    [Fact]
+    public async Task Batch_DrainAsync_waits_for_the_batch_and_a_re_entrant_call_does_not_replace_it()
+    {
+        var (vm, backend, _) = await BuildBatchAsync(TwoTargets());
+        var hold = new TaskCompletionSource();
+        backend.Hold = hold;
+        vm.SelectAllCommand.Execute(null);
+
+        var batch = vm.InstallSelectedCommand.ExecuteAsync(null);
+        var drain = vm.DrainAsync();
+
+        Assert.False(drain.IsCompleted);
+
+        // Bypasses CanExecute the way a double-click could race it. RunBatchAsync's own IsBusy
+        // guard returns immediately, so this call's task is already complete; the point is what
+        // Start does with it, not what this second call itself accomplishes.
+        _ = vm.InstallSelectedCommand.ExecuteAsync(null);
+        Assert.False(vm.DrainAsync().IsCompleted);
+
+        hold.SetResult();
+        await batch;
+
+        Assert.True(drain.IsCompleted);
     }
 }
 

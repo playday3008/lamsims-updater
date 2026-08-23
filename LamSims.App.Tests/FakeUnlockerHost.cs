@@ -74,11 +74,41 @@ public sealed class RecordingUnlockerBackend(params UnlockerTarget[] targets) : 
     /// </summary>
     public TaskCompletionSource? Hold { get; set; }
 
+    /// <summary>
+    /// Observed at the very start of an operation, before ToReport is replayed, so a test can see
+    /// what the view model looked like as this target began rather than after its own progress
+    /// has landed.
+    /// </summary>
+    public Action<UnlockerTarget>? OnEnter { get; set; }
+
+    /// <summary>Per target, for a batch whose targets must not all answer the same way.</summary>
+    public Func<UnlockerTarget, UnlockerResult>? ResultFor { get; set; }
+
+    /// <summary>
+    /// Every managed thread GetStatusAsync ran on, in call order. The batch reads a row's status
+    /// after that row's operation, on a path OperationThreadId cannot see, and on both real
+    /// backends that read is synchronous work — so an unhopped call runs it on the UI thread. A
+    /// list rather than one field because a refresh reads statuses too: a single field would
+    /// already hold a pool thread from the refresh, and an assertion against it would hold whether
+    /// or not the batch hopped.
+    /// </summary>
+    public List<int> StatusThreadIds { get; } = [];
+
+    /// <summary>
+    /// Set to make a target THROW rather than return a failed result. A returned failure and a
+    /// thrown one reach the batch loop by different paths, and only the thrown one can abandon it.
+    /// </summary>
+    public Func<UnlockerTarget, Exception?>? ThrowFor { get; set; }
+
     public Task<IReadOnlyList<UnlockerTarget>> DetectTargetsAsync(CancellationToken ct) =>
         Task.FromResult<IReadOnlyList<UnlockerTarget>>(targets);
 
-    public Task<UnlockerStatus> GetStatusAsync(UnlockerTarget t, CancellationToken ct) =>
-        Task.FromResult(new UnlockerStatus(State, null));
+    public Task<UnlockerStatus> GetStatusAsync(UnlockerTarget t, CancellationToken ct)
+    {
+        StatusThreadIds.Add(Environment.CurrentManagedThreadId);
+
+        return Task.FromResult(new UnlockerStatus(State, null));
+    }
 
     public async Task<UnlockerResult> InstallAsync(UnlockerTarget t, IUnlockerAssetSource a,
                                            IProgress<UnlockerProgress> p, CancellationToken ct)
@@ -88,11 +118,13 @@ public sealed class RecordingUnlockerBackend(params UnlockerTarget[] targets) : 
         // The target's path, not just the verb: a row bound to its neighbour's data context calls the
         // right method for the wrong client, and only the path reveals it.
         Calls.Add($"Install:{t.ClientPath}");
+        OnEnter?.Invoke(t);
         foreach (var report in ToReport) p.Report(report);
 
         if (Hold is not null) await Hold.Task;
+        if (ThrowFor?.Invoke(t) is { } fault) throw fault;
 
-        return NextResult;
+        return ResultFor?.Invoke(t) ?? NextResult;
     }
 
     public async Task<UnlockerResult> RemoveAsync(UnlockerTarget t, IProgress<UnlockerProgress> p,
@@ -101,9 +133,11 @@ public sealed class RecordingUnlockerBackend(params UnlockerTarget[] targets) : 
         OperationThreadId = Environment.CurrentManagedThreadId;
 
         Calls.Add($"Remove:{t.ClientPath}");
+        OnEnter?.Invoke(t);
 
         if (Hold is not null) await Hold.Task;
+        if (ThrowFor?.Invoke(t) is { } fault) throw fault;
 
-        return NextResult;
+        return ResultFor?.Invoke(t) ?? NextResult;
     }
 }
