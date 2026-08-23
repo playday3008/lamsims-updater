@@ -11,13 +11,42 @@ namespace LamSims.Core.Downloading;
 /// </summary>
 public sealed class DownloadPaths
 {
-    public string Root { get; }
+    /// <summary>
+    /// Where downloads go when nothing is configured. <see cref="Retarget"/> returns here when it
+    /// is given nothing, so clearing the setting cannot leave the engine on the directory that
+    /// was just cleared.
+    /// </summary>
+    public string DefaultRoot { get; }
+
+    public string Root { get; private set; }
 
     public DownloadPaths(string? overrideRoot = null)
     {
-        Root = overrideRoot ?? Path.Combine(
+        DefaultRoot = overrideRoot ?? Path.Combine(
             Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
             "lamsims-updater", "downloads");
+        Root = DefaultRoot;
+    }
+
+    /// <summary>
+    /// Moves every path this instance hands out to <paramref name="directory"/>, or back to
+    /// <see cref="DefaultRoot"/> when it is null or blank, and creates it. Every consumer holds
+    /// this one instance and asks it for paths per call, so one call moves them all and the
+    /// setting can be applied without rebuilding the object graph.
+    ///
+    /// <para><b>Only while nothing is running.</b> A retarget under a live download orphans the
+    /// <c>.part</c> file and the lock the run is still holding, and the next pass would see
+    /// neither. The application gates the call on an empty queue.</para>
+    ///
+    /// <para>Existing archives are not moved. <see cref="Root"/> is assigned only once the
+    /// directory exists, so a directory that cannot be created throws and leaves the engine
+    /// pointed where it already was.</para>
+    /// </summary>
+    public void Retarget(string? directory)
+    {
+        var root = string.IsNullOrWhiteSpace(directory) ? DefaultRoot : directory;
+        Directory.CreateDirectory(root);
+        Root = root;
     }
 
     public string PartFile(string code) => Path.Combine(Root, Validate(code) + ".part");

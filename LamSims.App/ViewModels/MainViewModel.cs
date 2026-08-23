@@ -9,6 +9,7 @@ using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using LamSims.App.Services;
 using LamSims.Core.Catalogs;
+using LamSims.Core.Downloading;
 using LamSims.Core.Queueing;
 using LamSims.Core.Scanning;
 using LamSims.Core.Settings;
@@ -34,12 +35,13 @@ public sealed partial class MainViewModel : ObservableObject
         _load = load ?? services.Catalog.LoadAsync;
         _save = save ?? services.Settings.SaveAsync;
 
-        // Seeded without going through the property setters: those mark the restart notice and
-        // queue a save, and loading a value the user already chose is neither a change nor a
-        // reason to warn them.
+        // Seeded without going through the property setters: those queue a save and, for the
+        // download directory, move the engine. A value the user already chose is neither a
+        // change nor a reason to write it back.
         _gameDirectory = services.Current.GameDirectory;
         _downloadDirectory = services.Current.DownloadDirectory;
         _connections = services.Current.Connections;
+        _catalogInput = services.Current.CatalogSource ?? "";
 
         if (services.SettingsError is { } settingsError)
         {
@@ -82,21 +84,64 @@ public sealed partial class MainViewModel : ObservableObject
 
     internal int SettingsWriteCount { get; private set; }
 
-    [ObservableProperty]
-    private bool _restartNoticeVisible;
-
     partial void OnConnectionsChanged(int value)
     {
         _services.Current.Connections = value;
-        RestartNoticeVisible = true;
+
+        // SegmentedDownloader reads this per download rather than capturing it, and the shared
+        // client's pool is sized for DownloadOptions.MaxConnections, so the new count is in force
+        // from the next pack, with no restart and nothing to rebuild.
+        _services.DownloadOptions.Connections = Math.Clamp(value, 1, DownloadOptions.MaxConnections);
+
         QueueSave();
     }
 
     partial void OnDownloadDirectoryChanged(string? value)
     {
+        if (_revertingDownloadDirectory) return;
+
+        if (!MoveDownloadsTo(value))
+        {
+            // The engine refused the directory and stayed where it was, so the setting has to stay
+            // where it was too. Persisting a root that cannot be created loses the working one:
+            // the next launch fails to create it as well and falls back to the default.
+            _revertingDownloadDirectory = true;
+            try { DownloadDirectory = _services.Current.DownloadDirectory; }
+            finally { _revertingDownloadDirectory = false; }
+            return;
+        }
+
         _services.Current.DownloadDirectory = value;
-        RestartNoticeVisible = true;
         QueueSave();
+    }
+
+    private bool _revertingDownloadDirectory;
+
+    /// <summary>
+    /// Points the engine at a new download directory. Every consumer holds the one
+    /// <see cref="DownloadPaths"/> and asks it for paths per call, so this moves all of them at
+    /// once. Gated on an empty queue by <see cref="CanMoveDownloads"/>: a move under a live
+    /// download would orphan the <c>.part</c> file and the lock the run still holds.
+    /// </summary>
+    /// <returns>False when the directory was refused and the engine stayed where it was.</returns>
+    private bool MoveDownloadsTo(string? directory)
+    {
+        try
+        {
+            _services.DownloadPaths.Retarget(directory);
+            Dismiss("downloads");
+            return true;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException
+                                 or ArgumentException or NotSupportedException)
+        {
+            // Retarget assigns nothing until the directory exists, so the engine is still on the
+            // root it was already using, which is what the banner names.
+            Raise(new Banner("downloads",
+                $"Downloads are still being kept in '{_services.DownloadPaths.Root}': {e.Message}",
+                BannerKind.Warning));
+            return false;
+        }
     }
 
     private void QueueSave() => _saveDueAt = _services.Clock.UtcNow + SaveDebounce;
@@ -139,13 +184,20 @@ public sealed partial class MainViewModel : ObservableObject
         Scan();
     }
 
-    [RelayCommand]
+    /// <summary>
+    /// Refused while anything is still in the queue. A move under a live download leaves the
+    /// <c>.part</c> file and the lock behind in the old directory, where the run that owns them
+    /// is still writing and the next pass will never look.
+    /// </summary>
+    public bool CanMoveDownloads => PendingCount == 0;
+
+    [RelayCommand(CanExecute = nameof(CanMoveDownloads))]
     private async Task BrowseDownloadsAsync(CancellationToken ct)
     {
         var picked = await _services.Pickers.PickFolderAsync("Choose where downloads are kept", DownloadDirectory);
         if (picked is null) return;
 
-        DownloadDirectory = picked;   // its setter queues the save and raises the restart notice
+        DownloadDirectory = picked;   // its setter moves the engine and queues the save
         await FlushSettingsNowAsync(ct);
     }
 
@@ -252,9 +304,41 @@ public sealed partial class MainViewModel : ObservableObject
         var picked = await _services.Pickers.PickFileAsync("Choose a catalog file", _services.Paths.Root);
         if (picked is null) return;
 
+        CatalogInput = picked;
         _services.Current.CatalogSource = picked;
         await SaveSettingsAsync(ct);
         Apply(await LoadCatalogFromAsync(new CatalogSource(CatalogSourceKind.Settings, picked), ct));
+    }
+
+    /// <summary>
+    /// What the user has typed into the catalog box: a local path or an http(s) URL, told apart
+    /// by <see cref="CatalogSource.IsRemote"/> when the source is loaded. Distinct from
+    /// <see cref="CatalogDescription"/>, which reports the source actually in use; the two
+    /// differ whenever the box holds an edit that has not been applied.
+    /// </summary>
+    [ObservableProperty]
+    private string _catalogInput = "";
+
+    [RelayCommand(CanExecute = nameof(CanChangeCatalog))]
+    private async Task ApplyCatalogSourceAsync(CancellationToken ct)
+    {
+        // A URL pasted from a browser or a chat client routinely carries surrounding whitespace,
+        // and neither Uri.TryCreate nor the local reader forgives it.
+        var typed = CatalogInput.Trim();
+        CatalogInput = typed;
+
+        _services.Current.CatalogSource = typed.Length == 0 ? null : typed;
+        await SaveSettingsAsync(ct);
+
+        if (typed.Length == 0)
+        {
+            // Emptying the box is how the user gets back to "no catalog chosen"; the cached copy
+            // is unaffected by it and stays on offer.
+            Apply(new CatalogResolution(CatalogStatus.Empty, null, null, null, _cachedCopy));
+            return;
+        }
+
+        Apply(await LoadCatalogFromAsync(new CatalogSource(CatalogSourceKind.Settings, typed), ct));
     }
 
     private bool CanUseCachedCatalog => _cachedCopy is not null && PendingCount == 0;
@@ -346,7 +430,9 @@ public sealed partial class MainViewModel : ObservableObject
         OnPropertyChanged(nameof(FailedCount));
 
         ChangeCatalogCommand.NotifyCanExecuteChanged();
+        ApplyCatalogSourceCommand.NotifyCanExecuteChanged();
         UseCachedCatalogCommand.NotifyCanExecuteChanged();
+        BrowseDownloadsCommand.NotifyCanExecuteChanged();
 
         ApplyQueueState(update.State);
 

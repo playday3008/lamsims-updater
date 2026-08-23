@@ -17,14 +17,19 @@
         <Button Grid.Column="2" Content="Browse" Command="{Binding BrowseGameCommand}" />
       </Grid>
 
-      <Grid ColumnDefinitions="110,*,Auto" ColumnSpacing="8">
-        <TextBlock Grid.Column="0" Text="Catalog:" VerticalAlignment="Center" />
-        <TextBlock Grid.Column="1" Text="{Binding CatalogDescription}" VerticalAlignment="Center"
-                   TextTrimming="CharacterEllipsis" />
-        <StackPanel Grid.Column="2" Orientation="Horizontal" Spacing="8">
-          <Button Content="Change" Command="{Binding ChangeCatalogCommand}" />
+      <Grid ColumnDefinitions="110,*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="8" RowSpacing="2">
+        <TextBlock Grid.Row="0" Grid.Column="0" Text="Catalog:" VerticalAlignment="Center" />
+        <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding CatalogInput}"
+                 PlaceholderText="A catalog.json path, or an https:// URL" />
+        <StackPanel Grid.Row="0" Grid.Column="2" Orientation="Horizontal" Spacing="8">
+          <Button Content="Load" Command="{Binding ApplyCatalogSourceCommand}" />
+          <Button Content="Browse" Command="{Binding ChangeCatalogCommand}" />
           <Button Content="Use cached copy" Command="{Binding UseCachedCatalogCommand}" />
         </StackPanel>
+        <!-- The source actually in use, which differs from the box above whenever the box holds
+             an edit the user has not pressed Load on yet. -->
+        <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding CatalogDescription}" Classes="secondary"
+                   TextTrimming="CharacterEllipsis" />
       </Grid>
 
       <Expander Header="Advanced">
@@ -41,8 +46,6 @@
                     Value="{Binding Connections}" />
             <TextBlock Grid.Column="2" Text="{Binding Connections}" VerticalAlignment="Center" />
           </Grid>
-          <TextBlock Text="Applies after restart"
-                     IsVisible="{Binding RestartNoticeVisible}" />
         </StackPanel>
       </Expander>
 

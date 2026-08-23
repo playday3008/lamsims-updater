@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using LamSims.App;
 using LamSims.App.Services;
 using LamSims.App.ViewModels;
+using LamSims.Core.Downloading;
 using LamSims.Core.Installing;
 using LamSims.Core.Settings;
 using LamSims.Core.Unlocking;
@@ -22,6 +23,11 @@ public sealed class TestHost : IDisposable
     public required IQueueController Controller { get; init; }
     public required FakePickers Pickers { get; init; }
     public required FakeClock Clock { get; init; }
+
+    /// <summary>The two the view model mutates in place; a test asserts on them, never rebuilds them.</summary>
+    public required DownloadPaths DownloadPaths { get; init; }
+
+    public required DownloadOptions DownloadOptions { get; init; }
     public required List<AppSettings> Saved { get; init; }
 
     /// <summary>
@@ -50,6 +56,12 @@ public sealed class TestHost : IDisposable
         var paths = new AppPaths(Path.Combine(root, "config"));
         paths.EnsureCreated();
 
+        // Under the temp root for the same reason Composition redirects it: a view model that
+        // retargets the real default would create directories in the developer's profile.
+        var downloadPaths = new DownloadPaths(Path.Combine(root, "downloads"));
+        downloadPaths.EnsureCreated();
+        var downloadOptions = new DownloadOptions();
+
         var controller = queue ?? new RecordingQueue();
         var pickers = new FakePickers();
         var clock = new FakeClock();
@@ -77,7 +89,9 @@ public sealed class TestHost : IDisposable
             // one or all three to drive UnlockerViewModel through a real MainViewModel.
             unlockerService ?? new UnlockerService([]),
             unlockerHost ?? new FakeUnlockerHost { IsAvailable = false },
-            unlockerAssets ?? new StubUnlockerAssets());
+            unlockerAssets ?? new StubUnlockerAssets(),
+            downloadPaths,
+            downloadOptions);
 
         host = new TestHost
         {
@@ -87,6 +101,8 @@ public sealed class TestHost : IDisposable
             Controller = controller,
             Pickers = pickers,
             Clock = clock,
+            DownloadPaths = downloadPaths,
+            DownloadOptions = downloadOptions,
             Saved = saved,
         };
 

@@ -1,5 +1,6 @@
 using LamSims.App.Services;
 using LamSims.Core.Catalogs;
+using LamSims.Core.Downloading;
 using LamSims.Core.Installing;
 using LamSims.Core.Settings;
 using LamSims.Core.Unlocking;
@@ -23,4 +24,6 @@ public sealed record AppServices(
     string? CommandLineCatalog,
     UnlockerService Unlocker,
     IUnlockerHost UnlockerHost,
-    IUnlockerAssetSource UnlockerAssets);
+    IUnlockerAssetSource UnlockerAssets,
+    DownloadPaths DownloadPaths,
+    DownloadOptions DownloadOptions);

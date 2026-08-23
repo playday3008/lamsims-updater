@@ -18,8 +18,8 @@ public static class Composition
 {
     /// <summary>
     /// Built once, from the settings as they are at launch. DownloadDirectory and Connections
-    /// are therefore fixed for the session: applying them live would mean rebuilding the queue,
-    /// the runner, the client and the bridge.
+    /// only need their starting values here. Both apply live afterwards, through
+    /// DownloadPaths.Retarget and DownloadOptions.Connections.
     /// </summary>
     /// <param name="commandLineCatalog">The catalog named on the command line, if any.</param>
     /// <param name="overrideRoot">
@@ -47,22 +47,24 @@ public static class Composition
         var settings = loaded.Settings;
 
         var options = settings.ToDownloadOptions();
-        var http = HttpFactory.Create(options);
+        var http = HttpFactory.Create();
 
         // The composition's own default, which a test's overrideRoot redirects; the setting is
         // the user's choice layered on top of it.
         var defaultDownloadRoot = overrideRoot is null ? null : Path.Combine(overrideRoot, "downloads");
 
-        var downloadPaths = new DownloadPaths(settings.DownloadDirectory ?? defaultDownloadRoot);
+        // Constructed on the default and then retargeted, rather than constructed on the setting:
+        // DownloadPaths.Retarget(null) returns to the root it was built with, so this is what
+        // makes clearing the setting later resolve to the default instead of to the cleared value.
+        var downloadPaths = new DownloadPaths(defaultDownloadRoot);
 
         // PackLock does not create the download root and throws DirectoryNotFoundException when
         // it is missing, so it is created here rather than being left to the queue's first run.
         // A configured directory that cannot be created (a removable drive that is not plugged
         // in) falls back to the default, because the alternative is not starting at all.
-        if (!TryCreate(downloadPaths.Root, downloadPaths.EnsureCreated, faults)
-            && settings.DownloadDirectory is not null)
+        if (settings.DownloadDirectory is not { } configured
+            || !TryCreate(configured, () => downloadPaths.Retarget(configured), faults))
         {
-            downloadPaths = new DownloadPaths(defaultDownloadRoot);
             TryCreate(downloadPaths.Root, downloadPaths.EnsureCreated, faults);
         }
 
@@ -98,7 +100,9 @@ public static class Composition
             commandLineCatalog,
             unlockerService,
             unlockerHost,
-            unlockerAssets);
+            unlockerAssets,
+            downloadPaths,
+            options);
     }
 
     private static bool TryCreate(string root, Action create, List<string> faults)

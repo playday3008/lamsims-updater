@@ -56,20 +56,23 @@ public class HttpFactoryTests
     }
 
     [Fact]
-    public async Task A_client_built_from_options_honours_their_connection_count()
+    public async Task The_shared_client_admits_the_largest_connection_count_the_engine_allows()
     {
-        // The ceiling has to come from DownloadOptions, or workers queue in the connection
-        // pool and the download runs at a fraction of its configured parallelism. Asserting on
-        // the handler would only restate the argument, so this drives real requests and counts
-        // how many the server ever serves at once.
+        // Connections is a live setting and a handler's ceiling is fixed for its lifetime, so the
+        // pool is sized for DownloadOptions.MaxConnections. Sized for the startup value, raising
+        // the setting mid-session would leave the extra workers queued in the pool.
+        //
+        // Real requests are driven here because asserting on the handler would only restate the
+        // argument passed to it.
         var payload = Enumerable.Range(0, 64).Select(i => (byte)i).ToArray();
         await using var server = await TestFileServer.StartAsync(
             payload, new TestFileServerOptions { StallBeforeHeaders = TimeSpan.FromMilliseconds(400) });
-        using var client = HttpFactory.Create(new DownloadOptions { Connections = 2 });
+        using var client = HttpFactory.Create();
 
-        await Task.WhenAll(Enumerable.Range(0, 6).Select(_ => client.GetByteArrayAsync(server.FileUrl)));
+        await Task.WhenAll(Enumerable.Range(0, DownloadOptions.MaxConnections)
+            .Select(_ => client.GetByteArrayAsync(server.FileUrl)));
 
-        Assert.Equal(6, server.RequestCount);
-        Assert.InRange(server.PeakConcurrentRequests, 1, 2);
+        Assert.Equal(DownloadOptions.MaxConnections, server.RequestCount);
+        Assert.Equal(DownloadOptions.MaxConnections, server.PeakConcurrentRequests);
     }
 }

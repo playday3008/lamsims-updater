@@ -168,4 +168,143 @@ public class MainViewModelCatalogTests
         vm.ApplyUpdate(new QueueUpdate(QueueState.Idle, [Snap("EP01", QueueItemState.Completed)]));
         Assert.True(vm.ChangeCatalogCommand.CanExecute(null));
     }
+
+    /// <summary>
+    /// Records what each source-applying run loaded and what it saved. The two are asserted
+    /// together: the view model writes the setting and loads the source separately, so a test
+    /// that watched only one would stay green while the other silently kept the old value.
+    /// </summary>
+    private static MainViewModel TypedSourceViewModel(
+        out TestHost host, out List<CatalogSource> loaded, out List<string?> saved)
+    {
+        var loadedSources = new List<CatalogSource>();
+        var savedSources = new List<string?>();
+
+        var vm = TestHost.ViewModel(out host,
+            load: (source, _) =>
+            {
+                loadedSources.Add(source);
+                return Task.FromResult(new CatalogResolution(
+                    CatalogStatus.Loaded,
+                    new CatalogLoadResult(new Catalog(1, null, [Packs.Entry()]), []),
+                    source, null, null));
+            },
+            save: (settings, _) =>
+            {
+                savedSources.Add(settings.CatalogSource);
+                return Task.CompletedTask;
+            });
+
+        loaded = loadedSources;
+        saved = savedSources;
+        return vm;
+    }
+
+    [Fact(Timeout = 15000)]
+    public async Task A_typed_url_is_loaded_as_a_remote_source()
+    {
+        var vm = TypedSourceViewModel(out var host, out var loaded, out var saved);
+        using var _h = host;
+
+        vm.CatalogInput = "https://mirror.example.invalid/catalog.json";
+        await vm.ApplyCatalogSourceCommand.ExecuteAsync(null);
+
+        var source = Assert.Single(loaded);
+        Assert.Equal("https://mirror.example.invalid/catalog.json", source.Location);
+        Assert.True(source.IsRemote);
+        Assert.Equal(["https://mirror.example.invalid/catalog.json"], saved);
+        Assert.Single(vm.Rows);
+    }
+
+    [Fact(Timeout = 15000)]
+    public async Task A_typed_local_path_is_loaded_as_a_local_source()
+    {
+        // The same box takes both. IsRemote is what routes the load, so a path that arrived
+        // looking remote would be fetched over HTTP instead of read from disk.
+        var vm = TypedSourceViewModel(out var host, out var loaded, out var saved);
+        using var _h = host;
+
+        var path = Path.Combine(host.Root, "catalog.json");
+        vm.CatalogInput = path;
+        await vm.ApplyCatalogSourceCommand.ExecuteAsync(null);
+
+        var source = Assert.Single(loaded);
+        Assert.Equal(path, source.Location);
+        Assert.False(source.IsRemote);
+        Assert.Equal([path], saved);
+    }
+
+    [Fact(Timeout = 15000)]
+    public async Task Surrounding_whitespace_is_trimmed_before_the_source_is_used()
+    {
+        // A URL pasted from a browser or a chat client routinely arrives with a trailing
+        // newline, and neither the file reader nor Uri.TryCreate forgives one.
+        var vm = TypedSourceViewModel(out var host, out var loaded, out var saved);
+        using var _h = host;
+
+        vm.CatalogInput = "  https://mirror.example.invalid/catalog.json\n";
+        await vm.ApplyCatalogSourceCommand.ExecuteAsync(null);
+
+        Assert.Equal("https://mirror.example.invalid/catalog.json", Assert.Single(loaded).Location);
+        Assert.Equal(["https://mirror.example.invalid/catalog.json"], saved);
+        Assert.Equal("https://mirror.example.invalid/catalog.json", vm.CatalogInput);
+    }
+
+    [Fact(Timeout = 15000)]
+    public async Task Emptying_the_box_clears_the_setting_and_returns_to_the_empty_state()
+    {
+        // Clearing is the only way back to "no catalog" once one has been chosen; without it a
+        // typo in the setting is permanent, because every launch resolves it and fails.
+        var vm = TypedSourceViewModel(out var host, out var loaded, out var saved);
+        using var _h = host;
+
+        vm.CatalogInput = "https://mirror.example.invalid/catalog.json";
+        await vm.ApplyCatalogSourceCommand.ExecuteAsync(null);
+
+        vm.CatalogInput = "   ";
+        await vm.ApplyCatalogSourceCommand.ExecuteAsync(null);
+
+        Assert.Single(loaded);            // the blank was not handed to the loader
+        Assert.Equal([null], saved[1..]);
+        Assert.Empty(vm.Rows);
+        Assert.Equal("No catalog selected.", vm.EmptyStateMessage);
+    }
+
+    [Fact(Timeout = 15000)]
+    public async Task Browsing_for_a_catalog_file_fills_the_box()
+    {
+        // The box and the browse button name one setting. A pick that left the box reading the
+        // previous source would be undone by the next Load the user pressed.
+        var vm = TypedSourceViewModel(out var host, out _, out _);
+        using var _h = host;
+
+        var path = Path.Combine(host.Root, "picked.json");
+        host.Pickers.NextFile = path;
+        await vm.ChangeCatalogCommand.ExecuteAsync(null);
+
+        Assert.Equal(path, vm.CatalogInput);
+    }
+
+    [Fact]
+    public void Applying_a_typed_catalog_is_refused_while_work_is_in_the_queue()
+    {
+        // Same reason Change is refused: Apply rebuilds every row out from under a live pack.
+        var vm = TestHost.ViewModel(out var host);
+        using var _h = host;
+
+        vm.ApplyUpdate(new QueueUpdate(QueueState.Running, [Snap("EP01", QueueItemState.Downloading)]));
+        Assert.False(vm.ApplyCatalogSourceCommand.CanExecute(null));
+
+        vm.ApplyUpdate(new QueueUpdate(QueueState.Idle, [Snap("EP01", QueueItemState.Completed)]));
+        Assert.True(vm.ApplyCatalogSourceCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public void The_box_opens_showing_the_source_the_settings_already_name()
+    {
+        var vm = TestHost.ViewModel(out var host, seed: s => s.CatalogSource = "/srv/catalog.json");
+        using var _h = host;
+
+        Assert.Equal("/srv/catalog.json", vm.CatalogInput);
+    }
 }

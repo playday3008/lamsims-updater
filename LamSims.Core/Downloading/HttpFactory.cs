@@ -34,10 +34,12 @@ public static class HttpFactory
         };
 
     /// <summary>
-    /// The sanctioned entry point. MaxConnectionsPerServer must be at least
+    /// One client for the whole application. MaxConnectionsPerServer must be at least
     /// DownloadOptions.Connections, or workers block in the connection pool and the download
-    /// runs at a fraction of its configured parallelism. Taking the options object keeps the
-    /// two halves of that invariant from being set independently.
+    /// runs at a fraction of its configured parallelism. Connections is a live setting, so the
+    /// pool is sized for the largest value it can ever hold rather than for whichever one was
+    /// configured at startup. The engine still opens one connection per worker and spawns only
+    /// Connections workers.
     /// </summary>
-    public static HttpClient Create(DownloadOptions options) => Create(options.Connections);
+    public static HttpClient Create() => Create(DownloadOptions.MaxConnections);
 }

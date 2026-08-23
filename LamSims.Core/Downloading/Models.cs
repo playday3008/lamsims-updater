@@ -42,15 +42,27 @@ public sealed record DownloadResult(
 
 public sealed class DownloadOptions
 {
+    /// <summary>
+    /// The most connections one archive may ever be configured to use. Also the ceiling
+    /// <see cref="HttpFactory"/> gives the connection pool, so raising
+    /// <see cref="Connections"/> mid-session is never blocked by a pool sized for the old value.
+    /// </summary>
+    public const int MaxConnections = 16;
+
     private int _connections = 8;
 
-    /// <summary>Connections used for one archive. One archive downloads at a time.</summary>
+    /// <summary>
+    /// Connections used for one archive. One archive downloads at a time. Read per download by
+    /// <see cref="SegmentedDownloader"/> rather than captured, so a change takes effect on the
+    /// next pack.
+    /// </summary>
     public int Connections
     {
         get => _connections;
-        set => _connections = value is >= 1 and <= 16
+        set => _connections = value is >= 1 and <= MaxConnections
             ? value
-            : throw new ArgumentOutOfRangeException(nameof(value), value, "Connections must be between 1 and 16.");
+            : throw new ArgumentOutOfRangeException(
+                nameof(value), value, $"Connections must be between 1 and {MaxConnections}.");
     }
 
     private long _chunkSize = ChunkPlan.DefaultChunkSize;

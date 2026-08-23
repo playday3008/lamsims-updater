@@ -13,6 +13,7 @@ using Avalonia.Threading;
 using Avalonia.VisualTree;
 using LamSims.App.Services;
 using LamSims.App.ViewModels;
+using LamSims.Core.Downloading;
 using LamSims.Core.Installing;
 using LamSims.Core.Settings;
 using LamSims.Core.Unlocking;
@@ -83,7 +84,11 @@ public sealed class ViewHost : IDisposable
             // itself. A test that wants the region visible supplies its own recording backend.
             unlockerService ?? new UnlockerService([]),
             unlockerHost ?? new FakeUnlockerHost { IsAvailable = false },
-            unlockerAssets ?? new StubUnlockerAssets()), queue);
+            unlockerAssets ?? new StubUnlockerAssets(),
+            // Under the caller's temp root: the view model retargets this instance, and the real
+            // default would put download directories in the developer's profile.
+            new DownloadPaths(Path.Combine(paths.Root, "downloads")),
+            new DownloadOptions()), queue);
     }
 
     /// <summary>
