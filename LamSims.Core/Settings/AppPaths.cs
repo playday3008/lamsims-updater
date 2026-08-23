@@ -46,5 +46,12 @@ public sealed class AppPaths
     /// </summary>
     public string UnlockerAutostartBackupFile => Path.Combine(Root, "unlocker-autostart.json");
 
+    /// <summary>
+    /// Where per-client unlocker install records live. Under the app's own root for the same
+    /// reason as <see cref="InstallStateDirectory"/>: the client directory belongs to EA's
+    /// installer and its repair tools, which remove entries they do not recognise.
+    /// </summary>
+    public string UnlockerInstallDirectory => Path.Combine(Root, "unlocker-installs");
+
     public void EnsureCreated() => Directory.CreateDirectory(Root);
 }
