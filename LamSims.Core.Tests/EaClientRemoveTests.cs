@@ -273,9 +273,10 @@ public class EaClientRemoveTests
     }
 
     // With no autostart value there is no backup, and a self-update can delete version.dll, so
-    // the config directory has to be enough on its own for step 1 to find work.
+    // this client's own install record has to be enough on its own for step 1 to find work. The
+    // shared config directory does not count, because it belongs to every client in the scope.
     [Fact]
-    public async Task The_config_directory_alone_is_enough_to_remove()
+    public async Task The_install_record_alone_is_enough_to_remove()
     {
         using var f = new InstallFixture();
         var target = await f.TargetAsync();

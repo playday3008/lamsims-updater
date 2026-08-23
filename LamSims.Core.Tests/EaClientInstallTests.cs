@@ -55,6 +55,22 @@ public sealed class InstallFixture : IDisposable
         Backend.InstallAsync(target, Assets, new SyncProgress<UnlockerProgress>(Reports.Add),
                              CancellationToken.None);
 
+    /// <summary>
+    /// Registers Origin beside the first client, in the same scope, so a test can exercise two
+    /// clients sharing one configuration directory. Returns its directory.
+    /// </summary>
+    public string AddOrigin()
+    {
+        var directory = Path.Combine(Dir.Path, "Program Files", "Origin");
+        Directory.CreateDirectory(directory);
+        Host.ClientPaths[ClientRegistryKey.Origin] = Path.Combine(directory, "Origin.exe");
+        return directory;
+    }
+
+    public Task<UnlockerResult> RemoveAsync(UnlockerTarget target) =>
+        Backend.RemoveAsync(target, new SyncProgress<UnlockerProgress>(Reports.Add),
+                            CancellationToken.None);
+
     /// <summary>The roots an aborted install must leave unchanged. DownloadPaths is excluded: a
     /// verified DLL may legitimately have been cached before the step under test refused.</summary>
     public string[] GuardedRoots =>
@@ -464,5 +480,242 @@ public class EaClientInstallTests
         // The backup is checked too, so removal has something to restore from.
         Assert.DoesNotContain("EADM", f.Host.AutostartValues.Keys);
         Assert.True(File.Exists(f.App.UnlockerAutostartBackupFile));
+    }
+}
+
+public sealed class MultiClientStateTests
+{
+    // The configuration directory is the unlocker DLL's own, one per scope and shared by both
+    // clients, so removal must leave it while any client still holds the DLL. Asserting only that
+    // the other client still reports Installed passes while the shared config is destroyed, because
+    // that client's DLL is still on disk; the directory assertion is the one that catches it.
+    [Fact]
+    public async Task Removing_one_client_leaves_the_other_and_the_shared_configuration()
+    {
+        using var fixture = new InstallFixture();
+        fixture.AddOrigin();
+        var targets = await fixture.Backend.DetectTargetsAsync(CancellationToken.None);
+        Assert.Equal(2, targets.Count);
+        foreach (var target in targets)
+            Assert.True((await fixture.InstallAsync(target)).Success);
+
+        Assert.True((await fixture.RemoveAsync(targets[1])).Success);
+
+        Assert.True(Directory.Exists(fixture.Paths.ConfigDirectory));
+        Assert.Equal(UnlockerState.Installed,
+            (await fixture.Backend.GetStatusAsync(targets[0], CancellationToken.None)).State);
+    }
+
+    [Fact]
+    public async Task Removing_the_last_client_deletes_the_shared_configuration()
+    {
+        using var fixture = new InstallFixture();
+        fixture.AddOrigin();
+        var targets = await fixture.Backend.DetectTargetsAsync(CancellationToken.None);
+        foreach (var target in targets) await fixture.InstallAsync(target);
+
+        foreach (var target in targets)
+            Assert.True((await fixture.RemoveAsync(target)).Success);
+
+        Assert.False(Directory.Exists(fixture.Paths.ConfigDirectory));
+    }
+
+    // The step-1 probe keys on this client's own record. A probe that tested the shared config
+    // directory or the shared autostart backup would answer "something to remove" for a client with
+    // nothing as soon as either client was installed, and the batch UI relies on this probe to make
+    // Remove safe on a mixed selection.
+    [Fact]
+    public async Task Removing_a_client_that_has_nothing_reports_nothing_to_remove()
+    {
+        using var fixture = new InstallFixture();
+        fixture.AddOrigin();
+        var targets = await fixture.Backend.DetectTargetsAsync(CancellationToken.None);
+        await fixture.InstallAsync(targets[0]);
+        fixture.Reports.Clear();
+
+        Assert.True((await fixture.RemoveAsync(targets[1])).Success);
+
+        var steps = fixture.Reports.Select(r => r.Step).ToArray();
+        Assert.Contains("Nothing to remove", steps);
+        // Elevation was never demanded, because there was nothing to do.
+        Assert.DoesNotContain("Checking administrator rights", steps);
+    }
+
+    // The autostart value is one machine-wide entry, so exactly one install captures it and only
+    // that install's removal restores it. A test that only checks the value is eventually
+    // restored passes against a first-remover-wins implementation too.
+    [Fact]
+    public async Task Only_the_client_that_captured_the_autostart_value_restores_it()
+    {
+        using var fixture = new InstallFixture();
+        fixture.Host.Autostart(EaClientUnlockerBackend.AutostartValueName,
+            @"%ProgramFiles%\EA\EADesktop.exe", AutostartValueKind.ExpandString);
+        fixture.AddOrigin();
+        var targets = await fixture.Backend.DetectTargetsAsync(CancellationToken.None);
+
+        foreach (var target in targets) await fixture.InstallAsync(target);
+        Assert.False(fixture.Host.AutostartValues.ContainsKey(
+            EaClientUnlockerBackend.AutostartValueName));
+
+        // Origin did not capture it, so removing Origin must not put it back.
+        await fixture.RemoveAsync(targets[1]);
+        Assert.False(fixture.Host.AutostartValues.ContainsKey(
+            EaClientUnlockerBackend.AutostartValueName));
+
+        await fixture.RemoveAsync(targets[0]);
+        // TryGetValue, not Assert.Contains: xunit declares the dictionary overload for both
+        // IDictionary and IReadOnlyDictionary, and a concrete Dictionary<,> converts to both
+        // equally well, so Assert.Contains(key, dict) is CS0121. Every existing assertion in
+        // this suite goes through ContainsKey or TryGetValue for the same reason.
+        Assert.True(fixture.Host.AutostartValues.TryGetValue(
+            EaClientUnlockerBackend.AutostartValueName, out var restored));
+        Assert.Equal(@"%ProgramFiles%\EA\EADesktop.exe", restored.Value);
+        Assert.Equal(AutostartValueKind.ExpandString, restored.Kind);
+    }
+
+    // Two clients and a repair install, which is the only shape that pins the ownership seed and
+    // the record's own claim separately. A repair install is allowed — installing over an installed
+    // target overwrites the DLL — and finds the value already gone, so an ownership flag
+    // recomputed from nothing is false and overwrites the owning record with a disowning one.
+    //
+    // Removing EA first, while Origin is still recorded, is what makes the record's claim
+    // load-bearing: with a sibling on record the "last removal in the scope" disjunct is false, so
+    // only OwnsAutostartBackup can carry the restore. The single-client version of this test
+    // passed against both a missing seed and a missing claim, because with no sibling that last
+    // disjunct is always true.
+    [Fact]
+    public async Task A_repair_install_keeps_its_autostart_claim_beside_another_client()
+    {
+        using var fixture = new InstallFixture();
+        fixture.Host.Autostart(EaClientUnlockerBackend.AutostartValueName,
+            @"C:\EA\EADesktop.exe");
+        fixture.AddOrigin();
+        var targets = await fixture.Backend.DetectTargetsAsync(CancellationToken.None);
+
+        Assert.True((await fixture.InstallAsync(targets[0])).Success);
+        Assert.True((await fixture.InstallAsync(targets[1])).Success);
+        Assert.True((await fixture.InstallAsync(targets[0])).Success);
+
+        Assert.True((await fixture.RemoveAsync(targets[0])).Success);
+
+        Assert.True(fixture.Host.AutostartValues.TryGetValue(
+            EaClientUnlockerBackend.AutostartValueName, out var restored));
+        Assert.Equal(@"C:\EA\EADesktop.exe", restored.Value);
+    }
+
+    // The owner has to re-capture on every install. The client can re-create its own Run entry
+    // between two installs, and a repair install that kept the first backup deletes the newer
+    // value while the backup still describes the older one, so removal puts the stale command line
+    // back. The old single-install code refreshed the backup every time, so keeping the first one
+    // unconditionally is a regression rather than a new rule.
+    [Fact]
+    public async Task A_repair_install_re_captures_a_value_the_client_re_created()
+    {
+        using var fixture = new InstallFixture();
+        fixture.Host.Autostart(EaClientUnlockerBackend.AutostartValueName, @"C:\EA\old.exe");
+        var target = await fixture.TargetAsync();
+        Assert.True((await fixture.InstallAsync(target)).Success);
+
+        // The client put its own entry back, with a newer command line.
+        const string newer = @"C:\EA\new.exe -silent";
+        fixture.Host.Autostart(EaClientUnlockerBackend.AutostartValueName, newer);
+        Assert.True((await fixture.InstallAsync(target)).Success);
+
+        Assert.True((await fixture.RemoveAsync(target)).Success);
+
+        Assert.True(fixture.Host.AutostartValues.TryGetValue(
+            EaClientUnlockerBackend.AutostartValueName, out var restored));
+        Assert.Equal(newer, restored.Value);
+    }
+
+    // Every install made by the current shipped build has no record at all. If a null record
+    // read as "not the owner", the upgrade would delete the DLL, tell the user the unlocker was
+    // removed, and leave the machine's Run entry deleted for good.
+    [Fact]
+    public async Task An_install_with_no_record_still_restores_the_autostart_value()
+    {
+        using var fixture = new InstallFixture();
+        fixture.Host.Autostart(EaClientUnlockerBackend.AutostartValueName,
+            @"C:\EA\EADesktop.exe");
+        var target = await fixture.TargetAsync();
+        await fixture.InstallAsync(target);
+
+        // Stand in for a pre-upgrade install: the DLL and the backup exist, the record does not.
+        Directory.Delete(fixture.App.UnlockerInstallDirectory, recursive: true);
+
+        Assert.True((await fixture.RemoveAsync(target)).Success);
+
+        Assert.True(fixture.Host.AutostartValues.TryGetValue(
+            EaClientUnlockerBackend.AutostartValueName, out var restored));
+        Assert.Equal(@"C:\EA\EADesktop.exe", restored.Value);
+    }
+
+    // The narrow legacy fallback in the step-1 probe. An EA app self-update can delete
+    // version.dll on its own, so a machine installed by a build with no records can have a live
+    // autostart backup, no DLL and no record. Without the fallback this reports "nothing to
+    // remove" and the Run value stays deleted for good.
+    [Fact]
+    public async Task A_pre_record_install_whose_dll_vanished_still_restores_the_autostart_value()
+    {
+        using var fixture = new InstallFixture();
+        fixture.Host.Autostart(EaClientUnlockerBackend.AutostartValueName,
+            @"C:\EA\EADesktop.exe");
+        var target = await fixture.TargetAsync();
+        await fixture.InstallAsync(target);
+
+        // A pre-upgrade machine whose client self-updated: no record, no DLL, backup still there.
+        Directory.Delete(fixture.App.UnlockerInstallDirectory, recursive: true);
+        File.Delete(Path.Combine(target.ClientPath, "version.dll"));
+
+        Assert.True((await fixture.RemoveAsync(target)).Success);
+
+        Assert.True(fixture.Host.AutostartValues.TryGetValue(
+            EaClientUnlockerBackend.AutostartValueName, out var restored));
+        Assert.Equal(@"C:\EA\EADesktop.exe", restored.Value);
+        Assert.False(File.Exists(fixture.App.UnlockerAutostartBackupFile));
+    }
+
+    // The records are not the whole answer, and on the existing population they are no answer at
+    // all: no install made by the shipped build wrote one, so the store says "nobody else" with
+    // complete confidence for every machine that has both clients unlocked today. The other
+    // client's DLL on disk is the ground truth the decision has to consult as well.
+    [Fact]
+    public async Task A_sibling_with_no_record_still_keeps_the_shared_configuration()
+    {
+        using var fixture = new InstallFixture();
+        fixture.AddOrigin();
+        var targets = await fixture.Backend.DetectTargetsAsync(CancellationToken.None);
+        foreach (var target in targets)
+            Assert.True((await fixture.InstallAsync(target)).Success);
+
+        // Stand in for two clients unlocked by a build that wrote no records at all.
+        Directory.Delete(fixture.App.UnlockerInstallDirectory, recursive: true);
+
+        Assert.True((await fixture.RemoveAsync(targets[0])).Success);
+
+        Assert.True(Directory.Exists(fixture.Paths.ConfigDirectory));
+        Assert.Equal(UnlockerState.Installed,
+            (await fixture.Backend.GetStatusAsync(targets[1], CancellationToken.None)).State);
+    }
+
+    // Proves the shared-directory decision refuses to guess. Without the Complete check this
+    // deletes the configuration the other client reads.
+    [Fact]
+    public async Task An_unprovable_sibling_leaves_the_shared_configuration_alone()
+    {
+        using var fixture = new InstallFixture();
+        fixture.AddOrigin();
+        var targets = await fixture.Backend.DetectTargetsAsync(CancellationToken.None);
+        foreach (var t in targets) await fixture.InstallAsync(t);
+
+        var sibling = Directory.GetFiles(fixture.App.UnlockerInstallDirectory)
+            .First(f => Path.GetFileName(f).EndsWith("-origin.json", StringComparison.Ordinal));
+        await File.WriteAllTextAsync(sibling, "{ not json");
+
+        var result = await fixture.RemoveAsync(targets[0]);
+
+        Assert.True(result.Success);
+        Assert.True(Directory.Exists(fixture.Paths.ConfigDirectory));
+        Assert.Contains(result.Warnings ?? [], w => w.Contains("could not be determined"));
     }
 }

@@ -22,8 +22,19 @@ public sealed partial class EaClientUnlockerBackend(
     IUnlockerHost host,
     UnlockerPaths paths,
     AppPaths appPaths,
-    IDelayProvider delays) : IUnlockerBackend
+    IDelayProvider delays,
+    UnlockerInstallRecordStore? records = null) : IUnlockerBackend
 {
+    private readonly UnlockerInstallRecordStore _records =
+        records ?? new UnlockerInstallRecordStore(appPaths);
+
+    /// <summary>
+    /// What "one install of the unlocker" means. The configuration directory is shared by every
+    /// client that reads it, so it is the natural identity: one value on Windows, one per Wine
+    /// prefix elsewhere.
+    /// </summary>
+    private string Scope => paths.ConfigDirectory;
+
     internal const string DllName = "version.dll";
     internal const string ScheduledTaskName = "copy_dlc_unlocker";
     internal const string AutostartValueName = "EADM";
@@ -287,17 +298,46 @@ public sealed partial class EaClientUnlockerBackend(
         // Step 10, non-fatal and reversible: the previous value is backed up first so removal can
         // put it back, rather than leaving the user's login behaviour changed.
         steps.Begin("Updating autostart");
+
+        var ownsBackup = false;
         try
         {
+            // Seeded from this client's existing record, never recomputed from nothing. A repair
+            // install finds the value already removed, so a freshly computed flag would be false
+            // and would overwrite the owning record with a disowning one, after which nothing ever
+            // restores the user's autostart entry. Inside the try because this step is documented
+            // non-fatal and the store only swallows I/O and JSON faults, so anything else escaping
+            // here would fail the install after version.dll is already on disk.
+            ownsBackup = _records.Read(Scope, target.Client,
+                                      expectedClientPath: target.ClientPath)?.OwnsAutostartBackup == true;
+
             var existing = host.ReadAutostartValue(AutostartValueName);
-            if (existing is not null)
+
+            // Written when no backup exists yet, and refreshed when this client already owns the
+            // one on disk. The value is one machine-wide entry, so the first client to install
+            // owns it and a second client must never overwrite that backup: doing so would record
+            // the already-removed state and removal would restore nothing. But an owner has to
+            // re-capture, because the client can re-create its Run entry between two installs and
+            // a repair install that kept the older backup would delete the newer value and put
+            // the stale command line back.
+            if (existing is not null
+                && (ownsBackup || !File.Exists(appPaths.UnlockerAutostartBackupFile)))
             {
                 Directory.CreateDirectory(appPaths.Root);
                 await AtomicFile.WriteAllTextAsync(appPaths.UnlockerAutostartBackupFile,
                     System.Text.Json.JsonSerializer.Serialize(
                         new AutostartBackup(AutostartValueName, existing.Value, existing.Kind)), ct);
-                host.RemoveAutostartValue(AutostartValueName);
+                ownsBackup = true;
             }
+
+            // Never delete a value nothing has a backup of. Reaching the else means a live value
+            // and a backup file this install does not own, so another install already owns the
+            // saved entry and this one leaves the value alone rather than deleting something only
+            // that other install's removal could put back.
+            if (existing is not null && ownsBackup) host.RemoveAutostartValue(AutostartValueName);
+            else if (existing is not null)
+                warnings.Add("Another install of the unlocker already owns the saved autostart " +
+                             "entry, so this one was left as it is.");
         }
         // SecurityException is here on purpose: the host guards its registry READS but not its
         // writes, because it holds no policy, and a group-policy-restricted Run key throws exactly
@@ -309,6 +349,19 @@ public sealed partial class EaClientUnlockerBackend(
             warnings.Add($"The autostart entry could not be changed: {e.Message}");
         }
         steps.Done();
+
+        // Written last, so a record only ever describes an install that reached the end. Removal
+        // reads it to decide what is its to undo.
+        try
+        {
+            await _records.WriteAsync(Scope,
+                new UnlockerInstallRecord(target.ClientPath, target.Client, ownsBackup), ct);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            warnings.Add($"The install record could not be written, so a later removal may not " +
+                         $"restore everything: {e.Message}");
+        }
 
         steps.Finish("Done");
         return UnlockerResult.Ok(warnings);
@@ -343,13 +396,24 @@ public sealed partial class EaClientUnlockerBackend(
         // raise a UAC prompt to tell the user there is nothing to do. "Nothing installed" is not
         // just an absent DLL, because an EA app self-update can delete it on its own (which is why
         // the StagedEADesktop copy exists) and install also flipped the autostart value and wrote a
-        // backup. Any of those three surviving means there is still something to undo, or removal
-        // early-returns having restored nothing and the user's autostart stays broken.
+        // backup.
         steps.Begin("Checking what is installed");
         var installed = Path.Combine(target.ClientPath, DllName);
-        var somethingToRemove = File.Exists(installed)
-            || File.Exists(appPaths.UnlockerAutostartBackupFile)
-            || Directory.Exists(paths.ConfigDirectory);
+
+        // This client's own artefacts, plus one narrow fallback. The configuration directory and
+        // the autostart backup are shared, so testing those answered "something to remove" for a
+        // client with nothing installed as soon as any other client was.
+        //
+        // The fallback covers a machine installed by a build that had no records at all: an EA app
+        // self-update can delete version.dll on its own, so such a machine can have a live
+        // autostart backup and no DLL and no record, and without this it reports "nothing to
+        // remove" and the user's Run value stays deleted for good. `legacy` is only true when the
+        // store can prove there are no records in this scope at all.
+        var record = _records.Read(Scope, target.Client, expectedClientPath: target.ClientPath);
+        var others = _records.Others(Scope, target.Client);
+        var legacy = record is null && others.Complete && others.Records.Count == 0;
+        var somethingToRemove = File.Exists(installed) || record is not null
+                                || (legacy && File.Exists(appPaths.UnlockerAutostartBackupFile));
         if (!somethingToRemove)
         {
             steps.Done();
@@ -456,7 +520,25 @@ public sealed partial class EaClientUnlockerBackend(
         try
         {
             var backupFile = appPaths.UnlockerAutostartBackupFile;
-            if (File.Exists(backupFile))
+
+            // Only the install that captured the value restores it. Another client's removal
+            // putting it back would re-enable the user's login entry while that client's unlocker
+            // is still installed.
+            //
+            // No record covers three cases, not one: an install made before this version, which
+            // cannot have a record and is therefore the only possible claimant; a record that
+            // could not be read; and a record naming a different client path. All three are
+            // treated as "may restore" on purpose. The bias is deliberate: restoring early puts
+            // a login entry back sooner than the user expects and they can turn it off again,
+            // whereas never restoring loses the value for good with nothing left to recover it
+            // from.
+            //
+            // The last removal in the scope may also claim it, which is what covers a pre-record
+            // owner: it left a backup and no record, so once every recorded client is gone the
+            // backup would otherwise sit there for ever with nobody entitled to restore it.
+            var mayRestore = record is null || record.OwnsAutostartBackup
+                             || (others.Complete && others.Records.Count == 0);
+            if (mayRestore && File.Exists(backupFile))
             {
                 AutostartBackup? backup;
                 try
@@ -510,7 +592,27 @@ public sealed partial class EaClientUnlockerBackend(
         steps.Begin("Removing the unlocker configuration");
         try
         {
-            if (Directory.Exists(paths.ConfigDirectory))
+            // Shared by every client in this scope, and it is the unlocker DLL's own path rather
+            // than ours, so it cannot be split per client. Deleting it while another client's
+            // unlocker is installed leaves that DLL loading and finding no configuration.
+            // `others` was read once at step 1; nothing between there and here writes a record.
+            // Not deleted unless the store could actually prove nobody else needs it. An
+            // unreadable store or one corrupt sibling record answers "cannot tell", and treating
+            // that as "nobody" destroys the other client's configuration exactly as an
+            // unconditional delete of the shared directory would.
+            //
+            // The records are not the whole answer. No install made by the shipped build wrote
+            // one, so on the entire existing two-client population the store answers "nobody
+            // else" with complete confidence while the other client's DLL is on disk. The DLL
+            // itself is the ground truth, so it is consulted too.
+            var siblingInstalled = (await DetectTargetsAsync(ct))
+                .Any(t => t.Client != target.Client && File.Exists(Path.Combine(t.ClientPath, DllName)));
+
+            if (!others.Complete)
+                warnings.Add("Whether another client still needs the unlocker configuration could " +
+                             "not be determined, so the configuration folder was left in place.");
+            else if (others.Records.Count == 0 && !siblingInstalled
+                     && Directory.Exists(paths.ConfigDirectory))
                 Directory.Delete(paths.ConfigDirectory, recursive: true);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
@@ -518,6 +620,9 @@ public sealed partial class EaClientUnlockerBackend(
             warnings.Add($"The unlocker configuration folder could not be removed: {e.Message}");
         }
         steps.Done();
+
+        // After the configuration decision above, which asks the store what else is installed.
+        _records.Delete(Scope, target.Client);
 
         steps.Finish("Done");
         return UnlockerResult.Ok(warnings);
