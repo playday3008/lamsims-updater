@@ -74,8 +74,25 @@ public sealed class ZipInstaller
     private const int BufferSize = 1024 * 1024;
 
     private readonly InstallStateStore _state;
+    private readonly Func<string, long> _availableBytes;
 
-    public ZipInstaller(InstallStateStore state) => _state = state;
+    /// <param name="availableBytes">
+    /// Free bytes on the volume holding a path. Defaults to the real measurement; a test supplies
+    /// its own, because the sizes that make the space checks fire cannot be produced on a real
+    /// volume.
+    /// </param>
+    public ZipInstaller(InstallStateStore state, Func<string, long>? availableBytes = null)
+    {
+        _state = state;
+        _availableBytes = availableBytes ?? DiskSpace.GetAvailableBytes;
+    }
+
+    private void EnsureSpace(string path, long requiredBytes)
+    {
+        var available = _availableBytes(path);
+        if (available < requiredBytes)
+            throw new InsufficientDiskSpaceException(path, requiredBytes, available);
+    }
 
     /// <summary>
     /// Reports the caller's cancellation through the result's <c>Cancelled</c> outcome
@@ -104,7 +121,7 @@ public sealed class ZipInstaller
 
         try
         {
-            DiskSpace.EnsureAvailable(gameDirectory, pack.RequiredInstallBytes);
+            EnsureSpace(gameDirectory, pack.RequiredInstallBytes);
 
             var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(gameDirectory));
 
@@ -157,6 +174,12 @@ public sealed class ZipInstaller
                     planned.Add((entry, destination));
                     totalBytes += entry.Length;
                 }
+
+                // installedSize is optional in the catalog, and RequiredInstallBytes then falls
+                // back to the ARCHIVE size, a large underestimate for a compressed pack. The
+                // central directory has just given the real figure, and a refusal here still
+                // costs nothing: no marker written and no bytes on disk.
+                EnsureSpace(gameDirectory, totalBytes);
 
                 // Written after every destination has been resolved and checked, and before a
                 // single byte lands: everything that can fail without leaving a trace has

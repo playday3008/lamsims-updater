@@ -185,6 +185,30 @@ public class ZipInstallerTests
     }
 
     [Fact]
+    public async Task Refuses_when_the_uncompressed_total_will_not_fit_although_the_archive_would()
+    {
+        // installedSize is optional, and without it RequiredInstallBytes is the ARCHIVE size. A
+        // pack that compresses well clears that check and then runs the volume dry mid-extract,
+        // overwriting a working install with no rollback. The central directory gives the real
+        // figure before the marker and before the first byte, which is the last point at which
+        // refusing costs nothing.
+        using var temp = new TempDir();
+        var archive = ZipBuilder.Create(temp.File("EP01.zip"), ("EP01/a.package", new string('z', 4096)));
+        var game = GameDir(temp);
+
+        // Above Pack()'s 1024-byte archive size, below the 4096 bytes extraction will write.
+        var installer = new ZipInstaller(Store(temp), _ => 2048);
+
+        var result = await installer.InstallAsync(Pack(), archive, game, null, CancellationToken.None);
+
+        Assert.Equal(InstallOutcome.InsufficientSpace, result.Outcome);
+        Assert.False(File.Exists(Path.Combine(game, "EP01", "a.package")));
+
+        // Names the uncompressed total, not the archive size the first check would have used.
+        Assert.Contains("4,096", result.Error);
+    }
+
+    [Fact]
     public async Task Reports_progress_that_ends_at_the_total()
     {
         using var temp = new TempDir();
