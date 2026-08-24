@@ -103,10 +103,17 @@ public sealed class StubAssetSource(string path) : IUnlockerAssetSource
     /// <summary>The verified payload, when a test needs it to differ from the file on disk.</summary>
     public byte[]? Bytes { get; set; }
 
+    /// <summary>
+    /// Runs when the bytes are handed over, which is where the real window between the liveness
+    /// check and the override write is: the fetch takes seconds.
+    /// </summary>
+    public Action? OnRead { get; set; }
+
     public Task<ReadOnlyMemory<byte>> GetDllAsync(ClientKind client, CancellationToken ct)
     {
         Calls++;
         if (Throw is not null) throw Throw;
+        OnRead?.Invoke();
         return Task.FromResult<ReadOnlyMemory<byte>>(Bytes ?? File.ReadAllBytes(path));
     }
 }
