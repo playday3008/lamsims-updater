@@ -285,6 +285,14 @@ public class PackQueueEndToEndTests
 
         Assert.Equal(plan.Select(c => c.Index).Where(i => !done.Contains(i)).ToHashSet(), asked);
 
+        // A ceiling as well, because a set is unchanged by a chunk fetched twice: set equality
+        // alone would not see a resume that dispatched every outstanding chunk to two workers. The
+        // slack is named rather than guessed — one range probe, plus at most `connections` requests
+        // that were on the wire when the pause landed and reach the server after ResetCounters.
+        Assert.True(server.RequestCount <= asked.Count + 1 + connections,
+            $"the resume made {server.RequestCount} requests for {asked.Count} chunks, more than "
+            + $"one probe and {connections} in-flight stragglers can account for");
+
         // The archive is stored rather than deflated, so the extracted length is exactly what went
         // in, and checking it needs neither a retained archive nor a second hash.
         Assert.Equal(3_000_000, new FileInfo(
