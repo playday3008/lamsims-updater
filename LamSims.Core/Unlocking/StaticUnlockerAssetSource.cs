@@ -52,22 +52,18 @@ public sealed class StaticUnlockerAssetSource(
     private readonly RetryOptions _retry = retry ?? RetryOptions.Default;
 
     /// <summary>
-    /// Whether the file at <paramref name="path"/> is already the asset a pin names. Answers false
-    /// rather than throwing when it cannot be read, so a caller deciding whether a refused rename
-    /// was benign reports the rename's own failure and not a second one.
+    /// Removes a temp file, reporting nothing. Used on both exits so a delete that is itself
+    /// refused cannot replace the diagnosis the caller is owed, or invent one where the call
+    /// succeeded.
     /// </summary>
-    private static async Task<bool> AlreadyPinned(string path, string sha256, CancellationToken ct)
+    private static void TryDelete(string path)
     {
         try
         {
-            return File.Exists(path)
-                   && string.Equals(
-                       await Sha256Verifier.ComputeAsync(path, ct), sha256,
-                       StringComparison.OrdinalIgnoreCase);
+            if (File.Exists(path)) File.Delete(path);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            return false;
         }
     }
 
@@ -160,9 +156,9 @@ public sealed class StaticUnlockerAssetSource(
             }
 
             // Read and hashed before the rename, and these are the bytes returned: the caller
-            // installs exactly what was verified here, and nothing past this point reads the
-            // destination back. That read is what a concurrent fetch for the same client cannot
-            // survive on Windows, where it collides with the other fetch's replace of that path
+            // installs exactly what was verified here, and nothing after this reads the destination
+            // back. That read is what a concurrent fetch for the same client cannot survive on
+            // Windows, where it collides with the other fetch's replace of that path
             // (ERROR_SHARING_VIOLATION) as surely as the replace collides with it. The transfer
             // above is bounded by pin.Size, so this is bounded by it too.
             var bytes = await File.ReadAllBytesAsync(temp, ct);
@@ -171,29 +167,28 @@ public sealed class StaticUnlockerAssetSource(
 
             // A rename, not a copy: the payload is written to disk exactly once and no orphan is
             // left behind.
+            //
+            // Best effort, and deliberately: the cache is what makes the NEXT call cheap, and the
+            // bytes this call owes its caller are already verified and in hand. Replacing a file
+            // some other handle holds open is refused on Windows, where MoveFileEx answers
+            // ERROR_ACCESS_DENIED, and a concurrent reader taking the cache-reuse path above is
+            // enough to hold it; a read-only directory and a full volume refuse it too. Failing
+            // the install over any of those would be failing it because an optimisation could not
+            // be written.
             try
             {
                 AtomicFile.MoveIntoPlace(temp, cached);
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException)
             {
-                // Another caller got to this path first. Replacing a file some other handle holds
-                // open is refused on Windows, where MoveFileEx answers ERROR_ACCESS_DENIED, and a
-                // concurrent reader taking the cache-reuse path above is enough to hold it; the
-                // same rename succeeds on Unix. The entry is addressed by its digest, so a
-                // destination that already holds the pinned bytes is this call's intended outcome
-                // and not something to report as a failure.
-                if (!await AlreadyPinned(cached, pin.Sha256, ct)) throw;
-
-                try { File.Delete(temp); }
-                catch (Exception e2) when (e2 is IOException or UnauthorizedAccessException) { }
+                TryDelete(temp);
             }
 
             return bytes;
         }
         catch
         {
-            if (File.Exists(temp)) File.Delete(temp);
+            TryDelete(temp);
             throw;
         }
     }

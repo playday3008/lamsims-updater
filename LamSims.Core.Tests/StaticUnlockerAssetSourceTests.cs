@@ -256,16 +256,19 @@ public class StaticUnlockerAssetSourceTests
     }
 
     /// <summary>
-    /// A rename refused over a destination that already holds the pinned asset still succeeds.
-    /// That is what a concurrent caller produces on Windows, where MoveFileEx will not replace a
-    /// file another handle holds open and a reader taking the cache-reuse path is enough to hold
-    /// it. Arranged here without a second caller, because the same rename always succeeds on Unix:
-    /// the payload is put in place and the directory made unwritable while the transfer is still
-    /// in flight, which is the same refusal from the rename's point of view.
+    /// A cache that cannot be written still returns the verified bytes. The cache makes the next
+    /// call cheap; the bytes this call owes its caller were hashed against the pin before the
+    /// rename was ever attempted, so a refused rename is not a reason to fail an install.
+    ///
+    /// On Windows this arrives as a concurrent caller — MoveFileEx will not replace a file another
+    /// handle holds open, and a reader taking the cache-reuse path is enough to hold it. Arranged
+    /// here without a second caller, because the same rename always succeeds on Unix: the directory
+    /// is made unwritable while the transfer is still in flight, which is the same refusal from the
+    /// rename's point of view, and leaves the cache genuinely unwritten rather than already correct.
     /// </summary>
     [PosixDenialFact]
     [UnsupportedOSPlatform("windows")]
-    public async Task A_rename_refused_over_the_pinned_asset_still_succeeds()
+    public async Task A_cache_that_cannot_be_written_still_returns_the_verified_bytes()
     {
         if (OperatingSystem.IsWindows()) return;
 
@@ -298,7 +301,6 @@ public class StaticUnlockerAssetSourceTests
 
             if (Directory.GetFiles(paths.Root, "*.incoming").Length == 0) return;
 
-            File.WriteAllBytes(cached, payload);
             File.SetUnixFileMode(paths.Root, locked);
             arranged = true;
         };
@@ -309,6 +311,10 @@ public class StaticUnlockerAssetSourceTests
 
             Assert.True(arranged, "the transfer never opened a temp file, so no rename was refused");
             Assert.Equal(payload, bytes.ToArray());
+
+            // The cache really was not written, so this is the refused-rename path and not a run
+            // that quietly succeeded in caching after all.
+            Assert.False(File.Exists(cached));
         }
         finally
         {
