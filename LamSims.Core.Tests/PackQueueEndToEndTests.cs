@@ -176,7 +176,8 @@ public class PackQueueEndToEndTests
         const int connections = 4;
 
         var archive = TestArchive(("EP01/ClientFullBuild0.package", 3_000_000));
-        var chunkCount = ChunkPlan.Create(archive.LongLength, chunkSize).Count;
+        var plan = ChunkPlan.Create(archive.LongLength, chunkSize);
+        var chunkCount = plan.Count;
 
         await using var server = await TestFileServer.StartAsync(archive);
         using var temp = new TempDir();
@@ -252,7 +253,8 @@ public class PackQueueEndToEndTests
         var sidecar = new PartStateStore(rig.Paths.StateFile("EP01")).TryLoad();
         Assert.NotNull(sidecar);
 
-        var alreadyDone = sidecar!.CompletedChunks.Count;
+        var done = sidecar!.CompletedChunks.Select(c => c.Index).ToHashSet();
+        var alreadyDone = done.Count;
         Assert.True(alreadyDone > 0,
             "the pause landed before any chunk completed, so the assertion below would hold even if "
             + "the resume refetched the whole archive; lengthen the archive");
@@ -268,10 +270,20 @@ public class PackQueueEndToEndTests
 
         Assert.Equal(QueueItemState.Completed, states[^1]);
 
-        // One range probe plus exactly the chunks the sidecar did not already vouch for. The
-        // count is deterministic over loopback with no fault injection, and equality also catches
-        // an under-fetching resume that a ceiling would leave to the SHA-256 gate.
-        Assert.Equal(chunkCount - alreadyDone + 1, server.RequestCount);
+        // Exactly the chunks the sidecar did not already vouch for, by index rather than by a
+        // count of requests. A request already on the wire when the pause landed can still reach
+        // the server after ResetCounters, which is one more than a count expects; the chunk it
+        // names was in flight and so is not one the sidecar vouched for, which puts it in the set
+        // below already. A set is unchanged by it, and by a repeat. Equality both ways, so this
+        // still catches an under-fetching resume that a ceiling would leave to the SHA-256 gate.
+        //
+        // The probe is bytes=0-0 (RangeProbe), which no chunk range matches.
+        var asked = server.ReceivedRangeHeaders
+            .Where(h => h is not null && h != "bytes=0-0")
+            .Select(h => plan.Single(c => h == $"bytes={c.Start}-{c.EndInclusive}").Index)
+            .ToHashSet();
+
+        Assert.Equal(plan.Select(c => c.Index).Where(i => !done.Contains(i)).ToHashSet(), asked);
 
         // The archive is stored rather than deflated, so the extracted length is exactly what went
         // in, and checking it needs neither a retained archive nor a second hash.
