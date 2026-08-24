@@ -176,6 +176,19 @@ public static class WineDllOverride
             return null;
         }
 
+        // A prefix validates on system.reg and drive_c alone, so user.reg can be absent — a
+        // Proton prefix mid-recreate, a partial restore, a user who deleted it to reset HKCU.
+        // WineRegistryFile treats a missing file as an empty one, so writing here would create a
+        // user.reg holding nothing but our own block, with no "WINE REGISTRY Version 2" header
+        // and no #arch. Wine rejects such a hive, so the override would never load while the
+        // confirming re-read parsed our own file and reported success. UndoAsync refuses the same
+        // shape for the same reason.
+        if (!File.Exists(prefix.UserRegFile))
+        {
+            return $"'{prefix.Root}' does not have a valid user.reg file; the prefix may be "
+                   + "damaged. The Wine DLL override was not written.";
+        }
+
         // Reached with an existing record when the "*version" entry the record describes is no
         // longer satisfied and nothing external supplies it — a launcher override the record
         // recorded as "already in place" was removed, or the entry itself was deleted from
@@ -227,10 +240,12 @@ public static class WineDllOverride
                 : $"{unconfirmed}; removal will clear it.";
         }
 
-        // Read succeeded. Now parse the file text we already have to check if the value is there.
-        // Use ReadValue on the file again; if it fails now that we know it's readable, that's
-        // a parsing error, not an I/O error, and we've already successfully read it once above.
-        var found = WineRegistryFile.ReadValue(prefix.UserRegFile, Key, ValueName)?.Text == Native;
+        // Read succeeded. Parse the file text we already have to check if the value is there.
+        // Use the lines-based parser to avoid a second disk read.
+        var lines = fileText.Split('\n');
+        var found = WineRegistryFile.ReadKeyFromLines(lines, Key) is { } values
+                    && values.TryGetValue(ValueName, out var value)
+                    && value.Text == Native;
 
         if (found)
         {
@@ -268,14 +283,21 @@ public static class WineDllOverride
             return null;
         }
 
-        // The prefix is gone: a Proton recreate or a deleted bottle. Writing here would put a stale
-        // value into a freshly generated user.reg. Check the root directory: if it exists, the
-        // prefix is damaged rather than vanished, and we should report the error rather than
-        // silently delete the record.
+        // The prefix is gone: a Proton recreate or a deleted bottle. Only delete the record if the
+        // root directory is actually gone. If it exists but user.reg is missing, that is a damaged
+        // prefix and we should report it rather than attempt to repair it.
         if (!Directory.Exists(prefix.Root))
         {
             store.Delete(prefix.Root);
             return null;
+        }
+
+        if (!File.Exists(prefix.UserRegFile))
+        {
+            // The prefix root exists but user.reg is missing: the prefix is damaged. Keep the
+            // record and report the issue rather than fabricating a new user.reg.
+            return $"'{prefix.Root}' does not have a valid user.reg file; the prefix may be "
+                   + "damaged. The unlocker override record is kept for manual recovery.";
         }
 
         try

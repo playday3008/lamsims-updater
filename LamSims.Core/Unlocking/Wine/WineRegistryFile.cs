@@ -39,58 +39,70 @@ public static class WineRegistryFile
     /// </summary>
     public static IReadOnlyDictionary<string, WineRegistryValue>? ReadKey(string path, string key)
     {
+        try
+        {
+            return ReadKeyFromLines(File.ReadLines(path), key);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// Every value in the key, parsed from enumerable lines, or null when the key is absent.
+    /// Values from EVERY block with that name are merged, because duplicate blocks merge in Wine
+    /// too (measured): stopping at the first would miss a value written exactly the way
+    /// <see cref="SetValueAsync"/> writes one into a file that had no block.
+    /// </summary>
+    public static IReadOnlyDictionary<string, WineRegistryValue>? ReadKeyFromLines(
+        IEnumerable<string> lines, string key)
+    {
         Dictionary<string, WineRegistryValue>? found = null;
         var wanted = UnescapeKey(key);
         var inKey = false;
         var continuing = false;
 
-        try
+        foreach (var raw in lines)
         {
-            foreach (var raw in File.ReadLines(path))
+            var line = raw.TrimEnd('\r');
+
+            if (continuing)
             {
-                var line = raw.TrimEnd('\r');
-
-                if (continuing)
-                {
-                    continuing = line.EndsWith('\\');
-                    continue;
-                }
-
-                if (line.Length > 0 && line[0] == '[')
-                {
-                    var close = line.LastIndexOf(']');
-                    inKey = close > 1
-                            && string.Equals(UnescapeKey(line[1..close]), wanted,
-                                             StringComparison.OrdinalIgnoreCase);
-                    if (inKey)
-                    {
-                        found ??= new Dictionary<string, WineRegistryValue>(
-                            StringComparer.OrdinalIgnoreCase);
-                    }
-
-                    continue;
-                }
-
-                // Skip lines that are not named values in the current key. `@=` is the key's
-                // DEFAULT value, and there are 29 773 of them. Read as a named value it becomes an
-                // entry called "", which satisfies any "is there an entry" test and reports overrides
-                // nobody set.
-                if (!inKey || line.Length == 0 || line[0] != '"')
-                {
-                    continue;
-                }
-
-                var end = ClosingQuote(line, 1);
-                if (end < 0 || end + 1 >= line.Length || line[end + 1] != '=') continue;
-
-                var payload = line[(end + 2)..];
-                found![Unescape(line[1..end])] = Parse(payload);
-                continuing = payload.EndsWith('\\');
+                continuing = line.EndsWith('\\');
+                continue;
             }
-        }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-        {
-            return found;
+
+            if (line.Length > 0 && line[0] == '[')
+            {
+                var close = line.LastIndexOf(']');
+                inKey = close > 1
+                        && string.Equals(UnescapeKey(line[1..close]), wanted,
+                                         StringComparison.OrdinalIgnoreCase);
+                if (inKey)
+                {
+                    found ??= new Dictionary<string, WineRegistryValue>(
+                        StringComparer.OrdinalIgnoreCase);
+                }
+
+                continue;
+            }
+
+            // Skip lines that are not named values in the current key. `@=` is the key's
+            // DEFAULT value, and there are 29 773 of them. Read as a named value it becomes an
+            // entry called "", which satisfies any "is there an entry" test and reports overrides
+            // nobody set.
+            if (!inKey || line.Length == 0 || line[0] != '"')
+            {
+                continue;
+            }
+
+            var end = ClosingQuote(line, 1);
+            if (end < 0 || end + 1 >= line.Length || line[end + 1] != '=') continue;
+
+            var payload = line[(end + 2)..];
+            found![Unescape(line[1..end])] = Parse(payload);
+            continuing = payload.EndsWith('\\');
         }
 
         return found;

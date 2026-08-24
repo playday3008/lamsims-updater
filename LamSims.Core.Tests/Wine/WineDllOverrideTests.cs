@@ -466,38 +466,44 @@ public class WineDllOverrideTests
     /// <summary>
     /// When the verification read itself fails (I/O, permission), we cannot tell if the write
     /// succeeded or was lost. Record it so removal can undo, but report the distinct error so the
-    /// user knows the override's status is uncertain.
+    /// user knows the override's status is uncertain. Linux-gated: the only way to make the
+    /// verification read fail is a real POSIX mode, and without the mode the read succeeds and
+    /// ApplyAsync returns null.
     /// </summary>
     [Fact]
     public async Task A_write_that_cannot_be_verified_is_recorded_and_reported()
     {
+        if (OperatingSystem.IsWindows()) return;
+
         using var f = new Fixture();
         var prefix = f.Open();
 
         // Make the file unreadable during verification. The write succeeds, the afterWrite seam
         // makes verification fail, but the write really landed on disk.
-        var error = await WineDllOverride.ApplyAsync(
-            prefix, f.Store, OverrideVerdict.Absent, CancellationToken.None,
-            afterWrite: () =>
-            {
-                if (!OperatingSystem.IsWindows())
-                {
-                    File.SetUnixFileMode(f.UserReg, UnixFileMode.None);
-                }
-            });
-
-        // An error came back, but it is the "could not be confirmed" error, not "did not survive".
-        Assert.NotNull(error);
-        Assert.Contains("could not be confirmed", error);
-
-        // The write was recorded despite the read failure, so removal can undo it.
-        var record = f.Store.Read(prefix.Root);
-        Assert.NotNull(record);
-        Assert.True(record.WroteRegistry);
-
-        // Clean up: restore permissions.
-        if (!OperatingSystem.IsWindows())
+        try
         {
+            var error = await WineDllOverride.ApplyAsync(
+                prefix, f.Store, OverrideVerdict.Absent, CancellationToken.None,
+                afterWrite: () =>
+                {
+                    // Repeated inside the lambda because the platform analyser cannot carry the
+                    // method's early return across the delegate boundary.
+                    if (!OperatingSystem.IsWindows())
+                        File.SetUnixFileMode(f.UserReg, UnixFileMode.None);
+                });
+
+            // An error came back, but it is the "could not be confirmed" error, not "did not survive".
+            Assert.NotNull(error);
+            Assert.Contains("could not be confirmed", error);
+
+            // The write was recorded despite the read failure, so removal can undo it.
+            var record = f.Store.Read(prefix.Root);
+            Assert.NotNull(record);
+            Assert.True(record.WroteRegistry);
+        }
+        finally
+        {
+            // Restore write access so the fixture's temporary directory can be deleted.
             File.SetUnixFileMode(f.UserReg, UnixFileMode.UserRead | UnixFileMode.UserWrite |
                                            UnixFileMode.GroupRead | UnixFileMode.OtherRead);
         }
