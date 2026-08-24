@@ -381,6 +381,33 @@ public class ZipInstallerTests
         }
     }
 
+    /// <summary>
+    /// A callback that throws fails the install rather than escaping it. InstallAsync's contract is
+    /// that it always returns an InstallResult, and the callback runs on the extracting thread
+    /// inside the entry loop, outside every per-entry filter — so an exception type the method does
+    /// not filter would leave through it and reach the queue as a framework error.
+    /// </summary>
+    [Fact]
+    public async Task An_entry_written_callback_that_throws_fails_the_install_rather_than_escaping()
+    {
+        using var temp = new TempDir();
+        var archive = ZipBuilder.Create(temp.File("EP01.zip"), ("EP01/a.package", "one"));
+        var game = GameDir(temp);
+
+        // InvalidOperationException is deliberately outside InstallAsync's filter list: with the
+        // callback unguarded this call throws instead of returning.
+        var installer = new ZipInstaller(
+            new InstallStateStore(temp.File("state")),
+            entryWritten: _ => throw new InvalidOperationException("callback said no"));
+
+        var result = await installer.InstallAsync(
+            Pack(), archive, game, null, CancellationToken.None);
+
+        Assert.Equal(InstallOutcome.Failed, result.Outcome);
+        Assert.Contains("callback said no", result.Error);
+        Assert.Contains("EP01/a.package", result.Error);
+    }
+
     [Fact]
     public async Task Records_a_completed_install_in_the_journal()
     {

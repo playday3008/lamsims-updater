@@ -243,7 +243,25 @@ public sealed class ZipInstaller
 
                     var landed = new InstallProgress(pack.Code, bytes, totalBytes, entry.FullName);
                     Report(progress, landed);
-                    _entryWritten?.Invoke(landed);
+
+                    if (_entryWritten is { } entryWritten)
+                    {
+                        try
+                        {
+                            entryWritten(landed);
+                        }
+                        catch (Exception e)
+                        {
+                            // Named and rethrown as an IOException so it lands in this method's
+                            // own filter and comes back as a failed install: unfiltered, it would
+                            // escape InstallAsync and break the guarantee that this method always
+                            // returns an InstallResult. Report swallows for the same reason and
+                            // does not rethrow, because a progress report nobody consumed has no
+                            // bearing on whether the pack installed.
+                            throw new IOException(
+                                $"The entry-written callback failed after '{entry.FullName}': {e.Message}", e);
+                        }
+                    }
                 }
             }
 
