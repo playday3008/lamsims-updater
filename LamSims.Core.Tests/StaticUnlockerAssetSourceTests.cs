@@ -224,6 +224,38 @@ public class StaticUnlockerAssetSourceTests
     }
 
     /// <summary>
+    /// A cache entry that cannot be read is re-fetched, not reported. The digest is the pinned one,
+    /// so a reuse path that swallowed only mismatches would still have to read the file to learn
+    /// that much: the request count is what says the fetch happened rather than the entry being
+    /// trusted unread.
+    /// </summary>
+    [PosixDenialFact]
+    [UnsupportedOSPlatform("windows")]
+    public async Task An_unreadable_cache_entry_is_refetched_rather_than_failing()
+    {
+        if (OperatingSystem.IsWindows()) return;
+
+        using var dir = new TempDir();
+        var payload = Payload();
+        await using var server = await TestFileServer.StartAsync(payload);
+        var (source, paths) = Build(server, dir, payload);
+
+        var cached = paths.UnlockerAssetFile("ea_app_version.dll");
+        paths.EnsureCreated();
+        await File.WriteAllBytesAsync(cached, payload);
+        File.SetUnixFileMode(cached, UnixFileMode.None);
+
+        var bytes = await source.GetDllAsync(ClientKind.EaApp, CancellationToken.None);
+
+        Assert.Equal(payload, bytes.ToArray());
+        Assert.True(server.RequestCount > 0, "the unreadable cache entry was trusted unread");
+
+        // And the entry it could not read was replaced, so the next run reuses rather than
+        // re-fetching for the rest of the install's life.
+        Assert.Equal(payload, await File.ReadAllBytesAsync(cached));
+    }
+
+    /// <summary>
     /// A rename refused over a destination that already holds the pinned asset still succeeds.
     /// That is what a concurrent caller produces on Windows, where MoveFileEx will not replace a
     /// file another handle holds open and a reader taking the cache-reuse path is enough to hold

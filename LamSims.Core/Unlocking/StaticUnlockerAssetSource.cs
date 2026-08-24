@@ -78,10 +78,21 @@ public sealed class StaticUnlockerAssetSource(
 
         if (File.Exists(cached))
         {
-            // Hashed over the bytes this returns, not over the file it read them from: the caller
-            // installs these bytes, so the check and the payload must be the same object.
-            var reused = await File.ReadAllBytesAsync(cached, ct);
-            if (Matches(reused, pin.Sha256)) return reused;
+            try
+            {
+                // Hashed over the bytes this returns, not over the file it read them from: the
+                // caller installs these bytes, so the check and the payload must be the same
+                // object.
+                var reused = await File.ReadAllBytesAsync(cached, ct);
+                if (Matches(reused, pin.Sha256)) return reused;
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                // Falls through to the fetch, like a digest that does not match: an entry that
+                // cannot be read is no reason to fail an install that has a URL to fetch from, and
+                // the fetch replaces the entry it could not read. On Windows a concurrent fetch
+                // replacing this path is enough to produce this.
+            }
         }
 
         paths.EnsureCreated();
