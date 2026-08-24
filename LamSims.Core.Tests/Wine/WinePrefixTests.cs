@@ -171,3 +171,174 @@ public class WinePrefixOpenTests
                     string.Join("\n", notes.Lines));
     }
 }
+
+public class WinePrefixResolutionTests
+{
+    /// <summary>
+    /// The dosdevices entry as a real DIRECTORY, so this mechanism is covered on the Windows and
+    /// macOS CI legs where creating a symlink needs privilege: without it the reader is exercised
+    /// on Linux only.
+    /// </summary>
+    [Fact]
+    public void A_drive_entry_that_is_a_real_directory_resolves()
+    {
+        using var f = new PrefixFixture();
+        var target = Path.Combine(f.Dir.Path, "expansion");
+        Directory.CreateDirectory(Path.Combine(target, "Games"));
+        f.RealDrive('d', target);
+
+        var resolved = f.Open().ResolveWindowsPath(@"D:\Games");
+
+        Assert.NotNull(resolved);
+        Assert.True(Directory.Exists(resolved));
+        Assert.Equal("Games", Path.GetFileName(resolved));
+    }
+
+    /// <summary>Linux-gated: symlink creation needs privilege on Windows.</summary>
+    [Fact]
+    public void A_drive_symlink_to_a_target_outside_the_prefix_resolves()
+    {
+        if (OperatingSystem.IsWindows()) return;
+
+        using var f = new PrefixFixture();
+        var target = Path.Combine(f.Dir.Path, "mnt-expansion");
+        Directory.CreateDirectory(Path.Combine(target, "Games"));
+        f.LinkDrive('d', target);
+
+        var resolved = f.Open().ResolveWindowsPath(@"D:\Games");
+
+        Assert.Equal(PathIdentity.Canonical(Path.Combine(target, "Games")),
+                     PathIdentity.Canonical(resolved));
+    }
+
+    /// <summary>
+    /// The pair. `d::` is a block device and only two-character names are drives, but asserting
+    /// merely that `d::` is IGNORED passes against an implementation that never reads dosdevices
+    /// at all and always falls back to drive_c — so the same test asserts where `D:\x` actually
+    /// lands.
+    /// </summary>
+    [Fact]
+    public void A_block_device_entry_is_not_a_drive()
+    {
+        using var f = new PrefixFixture();
+        var drive = Path.Combine(f.Dir.Path, "real-d");
+        Directory.CreateDirectory(Path.Combine(drive, "x"));
+        f.RealDrive('d', drive);
+        Directory.CreateDirectory(Path.Combine(f.Root, "dosdevices", "d::"));
+
+        var resolved = f.Open().ResolveWindowsPath(@"D:\x");
+
+        Assert.NotNull(resolved);
+        Assert.Equal(PathIdentity.Canonical(Path.Combine(f.Root, "dosdevices", "d:", "x")),
+                     PathIdentity.Canonical(resolved));
+    }
+
+    /// <summary>
+    /// Every dosdevices entry is lowercase and ext4 is case-sensitive, so without lowercasing the
+    /// letter this fails on every prefix, for every path, on a real Wine install.
+    /// </summary>
+    [Fact]
+    public void An_uppercase_drive_letter_resolves()
+    {
+        using var f = new PrefixFixture();
+        Directory.CreateDirectory(Path.Combine(f.DriveC, "windows"));
+
+        Assert.NotNull(f.Open().ResolveWindowsPath(@"C:\windows"));
+    }
+
+    /// <summary>
+    /// c: falls back to drive_c because that is correct for a damaged prefix and it is what lets
+    /// these tests run where symlink creation needs privilege. No OTHER letter falls back: a
+    /// missing d: must not silently resolve inside drive_c and install the unlocker in the wrong
+    /// place.
+    /// </summary>
+    [Fact]
+    public void A_missing_drive_letter_other_than_c_returns_null()
+    {
+        using var f = new PrefixFixture();
+        Directory.CreateDirectory(Path.Combine(f.DriveC, "Games"));
+
+        var prefix = f.Open();
+
+        Assert.NotNull(prefix.ResolveWindowsPath(@"C:\Games"));
+        Assert.Null(prefix.ResolveWindowsPath(@"D:\Games"));
+    }
+
+    [Fact]
+    public void Segments_match_case_insensitively()
+    {
+        using var f = new PrefixFixture();
+        Directory.CreateDirectory(Path.Combine(f.DriveC, "Program Files", "Electronic Arts"));
+
+        var resolved = f.Open().ResolveWindowsPath(@"C:\PROGRAM FILES\electronic arts");
+
+        Assert.NotNull(resolved);
+        Assert.True(Directory.Exists(resolved));
+    }
+
+    /// <summary>
+    /// The pair that makes rule 6 real: a missing FINAL segment comes back as a join the caller can
+    /// create (ProgramData frequently does not exist and the engine's machine.ini step creates it),
+    /// while a missing INTERMEDIATE segment is null. One assertion without the other passes against
+    /// an implementation that joins blindly and against one that gives up on anything absent.
+    /// </summary>
+    [Fact]
+    public void A_missing_final_segment_joins_and_a_missing_intermediate_is_null()
+    {
+        using var f = new PrefixFixture();
+        Directory.CreateDirectory(Path.Combine(f.DriveC, "ProgramData"));
+        var prefix = f.Open();
+
+        var final = prefix.ResolveWindowsPath(@"C:\ProgramData\EA Desktop");
+
+        Assert.Equal(PathIdentity.Canonical(Path.Combine(f.DriveC, "ProgramData", "EA Desktop")),
+                     PathIdentity.Canonical(final));
+        Assert.False(Directory.Exists(final));
+        Assert.Null(prefix.ResolveWindowsPath(@"C:\ProgramData\Nope\EA Desktop"));
+    }
+
+    /// <summary>
+    /// A host that returns the raw registry value makes detection find nothing on every prefix
+    /// with no error, because
+    /// Path.GetDirectoryName of a backslash path returns an empty string on Linux. So the assertion
+    /// is not "it resolved" but "what the ENGINE then does with it works".
+    /// </summary>
+    [Fact]
+    public void A_resolved_client_path_survives_the_engines_directory_split()
+    {
+        using var f = new PrefixFixture();
+        const string windows = @"C:\Program Files\Electronic Arts\EA Desktop\EA Desktop\EADesktop.exe";
+        var expected = f.AddClient(ClientKind.EaApp, windows);
+
+        var resolved = f.Open().ResolveWindowsPath(windows);
+
+        Assert.NotNull(resolved);
+        Assert.True(File.Exists(resolved));
+        Assert.Equal(PathIdentity.Canonical(expected),
+                     PathIdentity.Canonical(Path.GetDirectoryName(resolved)));
+        Assert.NotEqual("", Path.GetDirectoryName(resolved));
+    }
+
+    /// <summary>
+    /// Both UnlockerPaths roots go through resolution rather than a string join, and they
+    /// are the two paths most likely to be silently wrong. Roaming must exist; ProgramData
+    /// frequently does not and must still come back joined so the engine can create it.
+    /// </summary>
+    [Fact]
+    public void PathsFor_resolves_both_roots()
+    {
+        using var f = new PrefixFixture(user: "playday");
+        var prefix = f.Open();
+
+        var paths = prefix.PathsFor(prefix.PrimaryUserDirectory);
+
+        Assert.NotNull(paths);
+        Assert.Equal(PathIdentity.Canonical(
+                         Path.Combine(f.DriveC, "users", "playday", "AppData", "Roaming")),
+                     PathIdentity.Canonical(paths.Roaming));
+        Assert.Equal(PathIdentity.Canonical(Path.Combine(f.DriveC, "ProgramData")),
+                     PathIdentity.Canonical(paths.CommonAppData));
+        Assert.False(Directory.Exists(paths.CommonAppData));
+        Assert.StartsWith(paths.Roaming, paths.ConfigDirectory, StringComparison.Ordinal);
+    }
+}

@@ -187,4 +187,138 @@ public sealed class WinePrefix
         notes?.Report($"'{root}' has more than one Windows user; the configuration will be written under each.");
         return candidates;
     }
+
+    /// <summary>
+    /// A Windows path as this prefix sees it, translated to a Linux path, or null when it cannot
+    /// be reached. A missing FINAL segment comes back joined so a caller can create it; a missing
+    /// intermediate segment is null.
+    /// </summary>
+    public string? ResolveWindowsPath(string windowsPath)
+    {
+        if (string.IsNullOrWhiteSpace(windowsPath) || windowsPath.Length < 2
+            || windowsPath[1] != ':')
+        {
+            return null;
+        }
+
+        // Every dosdevices entry is lowercase and the filesystem is case-sensitive, so `C:` fails
+        // without this — on every prefix, for every path.
+        var letter = char.ToLowerInvariant(windowsPath[0]);
+        if (letter is < 'a' or > 'z') return null;
+
+        var target = DriveTarget(letter);
+
+        return target is null ? null : ResolveUnder(target, windowsPath[2..]);
+    }
+
+    /// <summary>
+    /// The segment walk on its own, so a caller that already holds a Linux directory (a Windows
+    /// user directory, say) can continue from it without re-deriving a drive.
+    /// </summary>
+    public string? ResolveUnder(string linuxBase, string windowsRelative)
+    {
+        var segments = windowsRelative.Split('\\', StringSplitOptions.RemoveEmptyEntries);
+        var current = linuxBase;
+
+        for (var i = 0; i < segments.Length; i++)
+        {
+            var exact = Path.Combine(current, segments[i]);
+            if (Directory.Exists(exact) || File.Exists(exact))
+            {
+                current = exact;
+                continue;
+            }
+
+            var match = SingleMatch(current, segments[i]);
+            if (match is not null)
+            {
+                current = match;
+                continue;
+            }
+
+            return i == segments.Length - 1 ? exact : null;
+        }
+
+        return current;
+    }
+
+    /// <summary>
+    /// The two roots the unlocker writes under, resolved rather than joined. Null when
+    /// the user directory itself cannot be reached.
+    /// </summary>
+    public UnlockerPaths? PathsFor(string windowsUserDirectory)
+    {
+        var roaming = ResolveUnder(windowsUserDirectory, @"AppData\Roaming");
+        var programData = ResolveWindowsPath(@"C:\ProgramData");
+
+        return roaming is null || programData is null ? null : new UnlockerPaths(roaming, programData);
+    }
+
+    /// <summary>
+    /// Only entries named exactly <c>&lt;letter&gt;:</c> — two characters — are drives. The
+    /// <c>&lt;letter&gt;::</c> entries are block devices and the <c>comN</c>/<c>lptN</c> entries are
+    /// character devices; neither is excluded by an active filter, both are simply never probed,
+    /// because only the exact two-character key is looked up.
+    /// </summary>
+    private string? DriveTarget(char letter)
+    {
+        var entry = Path.Combine(Root, "dosdevices", $"{letter}:");
+
+        try
+        {
+            // DirectoryInfo.LinkTarget reports the link's own target without following it and
+            // without throwing on a dangling link, which Directory.ResolveLinkTarget does not
+            // promise for every shape a real dosdevices carries.
+            if (new DirectoryInfo(entry).LinkTarget is { } link)
+            {
+                return PathIdentity.Canonical(Path.IsPathRooted(link)
+                    ? link
+                    : Path.Combine(Path.Combine(Root, "dosdevices"), link));
+            }
+
+            if (Directory.Exists(entry)) return PathIdentity.Canonical(entry);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException
+                                      or ArgumentException)
+        {
+            // Falls through to the c: rule below, then to null.
+        }
+
+        // Correct for a damaged prefix, and it is what lets these tests run where creating a
+        // symlink needs privilege. No other letter falls back: a missing d: resolving inside
+        // drive_c would install the unlocker somewhere nobody asked for.
+        return letter == 'c' ? DriveC : null;
+    }
+
+    /// <summary>
+    /// One case-insensitive match, or nothing. Two entries differing only in case can both exist on
+    /// a case-sensitive filesystem, and picking either would be a guess about which one the client
+    /// reads.
+    /// </summary>
+    private static string? SingleMatch(string directory, string segment)
+    {
+        try
+        {
+            string? found = null;
+
+            foreach (var entry in Directory.EnumerateFileSystemEntries(directory))
+            {
+                if (!string.Equals(PathIdentity.Normalize(Path.GetFileName(entry)),
+                                   PathIdentity.Normalize(segment),
+                                   StringComparison.OrdinalIgnoreCase))
+                {
+                    continue;
+                }
+
+                if (found is not null) return null;
+                found = entry;
+            }
+
+            return found;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return null;
+        }
+    }
 }
