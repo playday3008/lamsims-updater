@@ -29,10 +29,15 @@ public sealed class WinePrefixUnlockerBackend(
     public string Id => "wine-prefix";
 
     /// <summary>
-    /// Not on Windows, where the EA-client backend owns the machine's real registry. Both backends
-    /// are registered and each reports for its own platform.
+    /// Linux only, not "not Windows". macOS is out of scope: it has no <c>/proc</c>, so
+    /// <see cref="IWineProcesses.IsPrefixLive"/> always answers idle there and the check protecting
+    /// a registry write from a wineserver flush never fires, and <see cref="LauncherHomes"/>'s XDG
+    /// table is wrong for macOS too. Windows gets the EA-client backend
+    /// (<c>EaClientUnlockerBackend.IsSupported => host.IsAvailable</c>) and Linux gets this one; on
+    /// any other platform, including macOS, NEITHER reports supported, and the DLC Unlocker section
+    /// hides itself there rather than offering a backend that cannot work.
     /// </summary>
-    public bool IsSupported => !OperatingSystem.IsWindows();
+    public bool IsSupported => OperatingSystem.IsLinux();
 
     private readonly WineOverrideStore _overrides = new(appPaths);
 
@@ -296,6 +301,9 @@ public sealed class WinePrefixUnlockerBackend(
     /// Copies the configuration the engine wrote into every OTHER Windows user directory. The engine
     /// takes one UnlockerPaths and its step count is fixed, so this is how the configuration reaches
     /// every user without running the engine more than once. Idempotent.
+    ///
+    /// Copies files only, never subdirectories: correct today because the engine's own configuration
+    /// directory is flat, and it would silently stop being correct the day something nests inside it.
     /// </summary>
     private static IEnumerable<string> Mirror(WinePrefix prefix)
     {
@@ -307,7 +315,17 @@ public sealed class WinePrefixUnlockerBackend(
         foreach (var user in prefix.WindowsUserDirectories.Skip(1))
         {
             var destination = prefix.PathsFor(user)?.ConfigDirectory;
-            if (destination is null) continue;
+            if (destination is null)
+            {
+                // The ambiguous case where it matters most: PathsFor fails only when the user
+                // directory itself cannot be reached, which is exactly the shape a broken secondary
+                // Windows user profile has. Silently skipping it would leave that user's launch path
+                // without the configuration the client reads and no record that anything went
+                // wrong.
+                yield return $"'{user}' could not be reached, so the unlocker configuration was "
+                             + "not copied there.";
+                continue;
+            }
 
             // The message is captured rather than yielded directly: a yield return cannot appear
             // inside a catch clause (CS1631), so the failure is built here and returned once the

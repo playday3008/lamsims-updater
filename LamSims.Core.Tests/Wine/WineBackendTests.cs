@@ -202,12 +202,16 @@ public class WineBackendDetectionTests
         Assert.True(f.Notes.Any("no longer exists"), string.Join("\n", f.Notes.Lines));
     }
 
+    /// <summary>
+    /// Linux only, not "not Windows": macOS is out of scope because it has no
+    /// <c>/proc</c>, so the liveness check this backend depends on can never fire there.
+    /// </summary>
     [Fact]
-    public void The_backend_is_not_supported_on_windows()
+    public void The_backend_is_supported_only_on_linux()
     {
         using var f = new WineBackendFixture();
 
-        Assert.Equal(!OperatingSystem.IsWindows(), f.Backend.IsSupported);
+        Assert.Equal(OperatingSystem.IsLinux(), f.Backend.IsSupported);
         Assert.Equal("wine-prefix", f.Backend.Id);
     }
 }
@@ -605,6 +609,35 @@ public class WineBackendOperationTests
                                                  "config.ini")),
                         $"no configuration under {user}");
         }
+    }
+
+    /// <summary>
+    /// A secondary Windows user directory Mirror cannot reach is the ambiguous case where silence
+    /// matters most, since that user's launch path is left without the configuration the client
+    /// reads. It must warn rather than skip with a bare `continue`, and still finish the install
+    /// successfully for the primary user it did reach.
+    /// </summary>
+    [Fact]
+    public async Task An_unreachable_secondary_user_is_warned_about_rather_than_silently_skipped()
+    {
+        using var f = new WineBackendFixture();
+        Directory.Delete(Path.Combine(f.Prefix.DriveC, "users", "playday"), recursive: true);
+        f.Prefix.AddUser("steamuser");
+        var broken = f.Prefix.AddUser("z-broken");
+
+        // "steamuser" sorts first (Ordinal) and becomes primary; z-broken is the one Mirror has to
+        // reach, and it cannot: no AppData directory at all.
+        Directory.Delete(Path.Combine(broken, "AppData"), recursive: true);
+
+        var result = await f.InstallAsync(await f.TargetAsync());
+
+        Assert.True(result.Success);
+        Assert.Contains(result.Warnings ?? [], w => w.Contains("z-broken") && w.Contains("not copied"));
+
+        // The reachable user still got its configuration.
+        Assert.True(File.Exists(Path.Combine(f.Prefix.DriveC, "users", "steamuser", "AppData",
+                                             "Roaming", "anadius", "EA DLC Unlocker v2",
+                                             "config.ini")));
     }
 
     [Fact]

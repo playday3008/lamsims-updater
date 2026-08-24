@@ -27,8 +27,10 @@ public interface IWineProcesses
 
 /// <summary>
 /// Reads /proc. Ordinary file and link reads throughout, so no platform attribute is needed and
-/// CA1416 stays quiet; on a system with no /proc every answer is "nothing running", which is the
-/// correct answer there.
+/// CA1416 stays quiet; on a system with no /proc — macOS, which is out of scope —
+/// every answer is "nothing running", which is UNVERIFIABLE there, not correct: a live wineserver
+/// on such a system would go undetected and its next flush could discard a registry write in
+/// progress.
 ///
 /// A process is attributed to a prefix by three sources: a mapped file under it, a working
 /// directory under it, or an open descriptor under it. Not by WINEPREFIX in
