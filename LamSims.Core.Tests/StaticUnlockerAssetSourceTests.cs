@@ -6,6 +6,7 @@ using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
+using System.Runtime.Versioning;
 using System.Security.Cryptography;
 using LamSims.Core.Downloading;
 using LamSims.Core.Unlocking;
@@ -220,6 +221,68 @@ public class StaticUnlockerAssetSourceTests
             Assert.Equal(payload, path.ToArray());
         }
         Assert.Empty(Directory.GetFiles(paths.Root, "*.incoming"));
+    }
+
+    /// <summary>
+    /// A rename refused over a destination that already holds the pinned asset still succeeds.
+    /// That is what a concurrent caller produces on Windows, where MoveFileEx will not replace a
+    /// file another handle holds open and a reader taking the cache-reuse path is enough to hold
+    /// it. Arranged here without a second caller, because the same rename always succeeds on Unix:
+    /// the payload is put in place and the directory made unwritable while the transfer is still
+    /// in flight, which is the same refusal from the rename's point of view.
+    /// </summary>
+    [PosixDenialFact]
+    [UnsupportedOSPlatform("windows")]
+    public async Task A_rename_refused_over_the_pinned_asset_still_succeeds()
+    {
+        if (OperatingSystem.IsWindows()) return;
+
+        using var dir = new TempDir();
+        var payload = Payload();
+
+        // StallFor zero: AtStall carries the ordering, so nothing waits on a clock.
+        await using var server = await TestFileServer.StartAsync(payload, new()
+        {
+            StallAfterBytes = 1024,
+            StallFor = TimeSpan.Zero,
+        });
+
+        var (source, paths) = Build(server, dir, payload);
+        var cached = paths.UnlockerAssetFile("ea_app_version.dll");
+        var locked = UnixFileMode.UserRead | UnixFileMode.UserExecute;
+        var unlocked = locked | UnixFileMode.UserWrite;
+        var arranged = false;
+
+        server.Options.AtStall = () =>
+        {
+            // The client opens its temp only once the response headers arrive, and those leave with
+            // these first bytes, so the open is waited for rather than assumed: a directory locked
+            // before the create would deny the create instead of the rename. Same shape as
+            // LockChildHook's wait, and reported rather than assumed if it does not happen.
+            for (var i = 0; i < 200 && Directory.GetFiles(paths.Root, "*.incoming").Length == 0; i++)
+            {
+                Thread.Sleep(50);
+            }
+
+            if (Directory.GetFiles(paths.Root, "*.incoming").Length == 0) return;
+
+            File.WriteAllBytes(cached, payload);
+            File.SetUnixFileMode(paths.Root, locked);
+            arranged = true;
+        };
+
+        try
+        {
+            var bytes = await source.GetDllAsync(ClientKind.EaApp, CancellationToken.None);
+
+            Assert.True(arranged, "the transfer never opened a temp file, so no rename was refused");
+            Assert.Equal(payload, bytes.ToArray());
+        }
+        finally
+        {
+            // Restored so the enclosing TempDir can be deleted.
+            File.SetUnixFileMode(paths.Root, unlocked);
+        }
     }
 
     /// <summary>

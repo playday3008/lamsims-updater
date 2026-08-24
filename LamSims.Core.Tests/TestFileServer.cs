@@ -68,6 +68,13 @@ public sealed class TestFileServerOptions
     public TimeSpan? StallFor { get; set; }
 
     /// <summary>
+    /// Run where <see cref="StallAfterBytes"/> stops sending, before the stall and before the rest
+    /// of the body. A test that has to arrange something while a transfer is in flight uses it, so
+    /// the arrangement is ordered against the transfer rather than racing it.
+    /// </summary>
+    public Action? AtStall { get; set; }
+
+    /// <summary>
     /// Wait this long before writing anything at all, so the client sees a completed
     /// handshake and no response headers. Applies to every request, and ends early once the
     /// client gives up. Simulates the silence RetryOptions.HeaderTimeout exists to catch.
@@ -242,6 +249,8 @@ public sealed class TestFileServer : IAsyncDisposable
         {
             await context.Response.Body.WriteAsync(body.AsMemory(0, (int)stallAfter));
             await context.Response.Body.FlushAsync();
+
+            opts.AtStall?.Invoke();
 
             try
             {

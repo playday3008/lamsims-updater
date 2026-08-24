@@ -51,6 +51,26 @@ public sealed class StaticUnlockerAssetSource(
     private readonly IReadOnlyDictionary<ClientKind, AssetPin> _pins = pins ?? ShippedPins;
     private readonly RetryOptions _retry = retry ?? RetryOptions.Default;
 
+    /// <summary>
+    /// Whether the file at <paramref name="path"/> is already the asset a pin names. Answers false
+    /// rather than throwing when it cannot be read, so a caller deciding whether a refused rename
+    /// was benign reports the rename's own failure and not a second one.
+    /// </summary>
+    private static async Task<bool> AlreadyPinned(string path, string sha256, CancellationToken ct)
+    {
+        try
+        {
+            return File.Exists(path)
+                   && string.Equals(
+                       await Sha256Verifier.ComputeAsync(path, ct), sha256,
+                       StringComparison.OrdinalIgnoreCase);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return false;
+        }
+    }
+
     public async Task<ReadOnlyMemory<byte>> GetDllAsync(ClientKind client, CancellationToken ct)
     {
         var pin = _pins[client];
@@ -128,27 +148,43 @@ public sealed class StaticUnlockerAssetSource(
                 file.Flush(flushToDisk: true);
             }
 
-            var actual = await Sha256Verifier.ComputeAsync(temp, ct);
-            if (!string.Equals(actual, pin.Sha256, StringComparison.OrdinalIgnoreCase))
-                throw new UnlockerAssetMismatchException(pin.Url, pin.Sha256, actual);
+            // Read and hashed before the rename, and these are the bytes returned: the caller
+            // installs exactly what was verified here, and nothing past this point reads the
+            // destination back. That read is what a concurrent fetch for the same client cannot
+            // survive on Windows, where it collides with the other fetch's replace of that path
+            // (ERROR_SHARING_VIOLATION) as surely as the replace collides with it. The transfer
+            // above is bounded by pin.Size, so this is bounded by it too.
+            var bytes = await File.ReadAllBytesAsync(temp, ct);
+            if (!Matches(bytes, pin.Sha256))
+                throw new UnlockerAssetMismatchException(pin.Url, pin.Sha256, Digest(bytes));
 
             // A rename, not a copy: the payload is written to disk exactly once and no orphan is
             // left behind.
-            AtomicFile.MoveIntoPlace(temp, cached);
+            try
+            {
+                AtomicFile.MoveIntoPlace(temp, cached);
+            }
+            catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+            {
+                // Another caller got to this path first. Replacing a file some other handle holds
+                // open is refused on Windows, where MoveFileEx answers ERROR_ACCESS_DENIED, and a
+                // concurrent reader taking the cache-reuse path above is enough to hold it; the
+                // same rename succeeds on Unix. The entry is addressed by its digest, so a
+                // destination that already holds the pinned bytes is this call's intended outcome
+                // and not something to report as a failure.
+                if (!await AlreadyPinned(cached, pin.Sha256, ct)) throw;
+
+                try { File.Delete(temp); }
+                catch (Exception e2) when (e2 is IOException or UnauthorizedAccessException) { }
+            }
+
+            return bytes;
         }
         catch
         {
             if (File.Exists(temp)) File.Delete(temp);
             throw;
         }
-
-        // Re-read and re-hashed, for the same reason as the cache-reuse path above: what the caller
-        // installs is what was verified here, whatever happens to the file afterwards.
-        var bytes = await File.ReadAllBytesAsync(cached, ct);
-        if (!Matches(bytes, pin.Sha256))
-            throw new UnlockerAssetMismatchException(pin.Url, pin.Sha256, Digest(bytes));
-
-        return bytes;
     }
 
     private static bool Matches(ReadOnlySpan<byte> bytes, string expected) =>
