@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using System.Text.Json;
 
 namespace LamSims.Core.Unlocking.Wine;
 
@@ -37,6 +38,9 @@ public sealed class WinePrefixScanner(LauncherHomes homes, string userName,
         candidates.AddRange(FromWine());
 
         candidates.AddRange(FromSteam());
+        candidates.AddRange(FromLutris());
+        candidates.AddRange(FromHeroic());
+        candidates.AddRange(FromBottles());
 
         var found = Describe(candidates);
 
@@ -398,5 +402,154 @@ public sealed class WinePrefixScanner(LauncherHomes homes, string userName,
         {
             return [];
         }
+    }
+
+    private IEnumerable<PrefixCandidate> FromLutris()
+    {
+        foreach (var home in homes.For(EnvironmentSource.Lutris))
+        {
+            foreach (var file in Files(Path.Combine(home.Root, "games"), "*.yml"))
+            {
+                // The in-file name, never the filename: a real Lutris config is called
+                // ea-app-1778070803.yml and that suffix means nothing to the user.
+                var label = ReadLineValue(file, "name") ?? ReadLineValue(file, "game_slug")
+                            ?? Path.GetFileNameWithoutExtension(file);
+
+                // Every prefix: line in the file, not just the first: a config can carry more than
+                // one and taking the first would silently drop the rest.
+                foreach (var prefix in ReadLineValues(file, "prefix"))
+                    yield return new PrefixCandidate(prefix, EnvironmentSource.Lutris, label,
+                                                     home.Flatpak);
+            }
+        }
+    }
+
+    private IEnumerable<PrefixCandidate> FromHeroic()
+    {
+        foreach (var home in homes.For(EnvironmentSource.Heroic))
+        {
+            foreach (var file in Files(Path.Combine(home.Root, "GamesConfig"), "*.json"))
+            {
+                var id = Path.GetFileNameWithoutExtension(file);
+                if (ReadJson(file, "Heroic") is not { } document) continue;
+
+                using (document)
+                {
+                    // The config's single property is the game id, and both the prefix and the
+                    // title hang off it. Guard the shape first: EnumerateObject throws if the root
+                    // is not an object, and that exception would escape to Scan and kill the entire
+                    // discovery chain.
+                    if (document.RootElement.ValueKind != JsonValueKind.Object)
+                    {
+                        Note($"Heroic: '{file}' root is not a JSON object, skipping.");
+                        continue;
+                    }
+
+                    foreach (var game in document.RootElement.EnumerateObject())
+                    {
+                        if (game.Value.ValueKind != JsonValueKind.Object) continue;
+                        if (!TryString(game.Value, "winePrefix", out var prefix)) continue;
+
+                        var label = TryString(game.Value, "title", out var title) ? title : id;
+                        yield return new PrefixCandidate(prefix, EnvironmentSource.Heroic, label,
+                                                         home.Flatpak);
+                    }
+                }
+            }
+
+            // defaultSettings.winePrefix is a CONTAINER holding one prefix per game, not a prefix:
+            // on a real machine it has neither system.reg nor drive_c, so treating it as one
+            // guarantees a spurious rejection for every Heroic user and finds none of the prefixes
+            // actually inside it.
+            var config = Path.Combine(home.Root, "config.json");
+            if (ReadJson(config, "Heroic") is not { } settings) continue;
+
+            using (settings)
+            {
+                // Guard the shape: TryGetProperty requires an object root, and throws if the root
+                // is not an object.
+                if (settings.RootElement.ValueKind != JsonValueKind.Object)
+                {
+                    Note($"Heroic: '{config}' root is not a JSON object, skipping.");
+                    continue;
+                }
+
+                if (!settings.RootElement.TryGetProperty("defaultSettings", out var defaults)
+                    || defaults.ValueKind != JsonValueKind.Object
+                    || !TryString(defaults, "winePrefix", out var container))
+                {
+                    continue;
+                }
+
+                foreach (var child in Children(container))
+                    yield return new PrefixCandidate(child, EnvironmentSource.Heroic,
+                                                     DirectoryName(child), home.Flatpak);
+            }
+        }
+    }
+
+    private IEnumerable<PrefixCandidate> FromBottles()
+    {
+        foreach (var home in homes.For(EnvironmentSource.Bottles))
+        {
+            // A bottle IS a prefix, so no config has to be read to find one; bottle.yml is read
+            // only for the label the user gave it.
+            foreach (var bottle in Children(home.Root))
+            {
+                var label = ReadLineValue(Path.Combine(bottle, "bottle.yml"), "Name")
+                            ?? DirectoryName(bottle);
+
+                yield return new PrefixCandidate(bottle, EnvironmentSource.Bottles, label,
+                                                 home.Flatpak);
+            }
+        }
+    }
+
+    private IEnumerable<string> Files(string directory, string pattern)
+    {
+        try
+        {
+            return Directory.Exists(directory)
+                ? Directory.EnumerateFiles(directory, pattern).Order(StringComparer.Ordinal).ToArray()
+                : [];
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            Note($"'{directory}' could not be read: {e.Message}.");
+            return [];
+        }
+    }
+
+    /// <summary>
+    /// A parsed document, or null with a diagnostic. Malformed JSON is ordinary on a machine with
+    /// several launchers and must not stop the scan: the prefixes from every other source still
+    /// have to come back.
+    /// </summary>
+    private JsonDocument? ReadJson(string file, string source)
+    {
+        try
+        {
+            return File.Exists(file) ? JsonDocument.Parse(File.ReadAllText(file)) : null;
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException)
+        {
+            Note($"{source}: '{file}' could not be read: {e.Message}.");
+            return null;
+        }
+    }
+
+    private static bool TryString(JsonElement element, string name, out string value)
+    {
+        value = "";
+
+        if (!element.TryGetProperty(name, out var property)
+            || property.ValueKind != JsonValueKind.String)
+        {
+            return false;
+        }
+
+        value = property.GetString() ?? "";
+
+        return value.Length > 0;
     }
 }
