@@ -79,7 +79,8 @@ public class PackQueueEndToEndTests
     /// </summary>
     private static Rig RealQueue(
         TempDir temp, HttpClient client, TestFileServer server, byte[] archive,
-        long chunkSize, int connections, string[]? installDirs = null)
+        long chunkSize, int connections, string[]? installDirs = null,
+        Action<InstallProgress>? entryWritten = null)
     {
         var paths = new DownloadPaths(Path.Combine(temp.Path, "downloads"));
         var appPaths = new AppPaths(Path.Combine(temp.Path, "config"));
@@ -92,7 +93,7 @@ public class PackQueueEndToEndTests
                 client, paths,
                 new DownloadOptions { Connections = connections, ChunkSize = chunkSize },
                 RetryOptions.Default, new FakeDelayProvider()),
-            new ZipInstaller(state),
+            new ZipInstaller(state, entryWritten: entryWritten),
             paths);
 
         var pack = new PackEntry(
@@ -285,32 +286,41 @@ public class PackQueueEndToEndTests
 
         // Two install directories so the scan can distinguish Partial from NotInstalled, and the
         // Delta entry last so cancelling during the EP01 entries leaves Delta absent.
-        //
-        // ZipInstaller observes its token once per entry and reports progress after writing one,
-        // with no await in between, so a reader that reaches a.package's update has already missed
-        // b.package's token check. The cancel has to beat the check before `Delta/EP01/c.bin`, and
-        // b.package's 8 MB write is the whole margin: shrink it and the extract finishes before the
-        // canceller sees its first Installing update.
         var archive = TestArchive(
-            ("EP01/a.package", 1_000_000),
-            ("EP01/b.package", 8_000_000),
-            ("Delta/EP01/c.bin", 2_000_000));
+            ("EP01/a.package", 200_000),
+            ("EP01/b.package", 200_000),
+            ("Delta/EP01/c.bin", 200_000));
 
         await using var server = await TestFileServer.StartAsync(archive);
         using var temp = new TempDir();
         using var client = HttpFactory.Create(connections * 2);
 
+        var entries = new List<string>();
+        PackQueue? running = null;
+
+        // The cancel is made from the extracting thread as an entry lands, which is where
+        // ZipInstaller offers it, so it is ordered before the next entry's token check rather
+        // than racing the write. An entry under EP01/ has landed by then, so EP01 exists and the
+        // cancel is inside the window rather than before the install touched anything.
         var rig = RealQueue(
             temp, client, server, archive, chunkSize: 1_000_000, connections: connections,
-            installDirs: new[] { "EP01", "Delta" });
+            installDirs: new[] { "EP01", "Delta" },
+            entryWritten: landed =>
+            {
+                if (!landed.CurrentEntry.StartsWith("EP01/", StringComparison.Ordinal)) return;
+
+                // The diagnostic a wrong-window run is reported with, in write order.
+                entries.Add(landed.CurrentEntry);
+                if (entries.Count == 1) running!.Cancel("EP01");
+            });
 
         await using var queue = rig.Queue;
+        running = queue;
+
         var run = queue.RunAsync(CancellationToken.None);
 
         var states = new List<QueueItemState>();
-        var entries = new List<string>();
         QueueItemSnapshot? last = null;
-        var cancelled = false;
 
         var reader = Task.Run(async () =>
         {
@@ -321,23 +331,6 @@ public class PackQueueEndToEndTests
 
                 last = item;
                 Record(states, item.State);
-
-                // InstallProgress is reported after an entry has been written, so CurrentEntry
-                // naming an EP01 entry means the EP01 directory already exists and the cancel
-                // lands inside the window rather than before the install touched anything.
-                if (item is { State: QueueItemState.Installing, CurrentEntry: { } entry }
-                    && entry.StartsWith("EP01/", StringComparison.Ordinal))
-                {
-                    // CurrentEntry survives into later snapshots, so only transitions are kept:
-                    // this list is the diagnostic a wrong-window run is reported with.
-                    if (entries.Count == 0 || entries[^1] != entry) entries.Add(entry);
-
-                    if (!cancelled)
-                    {
-                        cancelled = true;
-                        queue.Cancel("EP01");
-                    }
-                }
             }
         });
 
@@ -346,7 +339,7 @@ public class PackQueueEndToEndTests
         await run;
         await reader;
 
-        Assert.True(cancelled, "the install never reported an entry under EP01/, so nothing was cancelled");
+        Assert.NotEmpty(entries);
 
         var marker = rig.State.TryLoad(rig.GameDir, "EP01");
         var scan = InstallScanner.Scan(rig.GameDir, new[] { rig.Pack }, rig.State.LoadAll(rig.GameDir));
@@ -384,12 +377,11 @@ public class PackQueueEndToEndTests
     /// every install directory is present and only the journal says the extraction never finished.
     /// The test above stops at the subset branch and never consults the marker.
     ///
-    /// Same window and margin as that test, arranged differently. <c>Delta/x.bin</c> is written
-    /// first so both directories exist before the cancel, the trigger fires on <c>a.package</c>,
-    /// the deadline is the token check before <c>tail.package</c>, and the margin is
-    /// <c>big.package</c>'s 8 MB write.
+    /// Same window as that test, arranged differently. <c>Delta/x.bin</c> is written first so both
+    /// directories exist before the cancel, the trigger fires on <c>a.package</c>, and the deadline
+    /// is the token check before <c>tail.package</c>.
     /// </summary>
-    [LinuxFact("Linux only: this test has to call Cancel while the extract is still inside EP01/, and it learns the current entry through the update channel. On a fast disk the remaining 200 KB lands before the cancel is observed, so the window is machine speed, not behaviour. The cancel-to-Partial path itself is platform independent and covered by the unit tests.", Timeout = 30000)]
+    [Fact(Timeout = 30000)]
     public async Task Cancel_mid_install_with_every_directory_present_reports_partial_from_the_journal()
     {
         const int connections = 4;
@@ -397,24 +389,36 @@ public class PackQueueEndToEndTests
         var archive = TestArchive(
             ("Delta/x.bin", 200_000),
             ("EP01/a.package", 200_000),
-            ("EP01/big.package", 8_000_000),
             ("EP01/tail.package", 200_000));
 
         await using var server = await TestFileServer.StartAsync(archive);
         using var temp = new TempDir();
         using var client = HttpFactory.Create(connections * 2);
 
+        var entries = new List<string>();
+        PackQueue? running = null;
+
+        // Delta/x.bin precedes every EP01 entry in the archive, so an entry landing under EP01/
+        // means both install directories are already on disk, which sends the scan down the
+        // journal branch rather than the subset branch.
         var rig = RealQueue(
             temp, client, server, archive, chunkSize: 1_000_000, connections: connections,
-            installDirs: new[] { "EP01", "Delta" });
+            installDirs: new[] { "EP01", "Delta" },
+            entryWritten: landed =>
+            {
+                if (!landed.CurrentEntry.StartsWith("EP01/", StringComparison.Ordinal)) return;
+
+                entries.Add(landed.CurrentEntry);
+                if (entries.Count == 1) running!.Cancel("EP01");
+            });
 
         await using var queue = rig.Queue;
+        running = queue;
+
         var run = queue.RunAsync(CancellationToken.None);
 
         var states = new List<QueueItemState>();
-        var entries = new List<string>();
         QueueItemSnapshot? last = null;
-        var cancelled = false;
 
         var reader = Task.Run(async () =>
         {
@@ -425,21 +429,6 @@ public class PackQueueEndToEndTests
 
                 last = item;
                 Record(states, item.State);
-
-                // Delta/x.bin precedes every EP01 entry in the archive, so a reported EP01 entry
-                // means both install directories are already on disk, which sends the scan down
-                // the journal branch rather than the subset branch.
-                if (item is { State: QueueItemState.Installing, CurrentEntry: { } entry }
-                    && entry.StartsWith("EP01/", StringComparison.Ordinal))
-                {
-                    if (entries.Count == 0 || entries[^1] != entry) entries.Add(entry);
-
-                    if (!cancelled)
-                    {
-                        cancelled = true;
-                        queue.Cancel("EP01");
-                    }
-                }
             }
         });
 
@@ -448,7 +437,7 @@ public class PackQueueEndToEndTests
         await run;
         await reader;
 
-        Assert.True(cancelled, "the install never reported an entry under EP01/, so nothing was cancelled");
+        Assert.NotEmpty(entries);
 
         var marker = rig.State.TryLoad(rig.GameDir, "EP01");
         var scan = InstallScanner.Scan(rig.GameDir, new[] { rig.Pack }, rig.State.LoadAll(rig.GameDir));

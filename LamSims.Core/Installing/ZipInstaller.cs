@@ -75,16 +75,26 @@ public sealed class ZipInstaller
 
     private readonly InstallStateStore _state;
     private readonly Func<string, long> _availableBytes;
+    private readonly Action<InstallProgress>? _entryWritten;
 
     /// <param name="availableBytes">
     /// Free bytes on the volume holding a path. Defaults to the real measurement; a test supplies
     /// its own, because the sizes that make the space checks fire cannot be produced on a real
     /// volume.
     /// </param>
-    public ZipInstaller(InstallStateStore state, Func<string, long>? availableBytes = null)
+    /// <param name="entryWritten">
+    /// Called on the extracting thread as each entry lands, beside the progress report and before
+    /// the next entry's cancellation check. A test that has to act while an extraction is still
+    /// running uses it, so that acting is ordered against the extract rather than racing a write.
+    /// </param>
+    public ZipInstaller(
+        InstallStateStore state,
+        Func<string, long>? availableBytes = null,
+        Action<InstallProgress>? entryWritten = null)
     {
         _state = state;
         _availableBytes = availableBytes ?? DiskSpace.GetAvailableBytes;
+        _entryWritten = entryWritten;
     }
 
     private void EnsureSpace(string path, long requiredBytes)
@@ -230,7 +240,10 @@ public sealed class ZipInstaller
 
                     written++;
                     bytes += entry.Length;
-                    Report(progress, new InstallProgress(pack.Code, bytes, totalBytes, entry.FullName));
+
+                    var landed = new InstallProgress(pack.Code, bytes, totalBytes, entry.FullName);
+                    Report(progress, landed);
+                    _entryWritten?.Invoke(landed);
                 }
             }
 
