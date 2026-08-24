@@ -17,6 +17,7 @@ using LamSims.Core.Downloading;
 using LamSims.Core.Installing;
 using LamSims.Core.Settings;
 using LamSims.Core.Unlocking;
+using LamSims.Core.Unlocking.Wine;
 
 namespace LamSims.App.ViewTests;
 
@@ -64,7 +65,7 @@ public sealed class ViewHost : IDisposable
     /// </summary>
     public static (AppServices Services, StubQueue Queue) Services(AppPaths paths,
         UnlockerService? unlockerService = null, IUnlockerHost? unlockerHost = null,
-        IUnlockerAssetSource? unlockerAssets = null)
+        IUnlockerAssetSource? unlockerAssets = null, UnlockerNotes? unlockerNotes = null)
     {
         var queue = new StubQueue();
 
@@ -90,6 +91,7 @@ public sealed class ViewHost : IDisposable
             unlockerService ?? new UnlockerService([]),
             unlockerHost ?? new FakeUnlockerHost { IsAvailable = false },
             unlockerAssets ?? new StubUnlockerAssets(),
+            unlockerNotes ?? new UnlockerNotes(),
             downloadPaths,
             new DownloadOptions(),
             new OrphanCleaner(downloadPaths)), queue);

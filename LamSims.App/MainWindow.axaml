@@ -46,12 +46,21 @@
                     Value="{Binding Connections}" />
             <TextBlock Grid.Column="2" Text="{Binding Connections}" VerticalAlignment="Center" />
           </Grid>
+          <Grid ColumnDefinitions="110,*,Auto" ColumnSpacing="8">
+            <TextBlock Grid.Column="0" Text="Wine prefix:" VerticalAlignment="Center" />
+            <TextBlock Grid.Column="1" Text="{Binding WinePrefix}" VerticalAlignment="Center"
+                       TextTrimming="CharacterEllipsis" />
+            <Button Grid.Column="2" Content="Browse" Command="{Binding BrowseWinePrefixCommand}" />
+          </Grid>
         </StackPanel>
       </Expander>
 
-      <!-- Hidden entirely off Windows: no backend reports support, so there is nothing to show and
-           the DockPanel geometry is untouched. The nested DataContext is why the binding sweep
-           has to re-root; without that, every binding below would read as unresolved. -->
+      <!-- Hidden only when no backend reports support: the EA-client backend reports for
+           Windows and the Wine backend for Linux, so this shows on either. On any other
+           platform, including macOS, neither backend reports supported and this stays hidden
+           rather than offering a control that cannot work.
+           The nested DataContext is why the binding sweep has to re-root; without that, every
+           binding below would read as unresolved. -->
       <Expander Header="DLC Unlocker" DataContext="{Binding Unlocker}"
                 IsVisible="{Binding IsSupported}">
         <StackPanel Spacing="6">
@@ -60,6 +69,8 @@
                     Command="{Binding SelectAllCommand}" />
             <Button Grid.Column="1" Content="Select none"
                     Command="{Binding SelectNoneCommand}" />
+            <Button Grid.Column="2" HorizontalAlignment="Right" Content="Refresh"
+                    Command="{Binding RefreshCommand}" />
           </Grid>
           <ItemsControl ItemsSource="{Binding Targets}">
             <ItemsControl.ItemTemplate>
@@ -86,6 +97,17 @@
                   <TextBlock Grid.Column="2" Text="{Binding StatusText}" MaxWidth="220"
                              TextWrapping="Wrap" VerticalAlignment="Center" />
                 </Grid>
+              </DataTemplate>
+            </ItemsControl.ItemTemplate>
+          </ItemsControl>
+          <!-- Why detection found less than the user expected: an unreadable launcher config, a
+               32-bit prefix, a sandboxed build. The `secondary` class already exists and is
+               styled; a new class here would fail ThemeSweepTests in both directions. -->
+          <ItemsControl ItemsSource="{Binding DetectionNotes}"
+                        IsVisible="{Binding HasDetectionNotes}">
+            <ItemsControl.ItemTemplate>
+              <DataTemplate>
+                <TextBlock Text="{Binding}" Classes="secondary" TextWrapping="Wrap" />
               </DataTemplate>
             </ItemsControl.ItemTemplate>
           </ItemsControl>

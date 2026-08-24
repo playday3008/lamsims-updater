@@ -8,24 +8,30 @@ using Xunit;
 using System.Collections.Concurrent;
 using LamSims.App.ViewModels;
 using LamSims.Core.Unlocking;
+using LamSims.Core.Unlocking.Wine;
+using static LamSims.App.Tests.UnlockerViewModelTests;
 
 namespace LamSims.App.Tests;
 
 public class UnlockerViewModelTests
 {
-    private static UnlockerTarget Target(string path = "/clients/ea", string display = "EA app",
+    // Internal, not private: UnlockerDetectionNotesTests below is a separate top-level class (as
+    // the brief specifies) that reuses these two rather than declaring a parallel builder, and a
+    // private member is invisible outside its own class even to another type in the same file.
+    internal static UnlockerTarget Target(string path = "/clients/ea", string display = "EA app",
         ClientKind kind = ClientKind.EaApp) =>
         new("test-backend", kind, path, display);
 
-    private static UnlockerViewModel Build(
+    internal static UnlockerViewModel Build(
         RecordingUnlockerBackend backend,
         IUnlockerHost? host = null,
         Func<Task>? shutdown = null,
         Action? exit = null,
-        Action<Banner>? banner = null) =>
+        Action<Banner>? banner = null,
+        UnlockerNotes? notes = null) =>
         new(new UnlockerService([backend]), new StubUnlockerAssets(), host ?? new FakeUnlockerHost(),
             new ImmediateDispatcher(), shutdown ?? (() => Task.CompletedTask), exit ?? (() => { }),
-            banner ?? (_ => { }));
+            banner ?? (_ => { }), notes);
 
     private static async Task<(UnlockerViewModel Vm, RecordingUnlockerBackend Backend,
                               List<Banner> Banners)> BuildBatchAsync(params UnlockerTarget[] targets)
@@ -758,6 +764,190 @@ public class UnlockerViewModelTests
 
         hold.SetResult();
         await batch;
+
+        Assert.True(drain.IsCompleted);
+    }
+
+    /// <summary>
+    /// Mirrors The_operation_does_not_run_on_the_thread_that_started_it exactly, at the detection
+    /// grain: without a thread hop of its own in RefreshCoreAsync, the Wine backend's synchronous
+    /// filesystem walk — the home directory, both XDG roots and every launcher config — would run on
+    /// whatever thread called RefreshAsync, which in the shipped application is the UI thread.
+    /// </summary>
+    [Fact(Timeout = 15000)]
+    public async Task Detection_does_not_run_on_the_thread_that_started_it()
+    {
+        var backend = new RecordingUnlockerBackend(Target());
+        var vm = Build(backend);
+
+        using var ui = new UiThread();
+        var started = new TaskCompletionSource(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        ui.Post(() => _ = RunDetectOn(vm, started));
+
+        await started.Task;
+
+        Assert.NotEqual(0, backend.DetectThreadId);
+        Assert.NotEqual(ui.Thread.ManagedThreadId, backend.DetectThreadId);
+    }
+
+    private static async Task RunDetectOn(UnlockerViewModel vm, TaskCompletionSource started)
+    {
+        try
+        {
+            await vm.RefreshAsync(CancellationToken.None);
+            started.TrySetResult();
+        }
+        catch (Exception e)
+        {
+            started.TrySetException(e);
+        }
+    }
+}
+
+public class UnlockerDetectionNotesTests
+{
+    /// <summary>
+    /// The notes reach the region, and HasDetectionNotes is a FLAT property because
+    /// MainWindowBindingTests resolves a binding path as a single member: a
+    /// {Binding DetectionNotes.Count} would be reported as unresolved and the block would never
+    /// show. The pair is the point — the collection filling while the flag stays false renders
+    /// nothing at all.
+    /// </summary>
+    [Fact]
+    public async Task Detection_notes_reach_the_region()
+    {
+        var notes = new UnlockerNotes();
+        var vm = Build(new RecordingUnlockerBackend(Target()), notes: notes);
+        await vm.RefreshAsync(CancellationToken.None);
+
+        notes.Report("'/home/y' is 32-bit and the EA app needs a 64-bit prefix.");
+
+        Assert.Contains("'/home/y' is 32-bit and the EA app needs a 64-bit prefix.",
+                        vm.DetectionNotes);
+        Assert.True(vm.HasDetectionNotes);
+    }
+
+    /// <summary>
+    /// Cleared where Targets is cleared, so repeated detection neither accumulates nor duplicates.
+    /// Without this the list grows by one full set of reasons every refresh.
+    /// </summary>
+    [Fact]
+    public async Task A_refresh_clears_the_notes_it_replaces()
+    {
+        var notes = new UnlockerNotes();
+        var vm = Build(new RecordingUnlockerBackend(Target()), notes: notes);
+
+        notes.Report("stale");
+        Assert.True(vm.HasDetectionNotes);
+
+        await vm.RefreshAsync(CancellationToken.None);
+
+        Assert.DoesNotContain("stale", vm.DetectionNotes);
+        Assert.False(vm.HasDetectionNotes);
+    }
+
+    /// <summary>
+    /// The exclusion, in both directions. A detection that ran during a batch would
+    /// replace the rows the batch is iterating, and a batch started during detection would act on
+    /// rows about to be discarded. Held open with RecordingUnlockerBackend.Hold, which is what makes
+    /// "during" observable at all.
+    /// </summary>
+    [Fact]
+    public async Task A_refresh_during_a_batch_is_refused_visibly()
+    {
+        var backend = new RecordingUnlockerBackend(Target());
+        var banners = new List<Banner>();
+        var vm = Build(backend, banner: banners.Add);
+        await vm.RefreshAsync(CancellationToken.None);
+        vm.Targets[0].IsSelected = true;
+
+        backend.Hold = new TaskCompletionSource();
+        var batch = vm.InstallSelectedCommand.ExecuteAsync(null);
+        Assert.True(vm.IsBusy);
+        var rows = vm.Targets.Count;
+
+        await vm.RefreshAsync(CancellationToken.None);
+
+        // The rows the batch is working through are still there, and the user was told why.
+        Assert.Equal(rows, vm.Targets.Count);
+        Assert.Contains(banners, b => b.Id == "unlocker-busy");
+
+        backend.Hold.SetResult();
+        await batch;
+    }
+
+    [Fact]
+    public async Task A_batch_during_detection_is_refused_visibly()
+    {
+        var banners = new List<Banner>();
+        var vm = Build(new RecordingUnlockerBackend(Target()), banner: banners.Add);
+        await vm.RefreshAsync(CancellationToken.None);
+        vm.Targets[0].IsSelected = true;
+
+        vm.IsDetecting = true;
+
+        Assert.False(vm.InstallSelectedCommand.CanExecute(null));
+        await vm.InstallSelectedCommand.ExecuteAsync(null);
+
+        Assert.Contains(banners, b => b.Id == "unlocker-busy");
+    }
+
+    /// <summary>
+    /// Detection is not mutually exclusive with itself without this: the second call's own
+    /// synchronous Clear() would run while the first is still awaiting DetectAllAsync, so the first
+    /// resumes and repopulates the just-cleared list, and the second then appends its own scan on
+    /// top without ever re-clearing. Both loops then add to the same non-thread-safe
+    /// ObservableCollection without coordination, so what actually lands there is unpredictable: a
+    /// captured run showed one genuine row plus a null slot torn from a concurrent List resize
+    /// rather than two clean duplicates, which is why the assertion below checks a count rather
+    /// than specific values. HoldDetect is what makes "during" observable: without it neither call
+    /// would still be in flight when the other starts.
+    /// </summary>
+    [Fact]
+    public async Task A_refresh_during_another_refresh_is_refused_and_does_not_duplicate_targets()
+    {
+        var backend = new RecordingUnlockerBackend(Target());
+        var banners = new List<Banner>();
+        var vm = Build(backend, banner: banners.Add);
+
+        backend.HoldDetect = new TaskCompletionSource();
+        var first = vm.RefreshAsync(CancellationToken.None);
+        Assert.True(vm.IsDetecting);
+
+        var second = vm.RefreshAsync(CancellationToken.None);
+
+        backend.HoldDetect.SetResult();
+        await Task.WhenAll(first, second);
+
+        // The discriminating assertion first: a count, not merely "some rows exist". Without the
+        // guard this is 2 for a single detected target.
+        Assert.Single(vm.Targets);
+
+        Assert.Contains(banners, b => b.Id == "unlocker-busy");
+    }
+
+    /// <summary>
+    /// Mirrors DrainAsync_completes_only_once_the_operation_has, at the detection grain: before
+    /// this task, detection only ever ran from StartAsync, which is awaited, so nothing could still
+    /// be running at shutdown. OnWinePrefixChanged's fire-and-forget re-detection is the first path
+    /// where it can, and DrainAsync has to wait for it too or a dispatched note/row update can land
+    /// after teardown has begun.
+    /// </summary>
+    [Fact]
+    public async Task DrainAsync_waits_for_an_in_flight_detection_too()
+    {
+        var backend = new RecordingUnlockerBackend(Target());
+        var vm = Build(backend);
+
+        backend.HoldDetect = new TaskCompletionSource();
+        var refresh = vm.RefreshAsync(CancellationToken.None);
+        var drain = vm.DrainAsync();
+
+        Assert.False(drain.IsCompleted);
+
+        backend.HoldDetect.SetResult();
+        await refresh;
 
         Assert.True(drain.IsCompleted);
     }

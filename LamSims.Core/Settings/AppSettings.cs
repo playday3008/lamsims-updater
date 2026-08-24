@@ -10,6 +10,13 @@ public sealed class AppSettings
 
     public string? GameDirectory { get; set; }
 
+    /// <summary>
+    /// A Wine prefix the user chose, scanned in addition to the ones each launcher's configuration
+    /// names. Read live at scan time rather than captured, so changing it re-runs detection without
+    /// rebuilding the object graph.
+    /// </summary>
+    public string? WinePrefix { get; set; }
+
     /// <summary>Overrides where partial downloads and archives live; null keeps the default.</summary>
     public string? DownloadDirectory { get; set; }
 

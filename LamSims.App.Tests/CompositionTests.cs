@@ -109,7 +109,10 @@ public class CompositionTests
         {
             var services = Composition.Build(commandLineCatalog: null, overrideRoot: root);
 
-            Assert.Equal(["windows-native"], services.Unlocker.BackendIds);
+            // Both backends, in registration order. The Wine backend reports IsSupported false on
+            // Windows, so registering it changes nothing there — but a graph missing it ships a
+            // Linux build whose unlocker can never find a prefix.
+            Assert.Equal(["windows-native", "wine-prefix"], services.Unlocker.BackendIds);
             Assert.IsType<LamSims.Core.Unlocking.WindowsUnlockerHost>(services.UnlockerHost);
             Assert.IsType<LamSims.Core.Unlocking.StaticUnlockerAssetSource>(services.UnlockerAssets);
 

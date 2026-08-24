@@ -42,6 +42,7 @@ public sealed partial class MainViewModel : ObservableObject
         _downloadDirectory = services.Current.DownloadDirectory;
         _connections = services.Current.Connections;
         _catalogInput = services.Current.CatalogSource ?? "";
+        _winePrefix = services.Current.WinePrefix;
 
         if (services.SettingsError is { } settingsError)
         {
@@ -57,7 +58,8 @@ public sealed partial class MainViewModel : ObservableObject
             services.Dispatcher,
             shutdown: ShutdownAsync,
             exit: () => RequestClose?.Invoke(),
-            banner: Raise);
+            banner: Raise,
+            services.UnlockerNotes);
     }
 
     public UnlockerViewModel Unlocker { get; }
@@ -232,6 +234,16 @@ public sealed partial class MainViewModel : ObservableObject
         if (picked is null) return;
 
         DownloadDirectory = picked;   // its setter moves the engine and queues the save
+        await FlushSettingsNowAsync(ct);
+    }
+
+    [RelayCommand]
+    private async Task BrowseWinePrefixAsync(CancellationToken ct)
+    {
+        var picked = await _services.Pickers.PickFolderAsync("Choose a Wine prefix", WinePrefix);
+        if (picked is null) return;
+
+        WinePrefix = picked;   // its setter saves and re-runs detection
         await FlushSettingsNowAsync(ct);
     }
 
@@ -419,6 +431,20 @@ public sealed partial class MainViewModel : ObservableObject
 
     [ObservableProperty]
     private int _connections = 8;
+
+    [ObservableProperty]
+    private string? _winePrefix;
+
+    /// <summary>
+    /// Applied live. The scanner reads the setting per scan, so re-running detection is all that is
+    /// needed and the object graph is never rebuilt.
+    /// </summary>
+    partial void OnWinePrefixChanged(string? value)
+    {
+        _services.Current.WinePrefix = value;
+        QueueSave();
+        _ = DetectUnlockerAsync(CancellationToken.None);
+    }
 
     public QueueState QueueState { get; private set; } = QueueState.Idle;
 
@@ -645,10 +671,20 @@ public sealed partial class MainViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Runs before the catalog load: detection is at most three registry opens and a couple of
-    /// File.Exists calls, so it costs the catalog nothing and the region is populated by the time
-    /// the window is interactive. Without this call, IsSupported can be true with Targets empty,
-    /// which renders a DLC Unlocker section with no rows and no way to install anything.
+    /// Runs before the catalog load. On Windows, detection is at most four registry opens and a
+    /// couple of File.Exists calls, cheap enough to cost the catalog nothing. The Wine backend is
+    /// not bounded the same way: it walks the configured prefix setting,
+    /// <c>$WINEPREFIX</c>, and five launcher sources — Wine, Steam, Lutris, Heroic and Bottles —
+    /// each doubled for a Flatpak install, plus this application's own orphaned-override sweep, and
+    /// can parse up to eight full <c>.reg</c> files per prefix along the way. Without this call at
+    /// all, IsSupported can be true with Targets empty, which renders a DLC Unlocker section with no
+    /// rows and no way to install anything.
+    ///
+    /// The scan does not run on the caller's thread: UnlockerViewModel.RefreshCoreAsync hops onto
+    /// Task.Run for the detection call and for each row's status check, the same idiom
+    /// ObserveQueueAsync below uses and for the same reason — this method is awaited from
+    /// MainWindow.OnOpened on the UI thread, and without the hop the whole walk would run on the
+    /// thread that draws.
     ///
     /// Guarded narrowly, matching FlushSettingsNowAsync above: IOException and
     /// UnauthorizedAccessException are the only exceptions either unlocker backend surfaces, since

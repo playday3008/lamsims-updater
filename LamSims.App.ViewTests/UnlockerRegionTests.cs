@@ -31,6 +31,12 @@ public class UnlockerRegionTests
     /// in the visual tree, its bindings have never been applied, and every Command inside reads
     /// null, the same trap RowCommandTests documents for ContextMenu, which needs
     /// <c>menu.Open(owner)</c> before its items can be read.
+    ///
+    /// RefreshAsync's own detection call hops onto Task.Run (it runs a real filesystem walk in
+    /// production), so its continuation is marshalled back through the dispatcher's synchronization
+    /// context — blocking on it here with GetAwaiter().GetResult() would deadlock, since nothing
+    /// would be left to pump that context while this thread waits on it. PumpUntil drives the
+    /// dispatcher instead, exactly as every operation below already does for InstallAsync/RemoveAsync.
     /// </summary>
     private static ViewHost ShowExpanded(out RecordingUnlockerBackend backend, params UnlockerTarget[] targets)
     {
@@ -39,9 +45,8 @@ public class UnlockerRegionTests
         var host = ViewHost.Show([], new UnlockerService([backend]), new FakeUnlockerHost(),
             new StubUnlockerAssets());
 
-        // All of DetectTargetsAsync/GetStatusAsync resolve from already-completed tasks, so this
-        // finishes synchronously with no dispatcher pump needed.
-        host.ViewModel.Unlocker.RefreshAsync(CancellationToken.None).GetAwaiter().GetResult();
+        var refresh = host.ViewModel.Unlocker.RefreshAsync(CancellationToken.None);
+        Assert.True(ViewHost.PumpUntil(() => refresh.IsCompleted), "detection never finished");
 
         UnlockerExpander(host).IsExpanded = true;
         host.Pump();

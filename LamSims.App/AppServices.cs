@@ -4,6 +4,7 @@ using LamSims.Core.Downloading;
 using LamSims.Core.Installing;
 using LamSims.Core.Settings;
 using LamSims.Core.Unlocking;
+using LamSims.Core.Unlocking.Wine;
 
 namespace LamSims.App;
 
@@ -25,6 +26,7 @@ public sealed record AppServices(
     UnlockerService Unlocker,
     IUnlockerHost UnlockerHost,
     IUnlockerAssetSource UnlockerAssets,
+    UnlockerNotes UnlockerNotes,
     DownloadPaths DownloadPaths,
     DownloadOptions DownloadOptions,
     OrphanCleaner Orphans);

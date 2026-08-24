@@ -12,6 +12,7 @@ using LamSims.Core.Downloading;
 using LamSims.Core.Installing;
 using LamSims.Core.Settings;
 using LamSims.Core.Unlocking;
+using LamSims.Core.Unlocking.Wine;
 
 namespace LamSims.App.Tests;
 
@@ -47,7 +48,8 @@ public sealed class TestHost : IDisposable
         IQueueController? queue = null,
         UnlockerService? unlockerService = null,
         IUnlockerHost? unlockerHost = null,
-        IUnlockerAssetSource? unlockerAssets = null)
+        IUnlockerAssetSource? unlockerAssets = null,
+        UnlockerNotes? unlockerNotes = null)
     {
         var root = Directory.CreateTempSubdirectory("lamsims-vm").FullName;
         var game = Path.Combine(root, "game");
@@ -90,6 +92,7 @@ public sealed class TestHost : IDisposable
             unlockerService ?? new UnlockerService([]),
             unlockerHost ?? new FakeUnlockerHost { IsAvailable = false },
             unlockerAssets ?? new StubUnlockerAssets(),
+            unlockerNotes ?? new UnlockerNotes(),
             downloadPaths,
             downloadOptions,
             new OrphanCleaner(downloadPaths));

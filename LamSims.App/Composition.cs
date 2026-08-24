@@ -11,6 +11,7 @@ using LamSims.Core.Installing;
 using LamSims.Core.Queueing;
 using LamSims.Core.Settings;
 using LamSims.Core.Unlocking;
+using LamSims.Core.Unlocking.Wine;
 
 namespace LamSims.App;
 
@@ -82,9 +83,26 @@ public static class Composition
         // catalog and the queue use, so a test that redirects `http` redirects it too.
         var unlockerHost = new WindowsUnlockerHost();
         var unlockerAssets = new StaticUnlockerAssetSource(http, downloadPaths);
+        var unlockerNotes = new UnlockerNotes();
+
+        // Both backends are registered and each reports IsSupported for its own platform, so the
+        // service asks only the one that can work here.
         var unlockerBackend = new EaClientUnlockerBackend(
             unlockerHost, new UnlockerPaths(), paths, effectiveDelays);
-        var unlockerService = new UnlockerService([unlockerBackend]);
+
+        // The home directory and both XDG values are read HERE, at the edge, and injected: nothing
+        // under Unlocking/Wine calls Environment, which is what makes discovery testable. The
+        // prefix setting is passed as a callback rather than a value so a change applies live.
+        var wineBackend = new WinePrefixUnlockerBackend(
+            new LauncherHomes(
+                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                Environment.GetEnvironmentVariable("XDG_CONFIG_HOME"),
+                Environment.GetEnvironmentVariable("XDG_DATA_HOME"),
+                Environment.GetEnvironmentVariable("WINEPREFIX")),
+            paths, effectiveDelays, new WineProcesses(), Environment.UserName,
+            () => settings.WinePrefix, unlockerNotes);
+
+        var unlockerService = new UnlockerService([unlockerBackend, wineBackend]);
 
         return new AppServices(
             paths,
@@ -101,6 +119,7 @@ public static class Composition
             unlockerService,
             unlockerHost,
             unlockerAssets,
+            unlockerNotes,
             downloadPaths,
             options,
             new OrphanCleaner(downloadPaths));

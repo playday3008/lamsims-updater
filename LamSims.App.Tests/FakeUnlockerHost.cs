@@ -85,6 +85,17 @@ public sealed class RecordingUnlockerBackend(params UnlockerTarget[] targets) : 
     public Func<UnlockerTarget, UnlockerResult>? ResultFor { get; set; }
 
     /// <summary>
+    /// Set to keep detection in flight, mirroring <see cref="Hold"/> for install/remove. Without it
+    /// a test about two overlapping detections can never observe "during": DetectTargetsAsync would
+    /// already have returned before a second call could interleave with the first.
+    /// </summary>
+    public TaskCompletionSource? HoldDetect { get; set; }
+
+    /// <summary>The managed thread DetectTargetsAsync ran on, mirroring OperationThreadId, so a
+    /// test can assert detection left the caller's thread too.</summary>
+    public int DetectThreadId { get; private set; }
+
+    /// <summary>
     /// Every managed thread GetStatusAsync ran on, in call order. The batch reads a row's status
     /// after that row's operation, on a path OperationThreadId cannot see, and on both real
     /// backends that read is synchronous work — so an unhopped call runs it on the UI thread. A
@@ -100,8 +111,14 @@ public sealed class RecordingUnlockerBackend(params UnlockerTarget[] targets) : 
     /// </summary>
     public Func<UnlockerTarget, Exception?>? ThrowFor { get; set; }
 
-    public Task<IReadOnlyList<UnlockerTarget>> DetectTargetsAsync(CancellationToken ct) =>
-        Task.FromResult<IReadOnlyList<UnlockerTarget>>(targets);
+    public async Task<IReadOnlyList<UnlockerTarget>> DetectTargetsAsync(CancellationToken ct)
+    {
+        DetectThreadId = Environment.CurrentManagedThreadId;
+
+        if (HoldDetect is not null) await HoldDetect.Task;
+
+        return targets;
+    }
 
     public Task<UnlockerStatus> GetStatusAsync(UnlockerTarget t, CancellationToken ct)
     {
