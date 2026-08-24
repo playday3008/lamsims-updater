@@ -188,7 +188,7 @@ public class SingleStreamDownloaderTests
         Assert.True(result.UsedSingleStream);
     }
 
-    [Fact]
+    [PosixDenialFact]
     public async Task An_unwritable_download_root_is_reported_as_a_failure()
     {
         // The root cannot even be created, so EnsureCreated itself throws. It must sit inside
@@ -207,10 +207,6 @@ public class SingleStreamDownloaderTests
             .DownloadAsync(
                 new DownloadRequest("EP01", new[] { server.FileUrl }, content.LongLength, Sha256Of(content)),
                 new[] { server.FileUrl }, progress: null, CancellationToken.None);
-
-        // A process holding CAP_DAC_OVERRIDE ignores the permission bits and succeeds; there is
-        // nothing to assert in that case.
-        if (result.Outcome == DownloadOutcome.Completed) return;
 
         Assert.Equal(DownloadOutcome.Failed, result.Outcome);
     }

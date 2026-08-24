@@ -534,7 +534,7 @@ public class SegmentedDownloaderTests
         Assert.Equal(500_000, snapshot[^1].BytesCompleted);
     }
 
-    [Fact]
+    [PosixDenialFact]
     public async Task A_non_writable_download_root_yields_Failed_not_a_thrown_exception()
     {
         // Unix permission bits are what this test exercises; they do not apply on Windows.
@@ -560,15 +560,6 @@ public class SegmentedDownloaderTests
                 new DownloadRequest("EP01", new[] { server.FileUrl }, content.LongLength, Sha256Of(content)),
                 progress: null, CancellationToken.None);
 
-            if (result.Outcome == DownloadOutcome.Completed)
-            {
-                // Root, or a capability that bypasses DAC such as CAP_DAC_OVERRIDE, ignores Unix
-                // permission bits, so the download succeeds and there is nothing to assert.
-                // Checking the effective user name would miss non-root processes holding the
-                // same capability, so the outcome is the signal and the test bows out here.
-                return;
-            }
-
             Assert.Equal(DownloadOutcome.Failed, result.Outcome);
         }
         finally
@@ -579,7 +570,7 @@ public class SegmentedDownloaderTests
         }
     }
 
-    [Fact]
+    [PosixDenialFact]
     public async Task A_download_root_that_cannot_be_created_yields_Failed_not_a_thrown_exception()
     {
         // The test above starts from a Root that exists; here it cannot be created at all, so
@@ -596,10 +587,6 @@ public class SegmentedDownloaderTests
             .DownloadAsync(
                 new DownloadRequest("EP01", new[] { server.FileUrl }, content.LongLength, Sha256Of(content)),
                 progress: null, CancellationToken.None);
-
-        // A process holding CAP_DAC_OVERRIDE ignores the permission bits and succeeds; there is
-        // nothing to assert in that case.
-        if (result.Outcome == DownloadOutcome.Completed) return;
 
         Assert.Equal(DownloadOutcome.Failed, result.Outcome);
     }
