@@ -17,7 +17,7 @@ namespace LamSims.Core.Tests;
 /// </summary>
 public class WineEndToEndTests
 {
-    [Fact]
+    [LinuxFact]
     public async Task A_discovered_prefix_installs_and_removes_cleanly()
     {
         using var dir = new TempDir();
@@ -95,7 +95,7 @@ public class WineEndToEndTests
     /// Detection on a machine with no prefixes at all is empty and quiet — not an error. A build
     /// that bannered here would nag every Windows user and every Linux user who has no Wine.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public async Task A_machine_with_no_prefixes_detects_nothing_and_does_not_fail()
     {
         using var dir = new TempDir();

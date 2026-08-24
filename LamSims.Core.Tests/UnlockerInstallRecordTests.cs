@@ -112,7 +112,7 @@ public class UnlockerInstallRecordTests
     // a different failure from a directory that enumerates fine but holds a corrupt record (the
     // test above, which trips the inner "record is null" branch instead). Locking the directory
     // itself, rather than a file inside it, is the only way to reach that catch.
-    [Fact]
+    [PosixDenialFact]
     [UnsupportedOSPlatform("windows")]
     public async Task An_unreadable_install_directory_makes_the_answer_incomplete()
     {

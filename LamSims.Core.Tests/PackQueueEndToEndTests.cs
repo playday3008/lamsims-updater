@@ -389,7 +389,7 @@ public class PackQueueEndToEndTests
     /// the deadline is the token check before <c>tail.package</c>, and the margin is
     /// <c>big.package</c>'s 8 MB write.
     /// </summary>
-    [Fact(Timeout = 30000)]
+    [LinuxFact("Linux only: this test has to call Cancel while the extract is still inside EP01/, and it learns the current entry through the update channel. On a fast disk the remaining 200 KB lands before the cancel is observed, so the window is machine speed, not behaviour. The cancel-to-Partial path itself is platform independent and covered by the unit tests.", Timeout = 30000)]
     public async Task Cancel_mid_install_with_every_directory_present_reports_partial_from_the_journal()
     {
         const int connections = 4;

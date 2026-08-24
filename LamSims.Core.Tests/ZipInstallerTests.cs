@@ -347,7 +347,7 @@ public class ZipInstallerTests
         Assert.Equal(InstallOutcome.Failed, result.Outcome);
     }
 
-    [Fact]
+    [PosixDenialFact]
     [UnsupportedOSPlatform("windows")]
     public async Task Reports_installed_when_every_entry_is_written_but_the_archive_cannot_be_deleted()
     {
@@ -497,7 +497,7 @@ public class ZipInstallerTests
         Assert.Equal(InstallMarkerStatus.Installing, store.TryLoad(game, "EP01")!.Status);
     }
 
-    [Fact]
+    [PosixDenialFact]
     [UnsupportedOSPlatform("windows")]
     public async Task Refuses_to_extract_anything_when_the_journal_cannot_be_written()
     {
@@ -521,7 +521,7 @@ public class ZipInstallerTests
         Assert.True(File.Exists(archive));
     }
 
-    [Fact]
+    [PosixDenialFact]
     [UnsupportedOSPlatform("windows")]
     public async Task Warns_but_still_reports_installed_when_the_journal_cannot_be_completed()
     {

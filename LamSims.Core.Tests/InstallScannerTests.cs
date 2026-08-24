@@ -311,7 +311,7 @@ public class InstallScannerTests
         Assert.Equal(new[] { "EP02", "EP01" }, scan.Packs.Select(r => r.Code));
     }
 
-    [Fact]
+    [PosixDenialFact]
     [UnsupportedOSPlatform("windows")]
     public void Reports_every_pack_as_not_installed_when_the_game_directory_cannot_be_read()
     {

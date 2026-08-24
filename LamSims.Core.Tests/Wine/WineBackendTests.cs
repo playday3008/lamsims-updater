@@ -97,7 +97,7 @@ public sealed class WineBackendFixture : IDisposable
 
 public class WineBackendDetectionTests
 {
-    [Fact]
+    [LinuxFact]
     public async Task A_prefix_with_a_registered_client_yields_a_stamped_target()
     {
         using var f = new WineBackendFixture();
@@ -116,7 +116,7 @@ public class WineBackendDetectionTests
     /// environment makes the Title rule — which composes DisplayName with Environment —
     /// unreachable, and the environment then appears twice or not at all.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public async Task The_display_name_is_not_rewritten()
     {
         using var f = new WineBackendFixture();
@@ -132,7 +132,7 @@ public class WineBackendDetectionTests
     /// client is registered here" and "one is registered and its path is gone" need different
     /// responses from the user, and the engine only ever returns a list.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public async Task A_prefix_with_no_client_is_reported_and_yields_nothing()
     {
         using var f = new WineBackendFixture();
@@ -149,7 +149,7 @@ public class WineBackendDetectionTests
     /// the note. Asserting only the EA app case passes against an implementation that rejects the
     /// whole prefix.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public async Task A_32_bit_prefix_rejects_the_ea_app_and_keeps_origin()
     {
         using (var ea = new WineBackendFixture(ClientKind.EaApp, arch: "win32"))
@@ -165,7 +165,7 @@ public class WineBackendDetectionTests
         Assert.False(origin.Notes.Any("32-bit"), string.Join("\n", origin.Notes.Lines));
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task Both_clients_in_one_prefix_yield_two_targets()
     {
         using var f = new WineBackendFixture();
@@ -187,7 +187,7 @@ public class WineBackendDetectionTests
     /// A record for a prefix that is gone would make the next removal write a stale value into a
     /// freshly generated user.reg, so detection is where it is caught.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public async Task Detection_sweeps_a_record_whose_prefix_has_vanished()
     {
         using var f = new WineBackendFixture();
@@ -206,7 +206,7 @@ public class WineBackendDetectionTests
     /// Linux only, not "not Windows": macOS is out of scope because it has no
     /// <c>/proc</c>, so the liveness check this backend depends on can never fire there.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public void The_backend_is_supported_only_on_linux()
     {
         using var f = new WineBackendFixture();
@@ -222,7 +222,7 @@ public class WineBackendOperationTests
     /// The whole point: the DLL lands at the RESOLVED path inside the prefix and the starred entry
     /// appears in user.reg. Either alone is not an install.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public async Task An_install_writes_the_dll_and_the_override()
     {
         using var f = new WineBackendFixture();
@@ -241,7 +241,7 @@ public class WineBackendOperationTests
     /// own ProgramData and the staged copy beside the resolved client directory; a string join puts
     /// them in the host filesystem's root, or nowhere.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public async Task The_configuration_and_staged_copy_land_inside_the_prefix()
     {
         using var f = new WineBackendFixture();
@@ -270,7 +270,7 @@ public class WineBackendOperationTests
     /// engine's own trailing Total/Total report must be dropped, or there is one report too few and
     /// two at the same count.
     /// </summary>
-    [Theory]
+    [LinuxTheory]
     [InlineData(ClientKind.EaApp, 12)]
     [InlineData(ClientKind.Origin, 10)]
     public async Task Install_progress_runs_from_zero_to_the_wrapped_total(ClientKind kind, int total)
@@ -285,7 +285,7 @@ public class WineBackendOperationTests
         Assert.Equal(Enumerable.Range(0, total + 1), f.Reports.Select(r => r.Completed));
     }
 
-    [Theory]
+    [LinuxTheory]
     [InlineData(ClientKind.EaApp, 11)]
     [InlineData(ClientKind.Origin, 8)]
     public async Task Removal_progress_runs_from_zero_to_the_wrapped_total(ClientKind kind, int total)
@@ -308,7 +308,7 @@ public class WineBackendOperationTests
     /// live prefix whose override is ALREADY correct needs no write, so the install proceeds. Test
     /// only the refusal and "refuse whenever live" passes, which breaks every ordinary reinstall.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public async Task A_live_prefix_whose_override_is_already_correct_installs()
     {
         using var f = new WineBackendFixture();
@@ -323,7 +323,7 @@ public class WineBackendOperationTests
         Assert.True(File.Exists(f.InstalledDll));
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task A_live_prefix_whose_launchers_supply_the_override_installs()
     {
         using var f = new WineBackendFixture();
@@ -344,7 +344,7 @@ public class WineBackendOperationTests
     /// writes anything. The DLL must not be on disk, or the user has a half-install behind a
     /// failure message.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public async Task A_live_prefix_that_needs_a_write_refuses_before_touching_anything()
     {
         using var f = new WineBackendFixture();
@@ -368,7 +368,7 @@ public class WineBackendOperationTests
     /// the refusal, and that the entry is still absent afterwards — the refusal alone would pass
     /// against an implementation that wrote first and reported the failure second.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public async Task A_live_prefix_needing_a_repair_write_refuses_like_a_first_install()
     {
         using var f = new WineBackendFixture();
@@ -395,7 +395,7 @@ public class WineBackendOperationTests
     /// a user unlocking Origin in a live prefix has no reason to be told to close a different
     /// application. Both halves are asserted, or a message naming both would pass.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public async Task A_live_prefix_that_needs_a_write_for_origin_names_origin_not_the_ea_app()
     {
         using var f = new WineBackendFixture(ClientKind.Origin);
@@ -416,7 +416,7 @@ public class WineBackendOperationTests
     /// the one this test builds: a live wineserver, a running client, AND the override already
     /// correct — because a write with the prefix live would have refused instead.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public async Task A_running_client_yields_a_restart_warning_and_not_a_failure()
     {
         using var f = new WineBackendFixture();
@@ -437,7 +437,7 @@ public class WineBackendOperationTests
     /// fetch takes seconds. The DLL is already on disk, so this is a failure with a different
     /// message and re-running is idempotent.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public async Task A_prefix_that_goes_live_mid_install_fails_with_the_dll_in_place()
     {
         using var f = new WineBackendFixture();
@@ -458,7 +458,7 @@ public class WineBackendOperationTests
     /// launch path. The warning names the file and the game because that launch path cannot be
     /// fixed from here.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public async Task A_hostile_launcher_override_warns_and_still_installs()
     {
         using var f = new WineBackendFixture();
@@ -475,7 +475,7 @@ public class WineBackendOperationTests
                      WineRegistryFile.ReadValue(f.UserReg, WineDllOverride.Key, "*version")?.Text);
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task An_app_defaults_override_is_reported_as_a_warning()
     {
         using var f = new WineBackendFixture();
@@ -495,7 +495,7 @@ public class WineBackendOperationTests
     /// the DLL gone, the override set and the record on disk. Asserted by the DLL still being
     /// present.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public async Task Removal_on_a_live_prefix_refuses_before_deleting_the_dll()
     {
         using var f = new WineBackendFixture();
@@ -517,7 +517,7 @@ public class WineBackendOperationTests
     /// catches a second install recording our own value as the prior one — after which removal
     /// "restores" the override and the unlocker keeps loading.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public async Task Install_twice_then_remove_leaves_user_reg_as_it_was()
     {
         using var f = new WineBackendFixture();
@@ -537,7 +537,7 @@ public class WineBackendOperationTests
     /// on the record, never on what the launchers now say, or the registry write outlives the
     /// unlocker for ever.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public async Task A_launcher_override_added_after_installing_does_not_keep_our_line()
     {
         using var f = new WineBackendFixture();
@@ -560,7 +560,7 @@ public class WineBackendOperationTests
     /// shared-configuration hazard in a new place. The record survives too, so the sibling's own
     /// removal can undo it.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public async Task Removing_one_client_keeps_the_override_while_a_sibling_is_installed()
     {
         using var f = new WineBackendFixture();
@@ -592,7 +592,7 @@ public class WineBackendOperationTests
     /// configuration is written under every non-Public one. Getting this wrong is a silent no-op
     /// behind a green UI.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public async Task An_ambiguous_prefix_gets_the_configuration_under_every_user()
     {
         using var f = new WineBackendFixture();
@@ -617,7 +617,7 @@ public class WineBackendOperationTests
     /// reads. It must warn rather than skip with a bare `continue`, and still finish the install
     /// successfully for the primary user it did reach.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public async Task An_unreachable_secondary_user_is_warned_about_rather_than_silently_skipped()
     {
         using var f = new WineBackendFixture();
@@ -640,7 +640,7 @@ public class WineBackendOperationTests
                                              "config.ini")));
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task Removal_takes_the_mirrored_configuration_with_it()
     {
         using var f = new WineBackendFixture();
@@ -660,7 +660,7 @@ public class WineBackendOperationTests
         }
     }
 
-    [Fact]
+    [LinuxFact]
     public async Task Removal_on_a_vanished_prefix_writes_nothing()
     {
         using var f = new WineBackendFixture();

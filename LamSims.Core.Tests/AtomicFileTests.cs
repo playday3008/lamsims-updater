@@ -79,8 +79,15 @@ public class AtomicFileTests
         // Make MoveIntoPlace fail by passing a directory path as destination
         Directory.CreateDirectory(path);
 
-        await Assert.ThrowsAsync<IOException>(() =>
+        // Renaming onto a directory raises IOException on Unix and UnauthorizedAccessException on
+        // Windows, and UnauthorizedAccessException does not derive from IOException. The type is
+        // not what this test is about: that it threw at all, and that the temp file went with it.
+        var thrown = await Record.ExceptionAsync(() =>
             AtomicFile.WriteAllBytesAsync(path, bytes, CancellationToken.None));
+
+        Assert.NotNull(thrown);
+        Assert.True(thrown is IOException or UnauthorizedAccessException,
+                    $"expected a move failure, got {thrown.GetType().Name}: {thrown.Message}");
 
         Assert.Empty(Directory.GetFiles(dir.Path, "*.tmp"));
     }

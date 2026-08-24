@@ -12,7 +12,7 @@ public class WinePrefixOpenTests
     private static TargetEnvironment Env(string detail = "test") =>
         new(EnvironmentSource.Wine, detail);
 
-    [Fact]
+    [LinuxFact]
     public void A_directory_with_system_reg_and_drive_c_opens()
     {
         using var f = new PrefixFixture();
@@ -28,7 +28,7 @@ public class WinePrefixOpenTests
     /// The exact string, naming WHICH file is missing. A generic "not a prefix" would
     /// leave a user with a wrong Lutris path unable to tell it apart from a permissions problem.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public void A_directory_that_is_not_a_prefix_is_rejected_with_the_missing_file_named()
     {
         using var dir = new TempDir();
@@ -39,7 +39,7 @@ public class WinePrefixOpenTests
         Assert.Contains($"'{dir.Path}' is not a Wine prefix: no system.reg.", notes.Lines);
     }
 
-    [Fact]
+    [LinuxFact]
     public void A_prefix_with_system_reg_but_no_drive_c_names_drive_c()
     {
         using var dir = new TempDir();
@@ -56,7 +56,7 @@ public class WinePrefixOpenTests
     /// records the container. Without the one-shot retry every Valve-Proton-shaped Lutris, Heroic
     /// or Bottles prefix is rejected.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public void A_container_holding_pfx_opens_as_that_pfx()
     {
         using var dir = new TempDir();
@@ -77,7 +77,7 @@ public class WinePrefixOpenTests
     /// a recursive retry here would make that enumeration redundant and find prefixes nobody
     /// configured.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public void The_pfx_retry_does_not_recurse()
     {
         using var dir = new TempDir();
@@ -88,7 +88,7 @@ public class WinePrefixOpenTests
         Assert.Null(WinePrefix.TryOpen(Path.Combine(dir.Path, "a"), Env(), "playday"));
     }
 
-    [Theory]
+    [LinuxTheory]
     [InlineData("win64", WineArch.Win64)]
     [InlineData("win32", WineArch.Win32)]
     public void The_arch_comes_from_the_reg_header(string written, WineArch expected)
@@ -102,7 +102,7 @@ public class WinePrefixOpenTests
     /// Treated as win64 with a diagnostic, never as a rejection. A prefix whose header
     /// we cannot read still holds a client we can unlock.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public void A_missing_arch_line_is_win64_with_a_note()
     {
         using var f = new PrefixFixture();
@@ -119,7 +119,7 @@ public class WinePrefixOpenTests
     /// beside `pfx`. Checking only the root misses every Valve Proton prefix, and the reader then
     /// picks the wrong Windows user for exactly the population that always uses `steamuser`.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public void A_proton_marker_beside_pfx_is_seen()
     {
         using var dir = new TempDir();
@@ -136,7 +136,7 @@ public class WinePrefixOpenTests
         Assert.Equal("steamuser", Path.GetFileName(prefix.PrimaryUserDirectory));
     }
 
-    [Fact]
+    [LinuxFact]
     public void A_plain_prefix_uses_the_injected_user_name()
     {
         using var f = new PrefixFixture(user: "playday");
@@ -154,7 +154,7 @@ public class WinePrefixOpenTests
     /// AppData the unlocker DLL never reads, and asserting only the names would pass against an
     /// implementation that returned every user for every prefix.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public void An_unrecognisable_user_writes_to_every_non_public_user_with_a_note()
     {
         using var f = new PrefixFixture(user: "nobody-here");
@@ -179,7 +179,7 @@ public class WinePrefixResolutionTests
     /// macOS CI legs where creating a symlink needs privilege: without it the reader is exercised
     /// on Linux only.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public void A_drive_entry_that_is_a_real_directory_resolves()
     {
         using var f = new PrefixFixture();
@@ -195,7 +195,7 @@ public class WinePrefixResolutionTests
     }
 
     /// <summary>Linux-gated: symlink creation needs privilege on Windows.</summary>
-    [Fact]
+    [LinuxFact]
     public void A_drive_symlink_to_a_target_outside_the_prefix_resolves()
     {
         if (OperatingSystem.IsWindows()) return;
@@ -217,7 +217,7 @@ public class WinePrefixResolutionTests
     /// at all and always falls back to drive_c — so the same test asserts where `D:\x` actually
     /// lands.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public void A_block_device_entry_is_not_a_drive()
     {
         using var f = new PrefixFixture();
@@ -237,7 +237,7 @@ public class WinePrefixResolutionTests
     /// Every dosdevices entry is lowercase and ext4 is case-sensitive, so without lowercasing the
     /// letter this fails on every prefix, for every path, on a real Wine install.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public void An_uppercase_drive_letter_resolves()
     {
         using var f = new PrefixFixture();
@@ -252,7 +252,7 @@ public class WinePrefixResolutionTests
     /// missing d: must not silently resolve inside drive_c and install the unlocker in the wrong
     /// place.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public void A_missing_drive_letter_other_than_c_returns_null()
     {
         using var f = new PrefixFixture();
@@ -264,7 +264,7 @@ public class WinePrefixResolutionTests
         Assert.Null(prefix.ResolveWindowsPath(@"D:\Games"));
     }
 
-    [Fact]
+    [LinuxFact]
     public void Segments_match_case_insensitively()
     {
         using var f = new PrefixFixture();
@@ -282,7 +282,7 @@ public class WinePrefixResolutionTests
     /// while a missing INTERMEDIATE segment is null. One assertion without the other passes against
     /// an implementation that joins blindly and against one that gives up on anything absent.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public void A_missing_final_segment_joins_and_a_missing_intermediate_is_null()
     {
         using var f = new PrefixFixture();
@@ -303,7 +303,7 @@ public class WinePrefixResolutionTests
     /// Path.GetDirectoryName of a backslash path returns an empty string on Linux. So the assertion
     /// is not "it resolved" but "what the ENGINE then does with it works".
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public void A_resolved_client_path_survives_the_engines_directory_split()
     {
         using var f = new PrefixFixture();
@@ -324,7 +324,7 @@ public class WinePrefixResolutionTests
     /// are the two paths most likely to be silently wrong. Roaming must exist; ProgramData
     /// frequently does not and must still come back joined so the engine can create it.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public void PathsFor_resolves_both_roots()
     {
         using var f = new PrefixFixture(user: "playday");

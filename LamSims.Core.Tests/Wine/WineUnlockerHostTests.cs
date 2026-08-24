@@ -21,7 +21,7 @@ public class WineHostTests
                          + $"\"ClientPath\"={string.Format(valueForm, escaped)}\n");
     }
 
-    [Fact]
+    [LinuxFact]
     public void An_opened_prefix_is_available_and_counts_as_elevated()
     {
         using var f = new PrefixFixture();
@@ -39,7 +39,7 @@ public class WineHostTests
     /// the raw value makes detection find nothing on every prefix with no error, because
     /// Path.GetDirectoryName of a backslash path is an empty string on Linux.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public void ReadClientPath_returns_a_path_the_engine_can_split()
     {
         using var f = new PrefixFixture();
@@ -57,7 +57,7 @@ public class WineHostTests
     /// A ClientPath stored as REG_EXPAND_SZ is 125-occurrences-common in a real registry, and its
     /// %VAR% has to be expanded before resolution or the path never exists.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public void An_expand_string_client_path_is_expanded_then_resolved()
     {
         using var f = new PrefixFixture();
@@ -71,7 +71,7 @@ public class WineHostTests
             .ReadClientPath(ClientRegistryKey.EaDesktop)));
     }
 
-    [Fact]
+    [LinuxFact]
     public void A_key_that_is_not_there_reads_as_null_without_throwing()
     {
         using var f = new PrefixFixture();
@@ -86,7 +86,7 @@ public class WineHostTests
     /// with the exact string, because "no clients found" and "your EA app moved" need
     /// different responses from the user.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public void A_registered_client_whose_path_is_missing_is_reported()
     {
         using var f = new PrefixFixture();
@@ -101,7 +101,7 @@ public class WineHostTests
         Assert.True(notes.Any("does not exist in this prefix"), string.Join("\n", notes.Lines));
     }
 
-    [Fact]
+    [LinuxFact]
     public void SawClientValue_is_false_when_no_key_holds_a_value()
     {
         using var f = new PrefixFixture();
@@ -119,7 +119,7 @@ public class WineHostTests
     /// survivors and returns a hard failure. The pair of assertions is the point — "returns empty"
     /// alone would also hold for a host that reported empty because it looked in the wrong place.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public void RunningClientProcesses_is_always_empty_and_nothing_is_ever_killed()
     {
         using var f = new PrefixFixture();
@@ -134,7 +134,7 @@ public class WineHostTests
     /// silent no-op: a throw would fail the engine's non-fatal autostart step after version.dll is
     /// already on disk.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public void The_autostart_and_scheduled_task_members_are_silent_no_ops()
     {
         using var f = new PrefixFixture();
@@ -154,7 +154,7 @@ public class WineHostTests
     /// HKLM lives in system.reg and HKCU in user.reg, and a client can be registered in either. A
     /// host reading only one file misses every prefix that used the other.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public void A_client_registered_in_user_reg_is_found_too()
     {
         using var f = new PrefixFixture();
@@ -169,7 +169,7 @@ public class WineHostTests
                      PathIdentity.Canonical(Path.GetDirectoryName(value)));
     }
 
-    [Fact]
+    [LinuxFact]
     public void The_wow6432_keys_map_to_wines_own_spelling()
     {
         using var f = new PrefixFixture();
@@ -188,7 +188,7 @@ public class WineHostTests
     /// install-then-move, or a per-user registration after a machine-wide one — must find the
     /// working path in the second hive, not report "does not exist".
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public void Both_hives_are_checked_even_if_the_first_has_a_stale_path()
     {
         using var f = new PrefixFixture();
@@ -216,7 +216,7 @@ public class WineHostTests
     /// the secondary user. This test uses %ProgramFiles% which is supported, creating the client
     /// only in one user's directory to force the multi-user expansion logic to work correctly.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public void An_expand_string_path_under_a_second_user_expands_correctly()
     {
         using var f = new PrefixFixture();
@@ -246,7 +246,7 @@ public class WineHostTests
     /// When both hives hold stale values, the diagnostic must fire exactly once, not twice.
     /// Combining reports produces noise and makes the user experience confusing.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public void A_stale_path_in_both_hives_reports_once()
     {
         using var f = new PrefixFixture();

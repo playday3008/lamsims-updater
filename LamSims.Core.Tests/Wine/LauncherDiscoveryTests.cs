@@ -23,7 +23,7 @@ public class LauncherDiscoveryTests
     /// A glob over ~/Games cannot find this one: the prefix is nowhere near it, and the only thing
     /// that knows where it is is the game's own YAML.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public void A_lutris_prefix_on_another_mount_is_found()
     {
         using var dir = new TempDir();
@@ -42,7 +42,7 @@ public class LauncherDiscoveryTests
     /// The in-file name, not the filename. Lutris filenames carry a numeric suffix
     /// (ea-app-1778070803.yml) that means nothing to the user.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public void A_lutris_prefix_is_labelled_from_the_configs_own_name()
     {
         using var dir = new TempDir();
@@ -54,7 +54,7 @@ public class LauncherDiscoveryTests
         Assert.Equal("EA app", Scanner(dir, notes).Scan(null)[0].Environment.Detail);
     }
 
-    [Fact]
+    [LinuxFact]
     public void With_no_name_the_lutris_game_slug_is_used()
     {
         using var dir = new TempDir();
@@ -71,7 +71,7 @@ public class LauncherDiscoveryTests
     /// only the data root, and a user who moved their XDG dirs has only this one, so an
     /// implementation that scans one root fails for half the population.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public void Lutris_configs_under_the_config_root_are_found()
     {
         using var dir = new TempDir();
@@ -83,7 +83,7 @@ public class LauncherDiscoveryTests
         Assert.Single(Scanner(dir, notes).Scan(null));
     }
 
-    [Fact]
+    [LinuxFact]
     public void A_flatpak_lutris_is_scanned_and_flagged()
     {
         using var dir = new TempDir();
@@ -103,7 +103,7 @@ public class LauncherDiscoveryTests
     /// Three Lutris configs naming one prefix is the measured reality — and they disagree about the
     /// game. The label must be the launcher and the count.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public void Three_lutris_configs_naming_one_prefix_produce_one_counted_row()
     {
         using var dir = new TempDir();
@@ -120,7 +120,7 @@ public class LauncherDiscoveryTests
         Assert.Equal("3 games", found[0].Environment.Detail);
     }
 
-    [Fact]
+    [LinuxFact]
     public void A_lutris_config_naming_a_path_that_is_not_a_prefix_is_rejected_with_a_reason()
     {
         using var dir = new TempDir();
@@ -140,7 +140,7 @@ public class LauncherDiscoveryTests
     /// one hit per config file — a config can carry more than one and taking only the first would
     /// silently drop the rest. This test must remain permanent to catch any future regression.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public void A_lutris_config_with_two_prefixes_discovers_both()
     {
         using var dir = new TempDir();
@@ -157,7 +157,7 @@ public class LauncherDiscoveryTests
         Assert.True(found.All(f => f.Environment.Source == EnvironmentSource.Lutris));
     }
 
-    [Fact]
+    [LinuxFact]
     public void A_heroic_games_config_prefix_is_found_and_labelled()
     {
         using var dir = new TempDir();
@@ -173,7 +173,7 @@ public class LauncherDiscoveryTests
         Assert.Equal("The Sims 4", found[0].Environment.Detail);
     }
 
-    [Fact]
+    [LinuxFact]
     public void With_no_title_the_heroic_config_id_is_the_label()
     {
         using var dir = new TempDir();
@@ -191,7 +191,7 @@ public class LauncherDiscoveryTests
     /// drive_c. Treating it as a prefix guarantees a spurious rejection on every Heroic install,
     /// and never finding the prefixes that are actually inside it.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public void The_heroic_default_prefix_setting_is_enumerated_one_level()
     {
         using var dir = new TempDir();
@@ -210,7 +210,7 @@ public class LauncherDiscoveryTests
     }
 
     /// <summary>A bottle IS a prefix, so each directory under the bottles root is a candidate.</summary>
-    [Fact]
+    [LinuxFact]
     public void Each_bottle_is_a_prefix()
     {
         using var dir = new TempDir();
@@ -225,7 +225,7 @@ public class LauncherDiscoveryTests
         Assert.Equal("EA-app", found[0].Environment.Detail);
     }
 
-    [Fact]
+    [LinuxFact]
     public void A_bottles_name_from_its_own_yaml_wins_over_the_directory_name()
     {
         using var dir = new TempDir();
@@ -242,7 +242,7 @@ public class LauncherDiscoveryTests
     /// launchers. Each yields a diagnostic and no candidates, and neither stops the scan: the
     /// prefix from the other launcher must still come back.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public void A_malformed_config_yields_a_diagnostic_and_does_not_stop_the_scan()
     {
         using var dir = new TempDir();
@@ -266,7 +266,7 @@ public class LauncherDiscoveryTests
     /// test ensures the guard is present and working: one broken Heroic config does not cost the
     /// user the prefixes from Lutris, Steam, Bottles, or plain Wine.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public void A_heroic_gamesconfig_with_array_root_does_not_stop_the_scan()
     {
         using var dir = new TempDir();
@@ -289,7 +289,7 @@ public class LauncherDiscoveryTests
     /// which is the invariant the class' doc comment promises: "An unreadable or malformed config
     /// yields a diagnostic and no candidates, never an exception".
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public void A_heroic_config_json_with_array_root_does_not_stop_the_scan()
     {
         using var dir = new TempDir();

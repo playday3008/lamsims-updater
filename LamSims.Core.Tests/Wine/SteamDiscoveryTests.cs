@@ -177,7 +177,7 @@ public class SteamDiscoveryTests
         Assert.Equal("GE-Proton10-34, app 1222670", found[0].Environment.Detail);
     }
 
-    [Fact]
+    [PosixDenialFact]
     public void An_unreadable_library_list_yields_a_diagnostic_and_no_exception()
     {
         if (OperatingSystem.IsWindows()) return;

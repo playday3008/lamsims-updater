@@ -493,7 +493,7 @@ public class PackWorkflowTests
         Assert.Equal(0, server.RequestCount);
     }
 
-    [Fact]
+    [PosixDenialFact]
     [UnsupportedOSPlatform("windows")]
     public async Task Reports_the_installers_journal_warning_through_the_workflow()
     {

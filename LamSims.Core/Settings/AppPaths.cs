@@ -6,8 +6,8 @@ namespace LamSims.Core.Settings;
 /// <summary>
 /// Where the application keeps state that is not a download: settings and the cached
 /// catalog. <see cref="Environment.SpecialFolder.ApplicationData"/> resolves to
-/// <c>~/.config</c> on Linux and macOS and <c>%APPDATA%</c> on Windows, so one call
-/// covers all three.
+/// <c>%APPDATA%</c> on Windows and to the XDG configuration directory on Linux, and each
+/// other platform has its own answer, so one call covers all of them.
 ///
 /// <see cref="Environment.SpecialFolderOption.DoNotVerify"/> because the default option answers
 /// with an empty string for a directory that does not exist yet, which is what a Linux account

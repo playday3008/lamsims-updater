@@ -25,7 +25,7 @@ public class WineProcessesTests
     private static string Map(string path) =>
         $"7f0000000000-7f0000001000 r--p 00000000 fd:00 1234 {path}\n";
 
-    [Fact]
+    [LinuxFact]
     public void A_prefix_with_no_process_naming_it_is_idle()
     {
         using var dir = new TempDir();
@@ -42,7 +42,7 @@ public class WineProcessesTests
     /// unset case is exactly where matching /proc/&lt;pid&gt;/environ reports idle while a server
     /// is live.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public void A_process_mapping_a_file_inside_the_prefix_makes_it_live()
     {
         using var dir = new TempDir();
@@ -59,7 +59,7 @@ public class WineProcessesTests
     /// ~/.wine-backup. A user with both would otherwise be told the prefix they are installing into
     /// is busy because of a process in an unrelated one.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public void A_sibling_directory_with_the_same_prefix_string_does_not_match()
     {
         using var dir = new TempDir();
@@ -76,7 +76,7 @@ public class WineProcessesTests
     /// EABackgroundSer and a comm-based matcher never sees the client it was written to find.
     /// The name is 23 characters on purpose.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public void A_client_whose_name_exceeds_the_comm_cap_is_found()
     {
         using var dir = new TempDir();
@@ -95,7 +95,7 @@ public class WineProcessesTests
     /// argv[0] of a Wine process can be a Windows path, so the last segment has to be taken across
     /// both separators. Splitting on '/' alone leaves the whole string and matches nothing.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public void A_windows_style_command_line_still_yields_the_executable_name()
     {
         using var dir = new TempDir();
@@ -113,7 +113,7 @@ public class WineProcessesTests
     /// prefix, and warning the user to restart a client that has nothing to do with this install
     /// is a warning they cannot act on.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public void A_client_running_in_another_prefix_is_not_reported()
     {
         using var dir = new TempDir();
@@ -127,7 +127,7 @@ public class WineProcessesTests
         Assert.Empty(new WineProcesses(dir.Path).RunningClients(prefix, ["EADesktop.exe"]));
     }
 
-    [Fact]
+    [LinuxFact]
     public void A_matching_name_is_reported_once_however_many_processes_carry_it()
     {
         using var dir = new TempDir();
@@ -146,7 +146,7 @@ public class WineProcessesTests
     /// and the read are both ordinary. Neither may throw: liveness is consulted from an install
     /// that has already been told to go ahead.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public void Unreadable_and_non_numeric_entries_are_skipped()
     {
         using var dir = new TempDir();
@@ -162,7 +162,7 @@ public class WineProcessesTests
         Assert.Empty(processes.RunningClients(prefix, ["EADesktop.exe"]));
     }
 
-    [Fact]
+    [LinuxFact]
     public void A_missing_proc_root_is_idle_rather_than_a_fault()
     {
         using var dir = new TempDir();
@@ -174,7 +174,7 @@ public class WineProcessesTests
     /// The cwd source, which catches a process that has the prefix as its working directory without
     /// mapping anything from it. Linux-gated: creating a symlink needs privilege on Windows.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public void A_process_whose_cwd_is_inside_the_prefix_makes_it_live()
     {
         if (OperatingSystem.IsWindows()) return;
@@ -193,7 +193,7 @@ public class WineProcessesTests
     /// The fd source, which catches a process holding a prefix file open — a wineserver that has
     /// the registry open, for instance — without mapping it or living in it.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public void A_process_holding_a_prefix_file_open_makes_it_live()
     {
         if (OperatingSystem.IsWindows()) return;

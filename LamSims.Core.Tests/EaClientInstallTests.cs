@@ -369,7 +369,7 @@ public class EaClientInstallTests
 
     // Upstream's CopyDllFile swallows UnauthorizedAccessException, so InstallUnlocker reports
     // success with no DLL on disk.
-    [Fact]
+    [PosixDenialFact]
     [UnsupportedOSPlatform("windows")]
     public async Task A_client_directory_that_cannot_be_written_fails_rather_than_reporting_success()
     {
@@ -423,7 +423,7 @@ public class EaClientInstallTests
 
     // Step 10 records the autostart value before removing it, both halves non-fatal. If the backup
     // cannot be written the value has to stay, or nothing can restore it later.
-    [Fact]
+    [PosixDenialFact]
     [UnsupportedOSPlatform("windows")]
     public async Task An_unwritable_backup_leaves_the_autostart_value_alone()
     {

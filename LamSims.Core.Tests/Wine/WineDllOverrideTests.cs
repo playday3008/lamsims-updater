@@ -466,11 +466,11 @@ public class WineDllOverrideTests
     /// <summary>
     /// When the verification read itself fails (I/O, permission), we cannot tell if the write
     /// succeeded or was lost. Record it so removal can undo, but report the distinct error so the
-    /// user knows the override's status is uncertain. Linux-gated: the only way to make the
+    /// user knows the override's status is uncertain. Mode-gated: the only way to make the
     /// verification read fail is a real POSIX mode, and without the mode the read succeeds and
     /// ApplyAsync returns null.
     /// </summary>
-    [Fact]
+    [PosixDenialFact]
     public async Task A_write_that_cannot_be_verified_is_recorded_and_reported()
     {
         if (OperatingSystem.IsWindows()) return;
@@ -606,9 +606,9 @@ public class WineDllOverrideTests
     /// can recover from: the user's previous "*version" value has been replaced, and with no record
     /// a later removal reads nothing, does nothing and reports success. So it has to be reported,
     /// not swallowed. Both halves are asserted, because a run that had refused to write at all
-    /// would also produce an error. Linux-gated: the write is made to fail with a POSIX mode.
+    /// would also produce an error. Mode-gated: the write is made to fail with a POSIX mode, which has to be enforced.
     /// </summary>
-    [Fact]
+    [PosixDenialFact]
     public async Task An_override_whose_record_cannot_be_saved_is_reported_not_swallowed()
     {
         if (OperatingSystem.IsWindows()) return;

@@ -22,7 +22,7 @@ public class WinePrefixScannerTests
     private static WinePrefixScanner Scanner(TempDir dir, Notes notes, string? wine = null) =>
         new(new LauncherHomes(dir.Path, null, null, wine), "playday", notes);
 
-    [Fact]
+    [LinuxFact]
     public void The_configured_prefix_is_found_first_and_labelled_with_its_path()
     {
         using var dir = new TempDir();
@@ -36,7 +36,7 @@ public class WinePrefixScannerTests
         Assert.Equal(prefix, found[0].Environment.Detail);
     }
 
-    [Fact]
+    [LinuxFact]
     public void A_blank_configured_prefix_is_ignored_rather_than_rejected()
     {
         using var dir = new TempDir();
@@ -50,7 +50,7 @@ public class WinePrefixScannerTests
     /// The exact string. A user who typed the wrong path into the setting has to be
     /// able to tell that from a permissions problem.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public void A_configured_path_that_is_not_a_prefix_is_reported()
     {
         using var dir = new TempDir();
@@ -60,7 +60,7 @@ public class WinePrefixScannerTests
         Assert.True(notes.Any("is not a Wine prefix: no system.reg."), string.Join("\n", notes.Lines));
     }
 
-    [Fact]
+    [LinuxFact]
     public void The_wine_prefix_variable_is_scanned()
     {
         using var dir = new TempDir();
@@ -73,7 +73,7 @@ public class WinePrefixScannerTests
         Assert.Equal("$WINEPREFIX", found[0].Environment.Detail);
     }
 
-    [Fact]
+    [LinuxFact]
     public void The_default_prefix_and_the_prefix_directory_are_both_scanned()
     {
         using var dir = new TempDir();
@@ -92,7 +92,7 @@ public class WinePrefixScannerTests
     /// PathIdentity.Canonical is Path.GetFullPath and never resolves a symlink, so canonical-only
     /// dedup shows every Steam prefix twice. This test fails against Canonical alone.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public void A_prefix_reached_through_a_symlinked_root_appears_once()
     {
         if (OperatingSystem.IsWindows()) return;
@@ -113,7 +113,7 @@ public class WinePrefixScannerTests
     /// the measured EA app prefix — so a name taken from one of them is non-deterministic. The label
     /// says the launcher and the count and never picks a game.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public void A_prefix_named_by_several_configs_is_labelled_with_the_count()
     {
         using var dir = new TempDir();
@@ -132,7 +132,7 @@ public class WinePrefixScannerTests
         Assert.DoesNotContain("need-for-speed", found[0].Environment.Detail);
     }
 
-    [Fact]
+    [LinuxFact]
     public void A_prefix_named_once_keeps_its_own_label()
     {
         using var dir = new TempDir();
@@ -150,7 +150,7 @@ public class WinePrefixScannerTests
     /// Never an empty string: a row reading "Lutris, " tells the user nothing about which prefix
     /// they are about to write to.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public void A_candidate_with_no_label_falls_back_to_the_directory_name()
     {
         using var dir = new TempDir();
@@ -168,7 +168,7 @@ public class WinePrefixScannerTests
     /// identically to "you have no prefixes". Emitted only when nothing was found, so a working
     /// sandboxed install does not nag.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public void A_sandboxed_build_that_finds_nothing_says_so()
     {
         using var dir = new TempDir();
@@ -188,7 +188,7 @@ public class WinePrefixScannerTests
     /// DetectionNotes. Names the remedy — the Wine-prefix setting — rather than
     /// merely saying nothing was found.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public void A_linux_build_that_finds_nothing_names_the_wine_prefix_setting()
     {
         using var dir = new TempDir();
@@ -199,7 +199,7 @@ public class WinePrefixScannerTests
         Assert.True(notes.Any("Wine prefix setting"), string.Join("\n", notes.Lines));
     }
 
-    [Fact]
+    [LinuxFact]
     public void A_line_value_is_read_after_its_key_and_unquoted()
     {
         using var dir = new TempDir();
@@ -214,7 +214,7 @@ public class WinePrefixScannerTests
     /// Quotes, inline comments and indentation all occur in real launcher configs. Extract loosely:
     /// a wrong extraction is harmless because validation rejects it with a reason.
     /// </summary>
-    [Theory]
+    [LinuxTheory]
     [InlineData("prefix: \"/mnt/a b\"\n", "/mnt/a b")]
     [InlineData("  prefix: '/mnt/c'\n", "/mnt/c")]
     [InlineData("prefix: /mnt/d   # the one\n", "/mnt/d")]
@@ -233,7 +233,7 @@ public class WinePrefixScannerTests
     /// Valve-Proton descent normalises both to Root <root>/pfx, so without the seen.Add guard
     /// that one prefix appears twice. The guard is load-bearing.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public void A_container_and_its_pfx_named_separately_yield_one_prefix()
     {
         using var dir = new TempDir();
@@ -280,7 +280,7 @@ public class WinePrefixScannerTests
     /// This is load-bearing: without the restart, prefixes reached through nested symlinks
     /// appear twice, recreating the exact defect deduplication exists to prevent.
     /// </summary>
-    [Fact]
+    [LinuxFact]
     public void A_prefix_behind_a_symlink_whose_target_crosses_another_symlink_appears_once()
     {
         if (OperatingSystem.IsWindows()) return;
