@@ -606,7 +606,7 @@ public class WineDllOverrideTests
     /// can recover from: the user's previous "*version" value has been replaced, and with no record
     /// a later removal reads nothing, does nothing and reports success. So it has to be reported,
     /// not swallowed. Both halves are asserted, because a run that had refused to write at all
-    /// would also produce an error. Mode-gated: the write is made to fail with a POSIX mode, which has to be enforced.
+    /// would also produce an error. Mode-gated: the write is made to fail with a POSIX mode.
     /// </summary>
     [PosixDenialFact]
     public async Task An_override_whose_record_cannot_be_saved_is_reported_not_swallowed()

@@ -66,8 +66,11 @@ public class AppPathsTests
     ///
     /// Both classes are asserted here because both resolve through the variables this test sets,
     /// and setting them is process-wide — see SpecialFolderRoots for what keeps that safe.
+    ///
+    /// Linux only because the XDG variables are the arrangement: Windows resolves %APPDATA%, which
+    /// always exists, and macOS answers from its own roots and reads neither variable.
     /// </summary>
-    [LinuxFact("Linux only: XDG_CONFIG_HOME and XDG_DATA_HOME are what make a missing directory arrangeable, and Linux is where GetFolderPath reads them. Windows resolves %APPDATA%, which always exists, and macOS answers from its own roots.")]
+    [LinuxFact("Linux only: the XDG variables are what make a missing directory arrangeable.")]
     public void Both_roots_stay_absolute_when_their_directories_do_not_exist_yet()
     {
         using var temp = new TempDir();

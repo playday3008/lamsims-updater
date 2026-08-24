@@ -50,7 +50,8 @@ public sealed class LinuxTheoryAttribute : TheoryAttribute
 /// Several tests arrange a failure by making a directory unwritable or unreadable and then assert
 /// on the diagnostic the refusal produces. Running as uid 0 bypasses the mode, so the arranged
 /// failure never happens, the code under test succeeds, and the assertion fails for a reason that
-/// has nothing to do with the code. The <c>root-check</c> workflow exists to surface exactly that.
+/// has nothing to do with the code. The <c>root-check</c> workflow is what found them, and now
+/// stays green as long as every such test carries this gate.
 ///
 /// This asks for the refusal rather than comparing a uid, because uid 0 is only the common way to
 /// arrive here: a filesystem that does not carry a mode at all produces the same problem, and a
@@ -71,8 +72,8 @@ internal static class PosixDenial
     {
         if (OperatingSystem.IsWindows()) return false;
 
-        var root = System.IO.Path.Combine(
-            System.IO.Path.GetTempPath(), "lamsims-denial-probe-" + Guid.NewGuid().ToString("N"));
+        var root = Path.Combine(
+            Path.GetTempPath(), "lamsims-denial-probe-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
 
         try
@@ -81,7 +82,7 @@ internal static class PosixDenial
 
             try
             {
-                File.WriteAllText(System.IO.Path.Combine(root, "probe"), "");
+                File.WriteAllText(Path.Combine(root, "probe"), "");
                 return false;
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException)

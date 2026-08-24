@@ -308,7 +308,7 @@ public class LauncherOverridesTests
     /// Steam's LaunchOptions does, even the binary shortcuts.vdf above is. Files() gates the WHOLE
     /// Lutris source, so a failure swallowed there returns verdict Absent with zero warnings while a
     /// hostile config sits unread: a permission problem on ~/.local/share/lutris/games has to reach
-    /// Unread. Mode-gated: the failure is arranged with a POSIX mode, which has to be enforced.
+    /// Unread. Mode-gated: the failure is arranged with a POSIX mode.
     /// </summary>
     [PosixDenialFact]
     public void An_unreadable_lutris_directory_is_reported_rather_than_silently_empty()
