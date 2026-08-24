@@ -53,5 +53,14 @@ public sealed class AppPaths
     /// </summary>
     public string UnlockerInstallDirectory => Path.Combine(Root, "unlocker-installs");
 
+    /// <summary>
+    /// Where the Wine DLL-override records live, one per prefix. A separate store from
+    /// <see cref="UnlockerInstallDirectory"/> rather than extra fields on the per-client record,
+    /// because the install engine rewrites that record on every install and would wipe them; and
+    /// keyed by prefix rather than by client, because one "*version" entry in one user.reg serves
+    /// every client in that prefix.
+    /// </summary>
+    public string WineOverrideDirectory => Path.Combine(Root, "wine-overrides");
+
     public void EnsureCreated() => Directory.CreateDirectory(Root);
 }
