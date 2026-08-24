@@ -6,16 +6,22 @@ namespace LamSims.Core.Unlocking;
 /// <summary>
 /// The two special-folder roots the unlocker writes under, injected rather than read from
 /// Environment.GetFolderPath, so the whole install runs against temp directories in tests. Mirrors
-/// AppPaths' optional-override constructor.
+/// AppPaths' optional-override constructor, including its DoNotVerify: the default option answers
+/// with an empty string for a directory that does not exist yet, which would make every path below
+/// relative to the process's working directory.
 /// </summary>
 public sealed class UnlockerPaths
 {
     public UnlockerPaths(string? roamingOverride = null, string? commonAppDataOverride = null)
     {
         Roaming = roamingOverride
-            ?? Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData);
+            ?? Environment.GetFolderPath(
+                Environment.SpecialFolder.ApplicationData,
+                Environment.SpecialFolderOption.DoNotVerify);
         CommonAppData = commonAppDataOverride
-            ?? Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
+            ?? Environment.GetFolderPath(
+                Environment.SpecialFolder.CommonApplicationData,
+                Environment.SpecialFolderOption.DoNotVerify);
     }
 
     public string Roaming { get; }

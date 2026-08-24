@@ -5,6 +5,10 @@ using LamSims.Core.Downloading;
 
 namespace LamSims.Core.Tests;
 
+// Shares SpecialFolderRoots with AppPathsTests, which mutates the XDG variables this class reads
+// through GetFolderPath. Every class that builds a paths object on the real environment belongs to
+// that collection, which is what stops them running beside the mutation.
+[Collection(SpecialFolderRoots.Name)]
 public class DownloadPathsTests
 {
     [Fact]
@@ -12,8 +16,14 @@ public class DownloadPathsTests
     {
         var paths = new DownloadPaths();
 
+        // Rooted is asserted separately: the suffix below is drawn from the same call the class
+        // makes, so it agrees with a relative Root as readily as with an absolute one.
+        Assert.True(Path.IsPathRooted(paths.Root), $"'{paths.Root}' is not an absolute path");
+
         var expected = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            Environment.GetFolderPath(
+                Environment.SpecialFolder.LocalApplicationData,
+                Environment.SpecialFolderOption.DoNotVerify),
             "lamsims-updater", "downloads");
 
         Assert.Equal(expected, paths.Root);

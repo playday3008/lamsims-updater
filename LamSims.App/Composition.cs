@@ -95,7 +95,9 @@ public static class Composition
         // prefix setting is passed as a callback rather than a value so a change applies live.
         var wineBackend = new WinePrefixUnlockerBackend(
             new LauncherHomes(
-                Environment.GetFolderPath(Environment.SpecialFolder.UserProfile),
+                Environment.GetFolderPath(
+                    Environment.SpecialFolder.UserProfile,
+                    Environment.SpecialFolderOption.DoNotVerify),
                 Environment.GetEnvironmentVariable("XDG_CONFIG_HOME"),
                 Environment.GetEnvironmentVariable("XDG_DATA_HOME"),
                 Environment.GetEnvironmentVariable("WINEPREFIX")),

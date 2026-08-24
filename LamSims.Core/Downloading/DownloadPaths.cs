@@ -15,6 +15,11 @@ public sealed class DownloadPaths
     /// Where downloads go when nothing is configured. <see cref="Retarget"/> returns here when it
     /// is given nothing, so clearing the setting cannot leave the engine on the directory that
     /// was just cleared.
+    ///
+    /// <see cref="Environment.SpecialFolderOption.DoNotVerify"/> for the reason
+    /// <see cref="LamSims.Core.Settings.AppPaths"/> uses it: the default option answers with an
+    /// empty string for a directory that does not exist yet, and archives, part files and the
+    /// pack lock would then land under the process's working directory.
     /// </summary>
     public string DefaultRoot { get; }
 
@@ -23,7 +28,9 @@ public sealed class DownloadPaths
     public DownloadPaths(string? overrideRoot = null)
     {
         DefaultRoot = overrideRoot ?? Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData),
+            Environment.GetFolderPath(
+                Environment.SpecialFolder.LocalApplicationData,
+                Environment.SpecialFolderOption.DoNotVerify),
             "lamsims-updater", "downloads");
         Root = DefaultRoot;
     }
