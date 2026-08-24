@@ -36,7 +36,7 @@ public sealed class WinePrefixScanner(LauncherHomes homes, string userName,
 
         candidates.AddRange(FromWine());
 
-        // Tasks 6 and 7 add FromSteam(), FromLutris(), FromHeroic() and FromBottles() here.
+        candidates.AddRange(FromSteam());
 
         var found = Describe(candidates);
 
@@ -259,4 +259,144 @@ public sealed class WinePrefixScanner(LauncherHomes homes, string userName,
     }
 
     internal void Note(string message) => notes?.Report(message);
+
+    private IEnumerable<PrefixCandidate> FromSteam()
+    {
+        foreach (var home in homes.For(EnvironmentSource.Steam))
+        {
+            foreach (var library in Libraries(home.Root))
+            {
+                var compatdata = Path.Combine(library, "steamapps", "compatdata");
+
+                foreach (var container in Children(compatdata))
+                {
+                    var appId = Path.GetFileName(container);
+
+                    // Not an app. Without this every machine with Steam reports a phantom target or
+                    // a rejection note about one.
+                    if (appId == "0") continue;
+
+                    yield return new PrefixCandidate(Path.Combine(container, "pfx"),
+                                                     EnvironmentSource.Steam,
+                                                     Label(container, appId), home.Flatpak);
+                }
+            }
+        }
+    }
+
+    /// <summary>
+    /// The root itself plus every path in its own library list. A Flatpak Steam's list is its own,
+    /// which is why this is keyed off the home rather than read once.
+    /// </summary>
+    private IEnumerable<string> Libraries(string root)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var resolved = PathIdentity.Canonical(root) ?? root;
+        if (seen.Add(resolved)) yield return root;
+
+        var file = Path.Combine(root, "steamapps", "libraryfolders.vdf");
+        if (!File.Exists(file)) yield break;
+
+        foreach (var path in VdfValues(file, "path"))
+        {
+            var pathResolved = PathIdentity.Canonical(path) ?? path;
+            if (seen.Add(pathResolved)) yield return path;
+        }
+    }
+
+    /// <summary>
+    /// Every <c>"key" "value"</c> pair with this key. VDF is quoted and tab-separated, and its
+    /// values carry <c>\\</c> and <c>\"</c> escapes that a raw read would leave in a path.
+    /// </summary>
+    private IEnumerable<string> VdfValues(string file, string key)
+    {
+        string[] lines;
+        try
+        {
+            lines = File.ReadAllLines(file);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            Note($"Steam: '{file}' could not be read: {e.Message}.");
+            return [];
+        }
+
+        return lines.Select(line => VdfPair(line, key)).Where(v => v is not null).Select(v => v!);
+    }
+
+    private static string? VdfPair(string line, string key)
+    {
+        var trimmed = line.Trim();
+        var quoted = $"\"{key}\"";
+        if (!trimmed.StartsWith(quoted, StringComparison.OrdinalIgnoreCase)) return null;
+
+        var rest = trimmed[quoted.Length..];
+        var open = rest.IndexOf('"');
+        if (open < 0) return null;
+
+        var builder = new System.Text.StringBuilder();
+        for (var i = open + 1; i < rest.Length; i++)
+        {
+            if (rest[i] == '\\' && i + 1 < rest.Length) { builder.Append(rest[++i]); continue; }
+            if (rest[i] == '"') return builder.Length == 0 ? null : builder.ToString();
+            builder.Append(rest[i]);
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// The build is NOT config_info line 1 in general: GE-Proton writes its own name there, and
+    /// Valve Proton writes a version number with the build recoverable only from the later path
+    /// lines (<c>common/Proton - Experimental/files/...</c>). Taking line 1 unconditionally labels
+    /// every Valve prefix with a version that names no build.
+    /// </summary>
+    private static string Label(string container, string appId)
+    {
+        var build = BuildFromConfigInfo(Path.Combine(container, "config_info"))
+                    ?? FirstLine(Path.Combine(container, "config_info"))
+                    ?? FirstLine(Path.Combine(container, "version"));
+
+        return build is null ? $"app {appId}" : $"{build}, app {appId}";
+    }
+
+    private static string? BuildFromConfigInfo(string file)
+    {
+        const string marker = "steamapps/common/";
+
+        foreach (var line in Lines(file))
+        {
+            var at = line.IndexOf(marker, StringComparison.Ordinal);
+            if (at < 0) continue;
+
+            var rest = line[(at + marker.Length)..];
+            var end = rest.IndexOf('/');
+            if (end > 0) return rest[..end];
+        }
+
+        return null;
+    }
+
+    private static string? FirstLine(string file)
+    {
+        foreach (var line in Lines(file))
+        {
+            var trimmed = line.Trim();
+            if (trimmed.Length > 0) return trimmed;
+        }
+
+        return null;
+    }
+
+    private static IEnumerable<string> Lines(string file)
+    {
+        try
+        {
+            return File.Exists(file) ? File.ReadAllLines(file) : [];
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            return [];
+        }
+    }
 }
