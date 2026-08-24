@@ -44,10 +44,21 @@ public sealed class WinePrefixScanner(LauncherHomes homes, string userName,
 
         var found = Describe(candidates);
 
-        if (found.Count == 0 && File.Exists(flatpakInfoFile))
+        if (found.Count == 0)
         {
-            notes?.Report("This build runs in a Flatpak sandbox and cannot see host paths "
-                          + "without --filesystem=home.");
+            if (File.Exists(flatpakInfoFile))
+            {
+                notes?.Report("This build runs in a Flatpak sandbox and cannot see host paths "
+                              + "without --filesystem=home.");
+            }
+            else
+            {
+                // The only route left once every launcher's own configuration has come up empty:
+                // an unlisted launcher, or a prefix kept somewhere none of the five sources look.
+                notes?.Report("No Wine prefix was found. If your client is installed somewhere "
+                              + "Steam, Lutris, Heroic, Bottles or plain Wine would not know about, "
+                              + "set its path in the Wine prefix setting.");
+            }
         }
 
         return found;
@@ -110,8 +121,15 @@ public sealed class WinePrefixScanner(LauncherHomes homes, string userName,
     /// the candidate returns null there — <c>pfx</c> is not itself a link — so the two spellings of
     /// one prefix stay distinct and every Steam prefix appears twice, which is the exact defect
     /// deduplication exists to prevent.
+    ///
+    /// Internal rather than private: this is the one identity rule a path has to be compared under
+    /// everywhere a symlinked launcher home or a symlinked prefix component can appear —
+    /// <see cref="LauncherHomes.For"/> dedupes by it too, and <see cref="LauncherOverrides"/>
+    /// compares a launcher config's declared path against a discovered prefix's root by it, because
+    /// <see cref="PathIdentity.Canonical"/> alone (lexical, never follows a link) disagrees with
+    /// what actually got opened whenever either side runs through a symlink.
     /// </summary>
-    private static string? Resolve(string path)
+    internal static string? Resolve(string path)
     {
         var canonical = PathIdentity.Canonical(path);
         if (canonical is null) return null;

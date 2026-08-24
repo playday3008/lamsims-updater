@@ -148,6 +148,61 @@ public class LauncherOverridesTests
         Assert.Equal(OverrideVerdict.Absent, Overrides(dir).For(prefix).Verdict);
     }
 
+    /// <summary>
+    /// A Valve-Proton-shaped prefix: the launcher config names the CONTAINER, but
+    /// WinePrefix.TryOpen descends one level into "pfx" because the container itself has no
+    /// drive_c. Comparing the discovered prefix's root (the descended pfx) against the config's
+    /// declared path by lexical equality alone never matches, so verdicts stays empty and the
+    /// prefix reads as Absent — the silent false success this predicate exists to prevent, since
+    /// the install then writes the registry and reports plain success while this hostile config
+    /// goes unreported. No symlink needed, so this runs on every CI leg.
+    /// </summary>
+    [Fact]
+    public void A_config_naming_the_container_still_matches_the_descended_pfx_prefix()
+    {
+        using var dir = new TempDir();
+        var container = Path.Combine(dir.Path, "compatdata", "123");
+        var pfxDir = Path.Combine(container, "pfx");
+        WinePrefixScannerTests.Prefix(pfxDir);
+        Directory.CreateDirectory(container); // No drive_c of its own, so TryOpen descends into pfx.
+
+        Write(Path.Combine(dir.Path, ".local", "share", "lutris", "games", "a.yml"),
+              $"name: EA app\nprefix: {container}\nwine:\n  overrides:\n    version.dll: b,n\n");
+
+        var finding = Overrides(dir).For(pfxDir);
+
+        Assert.Equal(OverrideVerdict.ForcesBuiltin, finding.Verdict);
+        Assert.Single(finding.Warnings);
+    }
+
+    /// <summary>
+    /// A config reaches the prefix through a symlinked component — the same shape as
+    /// ~/.steam/steam or anything under ~/Games -> /mnt/games on a real machine.
+    /// PathIdentity.Canonical alone is lexical and never follows the link, so the config's spelling
+    /// and the prefix's own root would disagree and the hostile override below would go
+    /// unreported. Real symlink, so gated for Windows.
+    /// </summary>
+    [Fact]
+    public void A_config_reaching_the_prefix_through_a_symlinked_component_is_matched()
+    {
+        if (OperatingSystem.IsWindows()) return;
+
+        using var dir = new TempDir();
+        var real = Path.Combine(dir.Path, "real");
+        var prefix = WinePrefixScannerTests.Prefix(Path.Combine(real, "ea-app"));
+        var linked = Path.Combine(dir.Path, "linked");
+        Directory.CreateSymbolicLink(linked, real);
+
+        Write(Path.Combine(dir.Path, ".local", "share", "lutris", "games", "a.yml"),
+              $"name: EA app\nprefix: {Path.Combine(linked, "ea-app")}\n"
+              + "wine:\n  overrides:\n    version.dll: b,n\n");
+
+        var finding = Overrides(dir).For(prefix);
+
+        Assert.Equal(OverrideVerdict.ForcesBuiltin, finding.Verdict);
+        Assert.Single(finding.Warnings);
+    }
+
     /// <summary>The Lutris env form, which sets WINEDLLOVERRIDES rather than the overrides map.</summary>
     [Fact]
     public void A_lutris_system_env_override_is_read()
@@ -246,6 +301,40 @@ public class LauncherOverridesTests
 
         Assert.Single(finding.Unread);
         Assert.Contains("shortcuts.vdf", finding.Unread[0]);
+    }
+
+    /// <summary>
+    /// Every other read failure in this class is reported into Unread — HeroicSources does,
+    /// Steam's LaunchOptions does, even the binary shortcuts.vdf above is. Files() gates the WHOLE
+    /// Lutris source, so a failure swallowed there returns verdict Absent with zero warnings while a
+    /// hostile config sits unread: a permission problem on ~/.local/share/lutris/games has to reach
+    /// Unread. Linux-gated: SetUnixFileMode needs a real POSIX mode.
+    /// </summary>
+    [Fact]
+    public void An_unreadable_lutris_directory_is_reported_rather_than_silently_empty()
+    {
+        if (OperatingSystem.IsWindows()) return;
+
+        using var dir = new TempDir();
+        var prefix = WinePrefixScannerTests.Prefix(Path.Combine(dir.Path, "ea-app"));
+        var games = Path.Combine(dir.Path, ".local", "share", "lutris", "games");
+        Directory.CreateDirectory(games);
+
+        var unlocked = File.GetUnixFileMode(games);
+        File.SetUnixFileMode(games, UnixFileMode.None);
+
+        try
+        {
+            var finding = Overrides(dir).For(prefix);
+
+            Assert.Equal(OverrideVerdict.Absent, finding.Verdict);
+            Assert.Single(finding.Unread);
+            Assert.Contains("Lutris", finding.Unread[0]);
+        }
+        finally
+        {
+            File.SetUnixFileMode(games, unlocked);
+        }
     }
 
     /// <summary>

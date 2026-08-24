@@ -181,6 +181,24 @@ public class WinePrefixScannerTests
         Assert.True(notes.Any("Flatpak sandbox"), string.Join("\n", notes.Lines));
     }
 
+    /// <summary>
+    /// The non-Flatpak half of the same zero-result diagnostic: without it, a Linux user whose
+    /// client lives somewhere none of the five launcher sources look sees an empty DLC Unlocker
+    /// section, two greyed-out buttons and no explanation at all, when the reason should land in
+    /// DetectionNotes. Names the remedy — the Wine-prefix setting — rather than
+    /// merely saying nothing was found.
+    /// </summary>
+    [Fact]
+    public void A_linux_build_that_finds_nothing_names_the_wine_prefix_setting()
+    {
+        using var dir = new TempDir();
+        var notes = new Notes();
+
+        Scanner(dir, notes).Scan(null);
+
+        Assert.True(notes.Any("Wine prefix setting"), string.Join("\n", notes.Lines));
+    }
+
     [Fact]
     public void A_line_value_is_read_after_its_key_and_unquoted()
     {
@@ -227,7 +245,8 @@ public class WinePrefixScannerTests
         Directory.CreateDirectory(Path.Combine(container, "dosdevices"));
         File.WriteAllText(Path.Combine(container, "system.reg"),
                          "WINE REGISTRY Version 2\n#arch=win64\n");
-        // Missing user.reg, so container is not a valid prefix.
+        // No drive_c, so container is not a valid prefix (MissingPart requires system.reg AND
+        // drive_c; user.reg is not checked at all).
 
         // Create the pfx subdirectory as a valid prefix.
         Prefix(pfxDir);

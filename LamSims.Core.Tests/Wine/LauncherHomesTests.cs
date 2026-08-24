@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
@@ -158,6 +159,44 @@ public class LauncherHomesTests
             Make(dir, ".local", "share", "Steam"),
             Make(dir, "snap", "steam", "common", ".local", "share", "Steam"),
             Make(dir, ".var", "app", "com.valvesoftware.Steam", ".local", "share", "Steam"),
+        };
+
+        Assert.Equal(expected.Order(), Roots(Homes(dir), EnvironmentSource.Steam).Order());
+    }
+
+    /// <summary>
+    /// On a normal install <c>~/.steam/steam</c> and <c>~/.steam/root</c> are both symlinks to
+    /// <c>&lt;data&gt;/Steam</c> on a stock install, so without resolving before dedup this one
+    /// real Steam install would be discovered, walked and reported on three times over. Real
+    /// symlinks, so gated for Windows, where creating one needs privilege.
+    /// </summary>
+    [Fact]
+    public void Symlinked_steam_homes_pointing_at_the_same_target_collapse_to_one()
+    {
+        if (OperatingSystem.IsWindows()) return;
+
+        using var dir = new TempDir();
+        var real = Make(dir, ".local", "share", "Steam");
+        Directory.CreateDirectory(Path.Combine(dir.Path, ".steam"));
+        Directory.CreateSymbolicLink(Path.Combine(dir.Path, ".steam", "steam"), real);
+        Directory.CreateSymbolicLink(Path.Combine(dir.Path, ".steam", "root"), real);
+
+        Assert.Single(Homes(dir).For(EnvironmentSource.Steam));
+    }
+
+    /// <summary>
+    /// The guard against over-collapsing: two Steam homes that are genuinely different directories,
+    /// not symlinks to one another, must both survive dedup. Without a real directory case, a
+    /// resolve-and-dedup mechanism that collapsed everything to one entry would pass unnoticed.
+    /// </summary>
+    [Fact]
+    public void Two_genuinely_distinct_steam_roots_both_come_back()
+    {
+        using var dir = new TempDir();
+        var expected = new[]
+        {
+            Make(dir, ".local", "share", "Steam"),
+            Make(dir, "snap", "steam", "common", ".local", "share", "Steam"),
         };
 
         Assert.Equal(expected.Order(), Roots(Homes(dir), EnvironmentSource.Steam).Order());

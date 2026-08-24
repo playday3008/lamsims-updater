@@ -66,11 +66,17 @@ public sealed class LauncherOverrides(LauncherHomes homes)
     private IEnumerable<(string File, string Game, string? Spec)> Sources(
         string prefixRoot, List<string> unread)
     {
-        var wanted = PathIdentity.Canonical(prefixRoot);
+        // Resolved, not merely canonicalised: prefixRoot was itself produced by
+        // WinePrefixScanner.Resolve (which follows every symlinked component, unlike
+        // PathIdentity.Canonical) and may then have descended one level into "pfx" via
+        // WinePrefix.TryOpen's Valve-Proton retry. Comparing a config's own path under anything
+        // weaker leaves the config side unmatched, so verdicts stay empty and the prefix reads as
+        // plain Absent while a hostile override goes unreported.
+        var wanted = WinePrefixScanner.Resolve(prefixRoot) ?? prefixRoot;
 
         foreach (var home in homes.For(EnvironmentSource.Lutris))
         {
-            foreach (var file in Files(Path.Combine(home.Root, "games"), "*.yml"))
+            foreach (var file in Files(Path.Combine(home.Root, "games"), "*.yml", "Lutris", unread))
             {
                 if (!Names(file, "prefix", wanted)) continue;
 
@@ -95,7 +101,8 @@ public sealed class LauncherOverrides(LauncherHomes homes)
 
         foreach (var home in homes.For(EnvironmentSource.Heroic))
         {
-            foreach (var file in Files(Path.Combine(home.Root, "GamesConfig"), "*.json"))
+            foreach (var file in Files(Path.Combine(home.Root, "GamesConfig"), "*.json", "Heroic",
+                                       unread))
             {
                 foreach (var found in HeroicSources(file, wanted, unread)) yield return found;
             }
@@ -106,8 +113,12 @@ public sealed class LauncherOverrides(LauncherHomes homes)
             // A bottle IS the prefix, so the only bottle that can name it is itself — and only when
             // this prefix really sits directly under that bottles root. Without the parent check a
             // stray bottle.yml inside any prefix would be read as that prefix's Bottles config.
-            var parent = PathIdentity.Canonical(Path.GetDirectoryName(wanted ?? prefixRoot));
-            if (parent is null || parent != PathIdentity.Canonical(home.Root)) continue;
+            // Resolved on both sides for the same reason as `wanted` above: a symlinked bottles
+            // root must still match.
+            var parentDir = Path.GetDirectoryName(wanted);
+            var parent = parentDir is null ? null : WinePrefixScanner.Resolve(parentDir);
+            if (parent is null || parent != (WinePrefixScanner.Resolve(home.Root) ?? home.Root))
+                continue;
 
             var yml = Path.Combine(prefixRoot, "bottle.yml");
             if (!File.Exists(yml)) continue;
@@ -125,7 +136,7 @@ public sealed class LauncherOverrides(LauncherHomes homes)
     }
 
     private IEnumerable<(string File, string Game, string? Spec)> HeroicSources(
-        string file, string? wanted, List<string> unread)
+        string file, string wanted, List<string> unread)
     {
         JsonDocument document;
         try
@@ -151,7 +162,7 @@ public sealed class LauncherOverrides(LauncherHomes homes)
                 if (game.Value.ValueKind != JsonValueKind.Object) continue;
                 if (!game.Value.TryGetProperty("winePrefix", out var prefix)
                     || prefix.ValueKind != JsonValueKind.String
-                    || PathIdentity.Canonical(prefix.GetString()) != wanted)
+                    || !MatchesPrefix(prefix.GetString(), wanted))
                 {
                     continue;
                 }
@@ -289,15 +300,13 @@ public sealed class LauncherOverrides(LauncherHomes homes)
 
                 var value = part["WINEDLLOVERRIDES=".Length..];
 
-                // Unescape any escaped quotes at the start/end.
-                if (value.StartsWith("\\\""))
-                    value = value[2..];
-                else if (value.StartsWith("\""))
+                // Strip the surrounding quotes. Never a `\"`-prefixed branch here: the per-character
+                // unescaping loop above has already turned every `\"` into a plain `"`, so only the
+                // plain-quote case can ever be seen at this point.
+                if (value.StartsWith('"'))
                     value = value[1..];
 
-                if (value.EndsWith("\\\""))
-                    value = value[..^2];
-                else if (value.EndsWith("\""))
+                if (value.EndsWith('"'))
                     value = value[..^1];
 
                 return string.IsNullOrEmpty(value) ? null : value;
@@ -368,11 +377,34 @@ public sealed class LauncherOverrides(LauncherHomes homes)
         return null;
     }
 
-    private static bool Names(string file, string key, string? wanted) =>
-        WinePrefixScanner.ReadLineValues(file, key)
-            .Any(value => PathIdentity.Canonical(value) == wanted);
+    private static bool Names(string file, string key, string wanted) =>
+        WinePrefixScanner.ReadLineValues(file, key).Any(value => MatchesPrefix(value, wanted));
 
-    private static IEnumerable<string> Files(string directory, string pattern)
+    /// <summary>
+    /// Whether a launcher-declared path names this prefix. Compared through
+    /// <see cref="WinePrefixScanner.Resolve"/> on both sides, never <see cref="PathIdentity.Canonical"/>
+    /// alone (lexical, never follows a symlink), and additionally accepts a config that names the
+    /// CONTAINER of a Valve-Proton-shaped prefix by also trying <c>&lt;value&gt;/pfx</c>, which is
+    /// exactly the one-level descent <see cref="WinePrefix.TryOpen"/> itself performs.
+    /// </summary>
+    private static bool MatchesPrefix(string? value, string wanted)
+    {
+        if (string.IsNullOrWhiteSpace(value)) return false;
+
+        if (WinePrefixScanner.Resolve(value) is { } direct
+            && string.Equals(direct, wanted, StringComparison.Ordinal))
+        {
+            return true;
+        }
+
+        var nested = WinePrefixScanner.Resolve(Path.Combine(value, "pfx"));
+        return nested is not null && string.Equals(nested, wanted, StringComparison.Ordinal);
+    }
+
+    /// <param name="source">Named in a reported failure, matching the "Heroic: ..." and "Steam: ..."
+    /// prefix every other read failure in this class already carries.</param>
+    private static IEnumerable<string> Files(string directory, string pattern, string source,
+                                             List<string> unread)
     {
         try
         {
@@ -382,6 +414,7 @@ public sealed class LauncherOverrides(LauncherHomes homes)
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
+            unread.Add($"{source}: '{directory}' could not be read: {e.Message}.");
             return [];
         }
     }

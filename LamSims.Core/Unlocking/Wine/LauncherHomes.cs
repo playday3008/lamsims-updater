@@ -73,9 +73,28 @@ public sealed class LauncherHomes
     /// object was constructed — a Flatpak installed while the application runs, or a test that
     /// writes a config after building the graph — and an eagerly filtered list would never see it.
     /// The candidate paths themselves are fixed; only whether they exist is re-checked.
+    ///
+    /// Deduplicated by RESOLVED root, not by the candidate path itself: on a normal Steam install
+    /// <c>~/.steam/steam</c> and <c>~/.steam/root</c> are both symlinks to <c>&lt;data&gt;/Steam</c>,
+    /// so without this every Steam prefix is discovered — and its compatdata walked, and its
+    /// overrides reported — up to three times over, and <c>Describe</c> then reads "more than one
+    /// candidate names this prefix" as "several games share it" and mislabels the row. Resolved by
+    /// <see cref="WinePrefixScanner.Resolve"/>, which walks every component rather than only the
+    /// last, unlike <see cref="PathIdentity.Canonical"/> alone.
     /// </summary>
-    public IReadOnlyList<LauncherHome> For(EnvironmentSource source) =>
-        _homes.Where(h => h.Source == source && Exists(h.Root)).ToArray();
+    public IReadOnlyList<LauncherHome> For(EnvironmentSource source)
+    {
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var found = new List<LauncherHome>();
+
+        foreach (var home in _homes.Where(h => h.Source == source && Exists(h.Root)))
+        {
+            var resolved = WinePrefixScanner.Resolve(home.Root) ?? home.Root;
+            if (seen.Add(resolved)) found.Add(home);
+        }
+
+        return found;
+    }
 
     private static bool Exists(string root)
     {
