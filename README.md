@@ -38,7 +38,7 @@ Linux it is an install inside a Wine or Proton prefix. There is no unlocker on m
 1. Paste this into the `Catalog:` box at the top and hit Load:
 
    ```
-   https://raw.githubusercontent.com/playday3008/lamsims-updater/ng/catalog.live.json
+   https://raw.githubusercontent.com/Lamonsky/lamsims-updater/master/catalog.live.json
    ```
 
    That is the pack list, so the table stays empty until it loads. You only do this once — the app
