@@ -6,6 +6,7 @@ using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using LamSims.Core.Downloading;
+using LamSims.Core.Logging;
 using LamSims.Core.Settings;
 
 namespace LamSims.Core.Unlocking;
@@ -23,10 +24,13 @@ public sealed partial class EaClientUnlockerBackend(
     UnlockerPaths paths,
     AppPaths appPaths,
     IDelayProvider delays,
-    UnlockerInstallRecordStore? records = null) : IUnlockerBackend
+    UnlockerInstallRecordStore? records = null,
+    ILogSink? log = null) : IUnlockerBackend
 {
     private readonly UnlockerInstallRecordStore _records =
         records ?? new UnlockerInstallRecordStore(appPaths);
+
+    private readonly ILogSink _log = log ?? NullLogSink.Instance;
 
     /// <summary>
     /// What "one install of the unlocker" means. The configuration directory is shared by every
@@ -89,7 +93,9 @@ public sealed partial class EaClientUnlockerBackend(
             var identity = PathIdentity.Canonical(directory);
             if (identity is null || !seen.Add(identity)) continue;
 
-            found.Add(new UnlockerTarget(Id, kind, directory, display));
+            var target = new UnlockerTarget(Id, kind, directory, display);
+            _log.Write(LogLine.Info($"Detected {target.DisplayName} at {target.ClientPath}"));
+            found.Add(target);
         }
 
         return Task.FromResult<IReadOnlyList<UnlockerTarget>>(found);
@@ -133,14 +139,32 @@ public sealed partial class EaClientUnlockerBackend(
     /// final report at Total/Total. Without that trailing report a completed install would display
     /// Total-1/Total and the bar would never fill.
     /// </summary>
-    private sealed class Steps(IProgress<UnlockerProgress> progress, int total)
+    private sealed class Steps(IProgress<UnlockerProgress> progress, int total, ILogSink log, string? code)
     {
         private int _done;
 
-        public void Begin(string step) => progress.Report(new UnlockerProgress(step, _done, total));
+        public void Begin(string step)
+        {
+            progress.Report(new UnlockerProgress(step, _done, total));
+            log.Write(LogLine.Info($"Step {_done + 1}/{total}: {step}", code));
+        }
+
         public void Done() => _done++;
         public void Finish(string step) => progress.Report(new UnlockerProgress(step, _done, total));
         public int Completed => _done;
+    }
+
+    private static string CodeFor(UnlockerTarget target) => target.Client.ToString().ToLowerInvariant();
+
+    /// <summary>
+    /// The one place a terminal failure is built, so every one of them is logged at Error rather
+    /// than the log simply stopping mid-run with no reason. The message logged is exactly the one
+    /// the result carries.
+    /// </summary>
+    private UnlockerResult Failed(string message, string? code, IReadOnlyList<string>? warnings = null)
+    {
+        _log.Write(LogLine.Error(message, code));
+        return UnlockerResult.Fail(message, warnings);
     }
 
     public async Task<UnlockerResult> InstallAsync(UnlockerTarget target, IUnlockerAssetSource assets,
@@ -148,7 +172,8 @@ public sealed partial class EaClientUnlockerBackend(
                                                   CancellationToken ct)
     {
         var ea = target.Client == ClientKind.EaApp;
-        var steps = new Steps(progress, ea ? InstallStepsEaApp : InstallStepsOrigin);
+        var code = CodeFor(target);
+        var steps = new Steps(progress, ea ? InstallStepsEaApp : InstallStepsOrigin, _log, code);
         var warnings = new List<string>();
 
         // Step 1. Checked before anything is mutated: without it the config files and the
@@ -172,7 +197,7 @@ public sealed partial class EaClientUnlockerBackend(
                                        or IOException or SizeMismatchException
                                        or UnauthorizedAccessException)
         {
-            return UnlockerResult.Fail(e.Message);
+            return Failed(e.Message, code);
         }
         steps.Done();
 
@@ -184,9 +209,9 @@ public sealed partial class EaClientUnlockerBackend(
         {
             var survivors = host.KillClientProcesses(names, KillTimeout);
             if (survivors.Count > 0)
-                return UnlockerResult.Fail(
+                return Failed(
                     $"These processes are still running and hold the client directory open: " +
-                    $"{string.Join(", ", survivors)}. Close them and try again.");
+                    $"{string.Join(", ", survivors)}. Close them and try again.", code);
 
             await delays.DelayAsync(SettleDelay, ct);
         }
@@ -201,8 +226,7 @@ public sealed partial class EaClientUnlockerBackend(
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            return UnlockerResult.Fail(
-                $"'{paths.ConfigDirectory}' could not be created: {e.Message}");
+            return Failed($"'{paths.ConfigDirectory}' could not be created: {e.Message}", code);
         }
         steps.Done();
 
@@ -214,7 +238,7 @@ public sealed partial class EaClientUnlockerBackend(
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            return UnlockerResult.Fail($"The unlocker configuration could not be written: {e.Message}");
+            return Failed($"The unlocker configuration could not be written: {e.Message}", code);
         }
         steps.Done();
 
@@ -226,18 +250,22 @@ public sealed partial class EaClientUnlockerBackend(
                                                        List<string> warnings, bool ea,
                                                        CancellationToken ct)
     {
+        var code = CodeFor(target);
+
         // Step 6, non-fatal: nothing to remove is the normal case.
         steps.Begin("Removing older unlocker files");
         foreach (var name in new[] { "version_o.dll", "winhttp.dll", "winhttp_o.dll" })
-            TryDelete(Path.Combine(target.ClientPath, name), warnings);
+            TryDelete(Path.Combine(target.ClientPath, name), warnings, code);
         try
         {
             foreach (var stale in Directory.GetFiles(target.ClientPath, "w_*.ini"))
-                TryDelete(stale, warnings);
+                TryDelete(stale, warnings, code);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            warnings.Add($"Older unlocker .ini files could not be listed: {e.Message}");
+            var message = $"Older unlocker .ini files could not be listed: {e.Message}";
+            warnings.Add(message);
+            _log.Write(LogLine.Warning(message, code));
         }
         steps.Done();
 
@@ -253,8 +281,8 @@ public sealed partial class EaClientUnlockerBackend(
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            return UnlockerResult.Fail(
-                $"{DllName} could not be written to '{target.ClientPath}': {e.Message}", warnings);
+            return Failed(
+                $"{DllName} could not be written to '{target.ClientPath}': {e.Message}", code, warnings);
         }
         steps.Done();
 
@@ -274,8 +302,10 @@ public sealed partial class EaClientUnlockerBackend(
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException)
             {
-                warnings.Add($"The StagedEADesktop copy failed, so the unlocker will need " +
-                             $"reinstalling after EA app updates itself: {e.Message}");
+                var message = $"The StagedEADesktop copy failed, so the unlocker will need " +
+                             $"reinstalling after EA app updates itself: {e.Message}";
+                warnings.Add(message);
+                _log.Write(LogLine.Warning(message, code));
             }
             steps.Done();
 
@@ -285,12 +315,18 @@ public sealed partial class EaClientUnlockerBackend(
             {
                 if (!await IniFlagEditor.AddFlagAsync(paths.MachineIniFile, MachineIniFlag, ct)
                     && !File.Exists(paths.MachineIniFile))
-                    warnings.Add($"machine.ini was not found at '{paths.MachineIniFile}', so it was " +
-                                 "left alone. This is not critical.");
+                {
+                    var message = $"machine.ini was not found at '{paths.MachineIniFile}', so it was " +
+                                 "left alone. This is not critical.";
+                    warnings.Add(message);
+                    _log.Write(LogLine.Warning(message, code));
+                }
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException)
             {
-                warnings.Add($"machine.ini could not be updated: {e.Message}");
+                var message = $"machine.ini could not be updated: {e.Message}";
+                warnings.Add(message);
+                _log.Write(LogLine.Warning(message, code));
             }
             steps.Done();
         }
@@ -334,10 +370,18 @@ public sealed partial class EaClientUnlockerBackend(
             // and a backup file this install does not own, so another install already owns the
             // saved entry and this one leaves the value alone rather than deleting something only
             // that other install's removal could put back.
-            if (existing is not null && ownsBackup) host.RemoveAutostartValue(AutostartValueName);
+            if (existing is not null && ownsBackup)
+            {
+                host.RemoveAutostartValue(AutostartValueName);
+                _log.Write(LogLine.Info("Autostart entry recorded and removed", code));
+            }
             else if (existing is not null)
-                warnings.Add("Another install of the unlocker already owns the saved autostart " +
-                             "entry, so this one was left as it is.");
+            {
+                var message = "Another install of the unlocker already owns the saved autostart " +
+                             "entry, so this one was left as it is.";
+                warnings.Add(message);
+                _log.Write(LogLine.Warning(message, code));
+            }
         }
         // SecurityException is here on purpose: the host guards its registry READS but not its
         // writes, because it holds no policy, and a group-policy-restricted Run key throws exactly
@@ -346,7 +390,9 @@ public sealed partial class EaClientUnlockerBackend(
         catch (Exception e) when (e is IOException or UnauthorizedAccessException
                                       or System.Security.SecurityException)
         {
-            warnings.Add($"The autostart entry could not be changed: {e.Message}");
+            var message = $"The autostart entry could not be changed: {e.Message}";
+            warnings.Add(message);
+            _log.Write(LogLine.Warning(message, code));
         }
         steps.Done();
 
@@ -359,15 +405,17 @@ public sealed partial class EaClientUnlockerBackend(
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            warnings.Add($"The install record could not be written, so a later removal may not " +
-                         $"restore everything: {e.Message}");
+            var message = $"The install record could not be written, so a later removal may not " +
+                         $"restore everything: {e.Message}";
+            warnings.Add(message);
+            _log.Write(LogLine.Warning(message, code));
         }
 
         steps.Finish("Done");
         return UnlockerResult.Ok(warnings);
     }
 
-    private static void TryDelete(string path, List<string> warnings)
+    private void TryDelete(string path, List<string> warnings, string? code)
     {
         try
         {
@@ -375,7 +423,9 @@ public sealed partial class EaClientUnlockerBackend(
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            warnings.Add($"'{Path.GetFileName(path)}' could not be removed: {e.Message}");
+            var message = $"'{Path.GetFileName(path)}' could not be removed: {e.Message}";
+            warnings.Add(message);
+            _log.Write(LogLine.Warning(message, code));
         }
     }
 
@@ -389,7 +439,8 @@ public sealed partial class EaClientUnlockerBackend(
                                                  CancellationToken ct)
     {
         var ea = target.Client == ClientKind.EaApp;
-        var steps = new Steps(progress, ea ? RemoveStepsEaApp : RemoveStepsOrigin);
+        var code = CodeFor(target);
+        var steps = new Steps(progress, ea ? RemoveStepsEaApp : RemoveStepsOrigin, _log, code);
         var warnings = new List<string>();
 
         // Step 1, before the elevation check on purpose: a machine with nothing installed must not
@@ -432,9 +483,9 @@ public sealed partial class EaClientUnlockerBackend(
         {
             var survivors = host.KillClientProcesses(names, KillTimeout);
             if (survivors.Count > 0)
-                return UnlockerResult.Fail(
+                return Failed(
                     $"These processes are still running and hold the client directory open: " +
-                    $"{string.Join(", ", survivors)}. Close them and try again.");
+                    $"{string.Join(", ", survivors)}. Close them and try again.", code);
 
             await delays.DelayAsync(SettleDelay, ct);
         }
@@ -451,7 +502,9 @@ public sealed partial class EaClientUnlockerBackend(
             }
             catch (Exception e) when (e is InvalidOperationException or IOException)
             {
-                warnings.Add($"The '{ScheduledTaskName}' scheduled task could not be removed: {e.Message}");
+                var message = $"The '{ScheduledTaskName}' scheduled task could not be removed: {e.Message}";
+                warnings.Add(message);
+                _log.Write(LogLine.Warning(message, code));
             }
             steps.Done();
         }
@@ -470,8 +523,8 @@ public sealed partial class EaClientUnlockerBackend(
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            return UnlockerResult.Fail($"{DllName} could not be removed from " +
-                                       $"'{target.ClientPath}': {e.Message}", warnings);
+            return Failed($"{DllName} could not be removed from " +
+                          $"'{target.ClientPath}': {e.Message}", code, warnings);
         }
         steps.Done();
 
@@ -485,7 +538,7 @@ public sealed partial class EaClientUnlockerBackend(
                 {
                     var staged = Path.Combine(parent, "StagedEADesktop");
                     var inner = Path.Combine(staged, "EA Desktop");
-                    TryDelete(Path.Combine(inner, DllName), warnings);
+                    TryDelete(Path.Combine(inner, DllName), warnings, code);
 
                     // Only when empty: the folder is EA's, and something else may legitimately
                     // be staged there.
@@ -497,7 +550,9 @@ public sealed partial class EaClientUnlockerBackend(
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException)
             {
-                warnings.Add($"StagedEADesktop could not be cleaned up: {e.Message}");
+                var message = $"StagedEADesktop could not be cleaned up: {e.Message}";
+                warnings.Add(message);
+                _log.Write(LogLine.Warning(message, code));
             }
             steps.Done();
 
@@ -508,7 +563,9 @@ public sealed partial class EaClientUnlockerBackend(
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException)
             {
-                warnings.Add($"machine.ini could not be restored: {e.Message}");
+                var message = $"machine.ini could not be restored: {e.Message}";
+                warnings.Add(message);
+                _log.Write(LogLine.Warning(message, code));
             }
             steps.Done();
         }
@@ -552,13 +609,19 @@ public sealed partial class EaClientUnlockerBackend(
                     // keep step 1 finding something to remove for ever, so every later removal
                     // would demand elevation, stop the client and restore nothing.
                     backup = null;
-                    warnings.Add($"The autostart backup could not be read, so it was discarded: {e.Message}");
+                    var message = $"The autostart backup could not be read, so it was discarded: {e.Message}";
+                    warnings.Add(message);
+                    _log.Write(LogLine.Warning(message, code));
                 }
 
                 if (string.IsNullOrEmpty(backup?.Name) || backup.Value is null)
                 {
                     if (backup is not null)
-                        warnings.Add("The autostart backup was incomplete, so it was discarded.");
+                    {
+                        const string message = "The autostart backup was incomplete, so it was discarded.";
+                        warnings.Add(message);
+                        _log.Write(LogLine.Warning(message, code));
+                    }
                 }
                 // The client can re-create its own Run entry with a newer path between install and
                 // removal, and restoring the recorded value over that would downgrade the user's
@@ -566,17 +629,22 @@ public sealed partial class EaClientUnlockerBackend(
                 else if (host.ReadAutostartValue(backup.Name) is not null)
                 {
                     warnings.Add("The autostart entry had been re-created, so it was left as it is.");
+                    _log.Write(LogLine.Warning(
+                        "Autostart entry had been re-created, so it was left as it is", code));
                 }
                 else if (backup.Kind == AutostartValueKind.Unsupported)
                 {
                     // Removed on install because the entry is deleted type-blind, but it was never
                     // text, so writing it back as text would change what the client reads.
                     warnings.Add("The autostart entry was not a text value, so it could not be put back.");
+                    _log.Write(LogLine.Warning(
+                        "Autostart entry was not a text value, so it could not be put back", code));
                 }
                 else
                 {
                     host.WriteAutostartValue(backup.Name,
                         new AutostartValue(backup.Value, backup.Kind));
+                    _log.Write(LogLine.Info("Autostart entry restored", code));
                 }
 
                 File.Delete(backupFile);
@@ -585,7 +653,9 @@ public sealed partial class EaClientUnlockerBackend(
         catch (Exception e) when (e is IOException or UnauthorizedAccessException
                                       or System.Security.SecurityException)
         {
-            warnings.Add($"The autostart entry could not be restored: {e.Message}");
+            var message = $"The autostart entry could not be restored: {e.Message}";
+            warnings.Add(message);
+            _log.Write(LogLine.Warning(message, code));
         }
         steps.Done();
 
@@ -616,15 +686,21 @@ public sealed partial class EaClientUnlockerBackend(
                 && File.Exists(Path.Combine(t.ClientPath, DllName)));
 
             if (!others.Complete)
-                warnings.Add("Whether another client still needs the unlocker configuration could " +
-                             "not be determined, so the configuration folder was left in place.");
+            {
+                var message = "Whether another client still needs the unlocker configuration could " +
+                             "not be determined, so the configuration folder was left in place.";
+                warnings.Add(message);
+                _log.Write(LogLine.Warning(message, code));
+            }
             else if (others.Records.Count == 0 && !siblingInstalled
                      && Directory.Exists(paths.ConfigDirectory))
                 Directory.Delete(paths.ConfigDirectory, recursive: true);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            warnings.Add($"The unlocker configuration folder could not be removed: {e.Message}");
+            var message = $"The unlocker configuration folder could not be removed: {e.Message}";
+            warnings.Add(message);
+            _log.Write(LogLine.Warning(message, code));
         }
         steps.Done();
 

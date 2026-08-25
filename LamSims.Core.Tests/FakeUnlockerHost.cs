@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using System.IO;
 using LamSims.Core.Unlocking;
 
 namespace LamSims.Core.Tests;
@@ -79,7 +80,15 @@ public sealed class FakeUnlockerHost : IUnlockerHost
         return Survivors;
     }
 
-    public void DeleteScheduledTask(string name) => Calls.Add($"DeleteTask:{name}");
+    /// <summary>Set to make DeleteScheduledTask throw the way a task the caller cannot query does.</summary>
+    public bool ThrowOnDeleteScheduledTask { get; set; }
+
+    public void DeleteScheduledTask(string name)
+    {
+        Calls.Add($"DeleteTask:{name}");
+        if (ThrowOnDeleteScheduledTask)
+            throw new IOException($"The '{name}' scheduled task could not be queried.");
+    }
 
     public bool RelaunchAccepted { get; set; } = true;
 

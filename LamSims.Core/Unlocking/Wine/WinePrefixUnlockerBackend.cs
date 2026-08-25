@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using LamSims.Core.Downloading;
+using LamSims.Core.Logging;
 using LamSims.Core.Settings;
 
 namespace LamSims.Core.Unlocking.Wine;
@@ -23,9 +24,12 @@ namespace LamSims.Core.Unlocking.Wine;
 /// </param>
 public sealed class WinePrefixUnlockerBackend(
     LauncherHomes homes, AppPaths appPaths, IDelayProvider delays, IWineProcesses processes,
-    string userName, Func<string?> configuredPrefix, IProgress<string>? notes = null)
+    string userName, Func<string?> configuredPrefix, IProgress<string>? notes = null,
+    ILogSink? log = null)
     : IUnlockerBackend
 {
+    private readonly ILogSink _log = log ?? NullLogSink.Instance;
+
     public string Id => "wine-prefix";
 
     /// <summary>
@@ -129,6 +133,7 @@ public sealed class WinePrefixUnlockerBackend(
         if (opened is null) return UnlockerResult.Fail($"'{target.PrefixPath}' no longer exists.");
 
         var (prefix, _, inner) = opened.Value;
+        _log.Write(LogLine.Info($"Using Wine prefix {prefix.Root}"));
         var finding = new LauncherOverrides(homes).For(prefix.Root);
         var writeNeeded = NeedsWrite(prefix, finding.Verdict);
 
@@ -202,6 +207,7 @@ public sealed class WinePrefixUnlockerBackend(
         if (opened is null) return UnlockerResult.Fail($"'{target.PrefixPath}' no longer exists.");
 
         var (prefix, _, inner) = opened.Value;
+        _log.Write(LogLine.Info($"Using Wine prefix {prefix.Root}"));
         var undoNeeded = _overrides.Read(prefix.Root)?.WroteRegistry == true;
 
         if (undoNeeded && processes.IsPrefixLive(prefix.Root))
@@ -294,7 +300,7 @@ public sealed class WinePrefixUnlockerBackend(
             return null;
         }
 
-        return new EaClientUnlockerBackend(host, paths, appPaths, delays);
+        return new EaClientUnlockerBackend(host, paths, appPaths, delays, log: _log);
     }
 
     /// <summary>

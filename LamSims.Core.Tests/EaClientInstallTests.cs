@@ -6,6 +6,7 @@ using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
 using System.Runtime.Versioning;
+using LamSims.Core.Logging;
 using LamSims.Core.Settings;
 using LamSims.Core.Unlocking;
 
@@ -24,7 +25,12 @@ public sealed class InstallFixture : IDisposable
     public IUnlockerAssetSource Assets { get; }
     public string DllSource { get; }
 
-    public InstallFixture(ClientKind kind = ClientKind.EaApp)
+    /// <summary>Convenience overload for a test that only cares about the log, at the default client.</summary>
+    public InstallFixture(ILogSink log) : this(ClientKind.EaApp, log)
+    {
+    }
+
+    public InstallFixture(ClientKind kind = ClientKind.EaApp, ILogSink? log = null)
     {
         Paths = new UnlockerPaths(Path.Combine(Dir.Path, "roaming"), Path.Combine(Dir.Path, "common"));
 
@@ -50,7 +56,7 @@ public sealed class InstallFixture : IDisposable
         // fallback, so the optional-store parameter has a live caller and its non-null branch is
         // the one every test below runs through.
         Records = new UnlockerInstallRecordStore(App);
-        Backend = new EaClientUnlockerBackend(Host, Paths, App, Delays, Records);
+        Backend = new EaClientUnlockerBackend(Host, Paths, App, Delays, Records, log);
     }
 
     public Task<UnlockerTarget> TargetAsync() =>

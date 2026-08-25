@@ -5,6 +5,7 @@ using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
+using LamSims.Core.Logging;
 using LamSims.Core.Settings;
 using LamSims.Core.Unlocking;
 using LamSims.Core.Unlocking.Wine;
@@ -30,7 +31,13 @@ public sealed class WineBackendFixture : IDisposable
     private const string EmptyBlock =
         "WINE REGISTRY Version 2\n#arch=win64\n\n[Software\\\\Wine\\\\DllOverrides] 0\n";
 
-    public WineBackendFixture(ClientKind kind = ClientKind.EaApp, string arch = "win64")
+    /// <summary>Convenience overload for a test that only cares about the log, at the default client.</summary>
+    public WineBackendFixture(ILogSink log) : this(ClientKind.EaApp, "win64", log)
+    {
+    }
+
+    public WineBackendFixture(ClientKind kind = ClientKind.EaApp, string arch = "win64",
+                             ILogSink? log = null)
     {
         Prefix = new PrefixFixture(arch: arch);
 
@@ -71,7 +78,7 @@ public sealed class WineBackendFixture : IDisposable
 
         Backend = new WinePrefixUnlockerBackend(
             new LauncherHomes(home, null, null, null), App, Delays, Processes, "playday",
-            () => Prefix.Root, Notes);
+            () => Prefix.Root, Notes, log);
     }
 
     public string UserReg => Path.Combine(Prefix.Root, "user.reg");

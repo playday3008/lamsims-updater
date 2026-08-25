@@ -5,6 +5,7 @@ using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using LamSims.Core.Downloading;
+using LamSims.Core.Logging;
 
 namespace LamSims.Core.Unlocking;
 
@@ -26,9 +27,12 @@ public sealed class StaticUnlockerAssetSource(
     HttpClient http,
     DownloadPaths paths,
     IReadOnlyDictionary<ClientKind, AssetPin>? pins = null,
-    RetryOptions? retry = null) : IUnlockerAssetSource
+    RetryOptions? retry = null,
+    ILogSink? log = null) : IUnlockerAssetSource
 {
     private const string Base = "https://github.com/Lamonsky/lamsims-updater/releases/download/Beta/";
+
+    private readonly ILogSink _log = log ?? NullLogSink.Instance;
 
     /// <summary>
     /// The shipped pin table. Injected rather than hardcoded so the tests can point at the local
@@ -80,7 +84,11 @@ public sealed class StaticUnlockerAssetSource(
                 // caller installs these bytes, so the check and the payload must be the same
                 // object.
                 var reused = await File.ReadAllBytesAsync(cached, ct);
-                if (Matches(reused, pin.Sha256)) return reused;
+                if (Matches(reused, pin.Sha256))
+                {
+                    _log.Write(LogLine.Info("Reusing the cached DLL"));
+                    return reused;
+                }
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException)
             {
@@ -90,6 +98,8 @@ public sealed class StaticUnlockerAssetSource(
                 // replacing this path is enough to produce this.
             }
         }
+
+        _log.Write(LogLine.Info($"Fetching the unlocker DLL for {client}"));
 
         paths.EnsureCreated();
         var temp = $"{cached}.{Path.GetRandomFileName()}.incoming";
