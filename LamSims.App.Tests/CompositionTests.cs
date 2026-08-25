@@ -88,4 +88,32 @@ public class CompositionTests
             Directory.Delete(root, recursive: true);
         }
     }
+
+    /// <summary>
+    /// The unlocker leg of the graph. Nothing else asserts it: every other test injects its own
+    /// service, and a graph built with no backend at all passes the whole suite while shipping an
+    /// unlocker that can never find a client. Both ids are pinned, and in order, because each
+    /// backend answers IsSupported for one platform and a graph missing either one leaves that
+    /// platform with no unlocker.
+    /// </summary>
+    [Fact(Timeout = 15000)]
+    public async Task The_graph_registers_both_unlocker_backends_in_order()
+    {
+        var root = Directory.CreateTempSubdirectory("lamsims-composition-unlocker").FullName;
+
+        try
+        {
+            var services = Composition.Build(commandLineCatalog: null, overrideRoot: root);
+
+            Assert.Equal(["windows-native"], services.Unlocker.BackendIds);
+            Assert.IsType<LamSims.Core.Unlocking.WindowsUnlockerHost>(services.UnlockerHost);
+            Assert.IsType<LamSims.Core.Unlocking.StaticUnlockerAssetSource>(services.UnlockerAssets);
+
+            await services.Queue.DisposeAsync();
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
 }

@@ -10,6 +10,12 @@ public sealed class UnlockerService(IEnumerable<IUnlockerBackend> backends)
 
     public bool IsSupported => _backends.Any(b => b.IsSupported);
 
+    /// <summary>
+    /// The registered backend ids, so a caller can check that the real object graph registered
+    /// the backends it expects.
+    /// </summary>
+    public IReadOnlyList<string> BackendIds => _backends.Select(b => b.Id).ToArray();
+
     public async Task<IReadOnlyList<UnlockerTarget>> DetectAllAsync(CancellationToken ct)
     {
         var all = new List<UnlockerTarget>();
