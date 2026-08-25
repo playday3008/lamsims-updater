@@ -5,6 +5,7 @@ using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using System.Text;
+using LamSims.Core.Logging;
 using LamSims.Core.Settings;
 
 namespace LamSims.Core.Catalogs;
@@ -56,6 +57,7 @@ public sealed class CatalogLoader
     private readonly AppPaths _paths;
     private readonly string _executableDirectory;
     private readonly TimeSpan _remoteTimeout;
+    private readonly ILogSink _log;
 
     /// <param name="remoteTimeout">
     /// Bounds a remote fetch end to end (headers and body). <see cref="HttpFactory"/> hands out
@@ -65,12 +67,15 @@ public sealed class CatalogLoader
     /// that accepts the connection and says nothing. A catalog is capped at 1 MB, so the
     /// 30-second default is generous.
     /// </param>
-    public CatalogLoader(HttpClient client, AppPaths paths, string? executableDirectory = null, TimeSpan? remoteTimeout = null)
+    public CatalogLoader(
+        HttpClient client, AppPaths paths, string? executableDirectory = null,
+        TimeSpan? remoteTimeout = null, ILogSink? log = null)
     {
         _client = client;
         _paths = paths;
         _executableDirectory = executableDirectory ?? AppContext.BaseDirectory;
         _remoteTimeout = remoteTimeout ?? DefaultRemoteTimeout;
+        _log = log ?? NullLogSink.Instance;
     }
 
     /// <summary>
@@ -118,6 +123,12 @@ public sealed class CatalogLoader
             }
             catch (Exception e) when (IsSourceFailure(e, ct))
             {
+                // Logged here, once per candidate that fails, regardless of whether it is
+                // reported below or passed over: a fallback source stepped over silently in the
+                // returned CatalogResolution must still say so in the log, or a corrupt cache
+                // or beside-executable catalog would fail invisibly forever.
+                _log.Write(LogLine.Error($"Catalog load failed: {FailureMessage(candidate, e)}"));
+
                 // A cache that just failed to load during this same resolution is known broken,
                 // so it must not be offered as the copy to fall back on. Nothing else failing
                 // tells us anything about the cache, so cachedCopy otherwise stays as computed
@@ -156,6 +167,7 @@ public sealed class CatalogLoader
         }
         catch (Exception e) when (IsSourceFailure(e, ct))
         {
+            _log.Write(LogLine.Error($"Catalog load failed: {FailureMessage(source, e)}"));
             return new CatalogResolution(CatalogStatus.Failed, null, source, FailureMessage(source, e), null);
         }
     }
@@ -176,11 +188,35 @@ public sealed class CatalogLoader
     private static string FailureMessage(CatalogSource source, Exception e) =>
         $"The catalog at '{source.Location}' could not be loaded: {e.Message}";
 
+    /// <summary>
+    /// Shared by <see cref="ResolveAsync"/> and <see cref="LoadAsync"/>, so the source and count
+    /// lines below fire on every path that actually attempts a load, including the candidates
+    /// <see cref="ResolveAsync"/> tries and steps over before it reaches one that works. A
+    /// failure is logged by the caller instead of here: <see cref="ResolveAsync"/> and
+    /// <see cref="LoadAsync"/> each wrap exactly one call to this method in their own try/catch,
+    /// so logging the failure in the catch rather than here guarantees it fires exactly once per
+    /// attempt, on whichever path made it.
+    /// </summary>
     private async Task<CatalogLoadResult> LoadCoreAsync(CatalogSource source, CancellationToken ct)
     {
-        if (!source.IsRemote)
-            return CatalogParser.Parse(await ReadLocalBoundedAsync(source, ct));
+        _log.Write(LogLine.Info($"Loading a catalog from {source.Kind}: {source.Location}"));
 
+        var result = source.IsRemote
+            ? await LoadRemoteAsync(source, ct)
+            : CatalogParser.Parse(await ReadLocalBoundedAsync(source, ct));
+
+        _log.Write(LogLine.Info(
+            $"Loaded {result.Catalog.Packs.Count} packs, {result.Rejected.Count} "
+            + $"entr{(result.Rejected.Count == 1 ? "y" : "ies")} rejected"));
+
+        foreach (var rejected in result.Rejected)
+            _log.Write(LogLine.Warning($"{rejected.Description} rejected: {rejected.Reason}"));
+
+        return result;
+    }
+
+    private async Task<CatalogLoadResult> LoadRemoteAsync(CatalogSource source, CancellationToken ct)
+    {
         // Bounds the fetch end to end; see the constructor's remoteTimeout parameter. Firing
         // cancels the linked token, not the caller's ct, so IsSourceFailure's check of
         // ct.IsCancellationRequested still tells the two apart.
