@@ -3,6 +3,16 @@ namespace LamSims.Core.Unlocking;
 public enum ClientRegistryKey { EaDesktop, OriginWow6432, Origin }
 
 /// <summary>
+/// How the autostart value was stored. It has to survive the round trip: a REG_EXPAND_SZ read
+/// expanded and written back as plain text rewrites the user's "%ProgramFiles%\..." into one
+/// machine's answer to it, and anything that is not text at all cannot be written back as text.
+/// </summary>
+public enum AutostartValueKind { String, ExpandString, Unsupported }
+
+/// <param name="Value">Unexpanded, exactly as stored.</param>
+public sealed record AutostartValue(string Value, AutostartValueKind Kind);
+
+/// <summary>
 /// Every operating-system facility the unlocker needs that is not the filesystem. The filesystem is
 /// deliberately absent: Core uses File and Directory directly throughout, and its tests drive real
 /// temp directories rather than a fake.
@@ -19,8 +29,12 @@ public interface IUnlockerHost
     /// for a missing key: detection walks all three in order.</summary>
     string? ReadClientPath(ClientRegistryKey key);
 
-    string? ReadAutostartValue(string name);
-    void WriteAutostartValue(string name, string value);
+    /// <summary>The value with its kind, or null when absent. Non-null for a value of ANY type,
+    /// because the entry is deleted type-blind and reporting only text values would leave a
+    /// REG_DWORD entry in place and the client still starting at login.</summary>
+    AutostartValue? ReadAutostartValue(string name);
+
+    void WriteAutostartValue(string name, AutostartValue value);
     void RemoveAutostartValue(string name);
 
     /// <summary>Which of these process names are running. The NAMES are passed in rather than

@@ -111,14 +111,14 @@ public class EaClientRemoveTests
     {
         using var f = new InstallFixture();
         const string original = @"C:\EA\EADesktop.exe -silent";
-        f.Host.AutostartValues["EADM"] = original;
+        f.Host.Autostart("EADM", original);
         var target = await f.TargetAsync();
         await f.InstallAsync(target);
         Assert.DoesNotContain("EADM", f.Host.AutostartValues.Keys);
 
         Assert.True((await RemoveAsync(f, target)).Success);
 
-        Assert.Equal(original, f.Host.AutostartValues["EADM"]);
+        Assert.Equal(original, f.Host.AutostartValues["EADM"].Value);
         Assert.False(File.Exists(f.App.UnlockerAutostartBackupFile));
     }
 
@@ -128,7 +128,7 @@ public class EaClientRemoveTests
     public async Task A_registry_write_the_policy_forbids_warns_instead_of_failing_the_removal()
     {
         using var f = new InstallFixture();
-        f.Host.AutostartValues["EADM"] = @"C:\EA\EADesktop.exe";
+        f.Host.Autostart("EADM", @"C:\EA\EADesktop.exe");
         var target = await f.TargetAsync();
         Assert.True((await f.InstallAsync(target)).Success);
 
@@ -151,7 +151,7 @@ public class EaClientRemoveTests
     {
         using var f = new InstallFixture();
         const string original = @"C:\EA\EADesktop.exe -silent";
-        f.Host.AutostartValues["EADM"] = original;
+        f.Host.Autostart("EADM", original);
         var target = await f.TargetAsync();
         Assert.True((await f.InstallAsync(target)).Success);
         File.Delete(Path.Combine(target.ClientPath, "version.dll"));
@@ -159,7 +159,7 @@ public class EaClientRemoveTests
         var result = await RemoveAsync(f, target);
 
         Assert.True(result.Success, result.Error);
-        Assert.Equal(original, f.Host.AutostartValues["EADM"]);
+        Assert.Equal(original, f.Host.AutostartValues["EADM"].Value);
         Assert.False(File.Exists(f.App.UnlockerAutostartBackupFile));
     }
 
@@ -228,7 +228,7 @@ public class EaClientRemoveTests
     public async Task A_backup_that_cannot_be_used_is_discarded_so_removal_converges(string content)
     {
         using var f = new InstallFixture();
-        f.Host.AutostartValues["EADM"] = @"C:\EA\EADesktop.exe";
+        f.Host.Autostart("EADM", @"C:\EA\EADesktop.exe");
         var target = await f.TargetAsync();
         Assert.True((await f.InstallAsync(target)).Success);
         await File.WriteAllTextAsync(f.App.UnlockerAutostartBackupFile, content);
@@ -252,16 +252,16 @@ public class EaClientRemoveTests
     public async Task A_re_created_autostart_entry_is_not_overwritten_by_the_backup()
     {
         using var f = new InstallFixture();
-        f.Host.AutostartValues["EADM"] = @"C:\EA\old\EADesktop.exe";
+        f.Host.Autostart("EADM", @"C:\EA\old\EADesktop.exe");
         var target = await f.TargetAsync();
         Assert.True((await f.InstallAsync(target)).Success);
         const string newer = @"C:\EA\new\EADesktop.exe -silent";
-        f.Host.AutostartValues["EADM"] = newer;
+        f.Host.Autostart("EADM", newer);
 
         var result = await RemoveAsync(f, target);
 
         // The backup is cleared even though the value is left alone, so removal converges.
-        Assert.Equal(newer, f.Host.AutostartValues["EADM"]);
+        Assert.Equal(newer, f.Host.AutostartValues["EADM"].Value);
         Assert.False(File.Exists(f.App.UnlockerAutostartBackupFile));
         Assert.True(result.Success, result.Error);
     }
@@ -304,5 +304,43 @@ public class EaClientRemoveTests
 
         Assert.True(File.Exists(foreign));
         Assert.False(File.Exists(Path.Combine(inner, "version.dll")));
+    }
+
+    /// <summary>
+    /// A value that was never text cannot be put back as text: writing "1" into a slot that held a
+    /// REG_DWORD changes what the client reads, so it is warned about and dropped.
+    /// </summary>
+    [Fact]
+    public async Task An_autostart_value_that_is_not_text_is_not_put_back_as_text()
+    {
+        using var f = new InstallFixture();
+        f.Host.Autostart("EADM", "1", AutostartValueKind.Unsupported);
+        var target = await f.TargetAsync();
+        Assert.True((await f.InstallAsync(target)).Success);
+
+        var result = await RemoveAsync(f, target);
+
+        Assert.True(result.Success, result.Error);
+        Assert.Contains(result.Warnings ?? [], w => w.Contains("not a text value"));
+        Assert.DoesNotContain("EADM", f.Host.AutostartValues.Keys);
+        Assert.False(File.Exists(f.App.UnlockerAutostartBackupFile));
+    }
+
+    [Fact]
+    public async Task The_autostart_value_keeps_its_registry_kind_across_the_round_trip()
+    {
+        using var f = new InstallFixture();
+        const string unexpanded = @"%ProgramFiles%\EA\EADesktop.exe";
+        f.Host.Autostart("EADM", unexpanded, AutostartValueKind.ExpandString);
+        var target = await f.TargetAsync();
+        Assert.True((await f.InstallAsync(target)).Success);
+
+        Assert.True((await RemoveAsync(f, target)).Success);
+
+        // Restored as a plain string, the client would read a literal "%ProgramFiles%" it no
+        // longer expands, so the kind is asserted too.
+        var restored = f.Host.AutostartValues["EADM"];
+        Assert.Equal(unexpanded, restored.Value);
+        Assert.Equal(AutostartValueKind.ExpandString, restored.Kind);
     }
 }

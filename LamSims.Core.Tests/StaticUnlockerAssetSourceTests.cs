@@ -32,10 +32,12 @@ public class StaticUnlockerAssetSourceTests
         await using var server = await TestFileServer.StartAsync(payload);
         var (source, paths) = Build(server, dir, payload);
 
-        var path = await source.GetDllAsync(ClientKind.EaApp, CancellationToken.None);
+        var bytes = await source.GetDllAsync(ClientKind.EaApp, CancellationToken.None);
 
-        Assert.Equal(paths.UnlockerAssetFile("ea_app_version.dll"), path);
-        Assert.Equal(payload, await File.ReadAllBytesAsync(path));
+        // The cache write is checked too, since the next run's reuse depends on the pinned name.
+        Assert.Equal(payload, bytes.ToArray());
+        Assert.Equal(payload,
+            await File.ReadAllBytesAsync(paths.UnlockerAssetFile("ea_app_version.dll")));
     }
 
     // A throw alone would pass against an implementation that had already written the bad bytes.
@@ -170,9 +172,9 @@ public class StaticUnlockerAssetSourceTests
         paths.EnsureCreated();
         await File.WriteAllBytesAsync(paths.UnlockerAssetFile("ea_app_version.dll"), [0xDE, 0xAD]);
 
-        var path = await source.GetDllAsync(ClientKind.EaApp, CancellationToken.None);
+        var bytes = await source.GetDllAsync(ClientKind.EaApp, CancellationToken.None);
 
-        Assert.Equal(payload, await File.ReadAllBytesAsync(path));
+        Assert.Equal(payload, bytes.ToArray());
         Assert.True(server.RequestCount > 0, "the corrupt cache entry was trusted");
     }
 
@@ -207,8 +209,7 @@ public class StaticUnlockerAssetSourceTests
 
         foreach (var path in results)
         {
-            Assert.Equal(paths.UnlockerAssetFile("ea_app_version.dll"), path);
-            Assert.Equal(payload, await File.ReadAllBytesAsync(path));
+            Assert.Equal(payload, path.ToArray());
         }
         Assert.Empty(Directory.GetFiles(paths.Root, "*.incoming"));
     }

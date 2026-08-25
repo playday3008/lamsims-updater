@@ -26,8 +26,8 @@ public sealed class FakeUnlockerHost(List<string>? calls = null) : IUnlockerHost
     }
 
     public string? ReadClientPath(ClientRegistryKey key) => null;
-    public string? ReadAutostartValue(string name) => null;
-    public void WriteAutostartValue(string name, string value) { }
+    public AutostartValue? ReadAutostartValue(string name) => null;
+    public void WriteAutostartValue(string name, AutostartValue value) { }
     public void RemoveAutostartValue(string name) { }
     public IReadOnlyList<string> RunningClientProcesses(IReadOnlyList<string> processNames) => [];
     public IReadOnlyList<string> KillClientProcesses(IReadOnlyList<string> processNames,
@@ -42,8 +42,8 @@ public sealed class FakeUnlockerHost(List<string>? calls = null) : IUnlockerHost
 /// </summary>
 public sealed class StubUnlockerAssets : IUnlockerAssetSource
 {
-    public Task<string> GetDllAsync(ClientKind client, CancellationToken ct) =>
-        throw new InvalidOperationException("No unlocker asset should be fetched in these tests.");
+    public Task<ReadOnlyMemory<byte>> GetDllAsync(ClientKind client, CancellationToken ct) =>
+        Task.FromResult<ReadOnlyMemory<byte>>(new byte[] { 0x4D, 0x5A, 0x90, 0x00 });
 }
 
 /// <summary>

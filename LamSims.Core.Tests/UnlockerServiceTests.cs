@@ -101,7 +101,7 @@ public class UnlockerServiceTests
 
     private sealed class ThrowingAssets : IUnlockerAssetSource
     {
-        public Task<string> GetDllAsync(ClientKind client, CancellationToken ct) =>
+        public Task<ReadOnlyMemory<byte>> GetDllAsync(ClientKind client, CancellationToken ct) =>
             throw new InvalidOperationException("the stub backend must not fetch");
     }
 }

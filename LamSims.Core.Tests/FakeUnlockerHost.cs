@@ -12,7 +12,11 @@ public sealed class FakeUnlockerHost : IUnlockerHost
     public bool IsElevated { get; set; } = true;
 
     public Dictionary<ClientRegistryKey, string?> ClientPaths { get; } = [];
-    public Dictionary<string, string> AutostartValues { get; } = [];
+    public Dictionary<string, AutostartValue> AutostartValues { get; } = [];
+
+    /// <summary>The common REG_SZ case, so a test says what it means in one line.</summary>
+    public void Autostart(string name, string value, AutostartValueKind kind = AutostartValueKind.String) =>
+        AutostartValues[name] = new AutostartValue(value, kind);
 
     /// <summary>Process names KillClientProcesses reports as still running when it gave up.</summary>
     public List<string> Survivors { get; } = [];
@@ -26,7 +30,7 @@ public sealed class FakeUnlockerHost : IUnlockerHost
         return ClientPaths.TryGetValue(key, out var path) ? path : null;
     }
 
-    public string? ReadAutostartValue(string name)
+    public AutostartValue? ReadAutostartValue(string name)
     {
         Calls.Add($"ReadAutostart:{name}");
         return AutostartValues.TryGetValue(name, out var v) ? v : null;
@@ -39,9 +43,9 @@ public sealed class FakeUnlockerHost : IUnlockerHost
     /// </summary>
     public bool ThrowSecurityOnAutostartWrite { get; set; }
 
-    public void WriteAutostartValue(string name, string value)
+    public void WriteAutostartValue(string name, AutostartValue value)
     {
-        Calls.Add($"WriteAutostart:{name}={value}");
+        Calls.Add($"WriteAutostart:{name}={value.Value}");
         if (ThrowSecurityOnAutostartWrite)
             throw new System.Security.SecurityException("Requested registry access is not allowed.");
         AutostartValues[name] = value;

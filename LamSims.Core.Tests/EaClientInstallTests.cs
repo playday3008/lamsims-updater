@@ -72,11 +72,14 @@ public sealed class StubAssetSource(string path) : IUnlockerAssetSource
     /// <summary>Set to make the fetch fail the way a refused or unreachable cache does.</summary>
     public Exception? Throw { get; set; }
 
-    public Task<string> GetDllAsync(ClientKind client, CancellationToken ct)
+    /// <summary>The verified payload, when a test needs it to differ from the file on disk.</summary>
+    public byte[]? Bytes { get; set; }
+
+    public Task<ReadOnlyMemory<byte>> GetDllAsync(ClientKind client, CancellationToken ct)
     {
         Calls++;
         if (Throw is not null) throw Throw;
-        return Task.FromResult(path);
+        return Task.FromResult<ReadOnlyMemory<byte>>(Bytes ?? File.ReadAllBytes(path));
     }
 }
 
@@ -139,7 +142,7 @@ public class EaClientInstallTests
     public async Task A_registry_write_the_policy_forbids_warns_instead_of_aborting_the_install()
     {
         using var f = new InstallFixture();
-        f.Host.AutostartValues["EADM"] = @"C:\EA\EADesktop.exe";
+        f.Host.Autostart("EADM", @"C:\EA\EADesktop.exe");
         f.Host.ThrowSecurityOnAutostartWrite = true;
         var target = await f.TargetAsync();
 
@@ -287,7 +290,7 @@ public class EaClientInstallTests
     public async Task The_autostart_value_is_recorded_before_it_is_removed()
     {
         using var f = new InstallFixture();
-        f.Host.AutostartValues["EADM"] = @"C:\EA\EADesktop.exe -silent";
+        f.Host.Autostart("EADM", @"C:\EA\EADesktop.exe -silent");
         var target = await f.TargetAsync();
 
         Assert.True((await f.InstallAsync(target)).Success);
@@ -391,7 +394,7 @@ public class EaClientInstallTests
     {
         using var f = new InstallFixture();
         const string original = @"C:\EA\EADesktop.exe";
-        f.Host.AutostartValues["EADM"] = original;
+        f.Host.Autostart("EADM", original);
         var target = await f.TargetAsync();
 
         var mode = File.GetUnixFileMode(f.App.Root);
@@ -408,6 +411,48 @@ public class EaClientInstallTests
 
         Assert.True(result.Success, result.Error);
         Assert.Contains(result.Warnings ?? [], w => w.Contains("autostart"));
-        Assert.Equal(original, f.Host.AutostartValues["EADM"]);
+        Assert.Equal(original, f.Host.AutostartValues["EADM"].Value);
+    }
+
+    /// <summary>
+    /// The install writes the bytes the asset source verified, not whatever the cache file holds by
+    /// the time step 7 runs. The cache sits in a download directory the user can point anywhere, and
+    /// these two writes happen seconds later under elevation.
+    /// </summary>
+    [Fact]
+    public async Task The_installed_dll_is_the_payload_the_asset_source_verified()
+    {
+        using var f = new InstallFixture();
+        var target = await f.TargetAsync();
+        var verified = new byte[] { 0x4D, 0x5A, 0x01, 0x02, 0x03 };
+        ((StubAssetSource)f.Assets).Bytes = verified;
+
+        Assert.True((await f.InstallAsync(target)).Success);
+
+        // Both copies: the client's own and the one that survives an EA app self-update.
+        Assert.Equal(verified,
+            await File.ReadAllBytesAsync(Path.Combine(target.ClientPath, "version.dll")));
+        Assert.Equal(verified, await File.ReadAllBytesAsync(Path.Combine(
+            Directory.GetParent(target.ClientPath)!.FullName,
+            "StagedEADesktop", "EA Desktop", "version.dll")));
+    }
+
+    /// <summary>
+    /// Upstream deletes the Run value whatever its type. A backend that only handled text would
+    /// leave a REG_DWORD entry in place, so the client keeps starting at login while the install
+    /// reports success. Reading a non-string value is WindowsUnlockerHost's half, which no test covers.
+    /// </summary>
+    [Fact]
+    public async Task An_autostart_value_that_is_not_text_is_still_removed()
+    {
+        using var f = new InstallFixture();
+        f.Host.Autostart("EADM", "1", AutostartValueKind.Unsupported);
+        var target = await f.TargetAsync();
+
+        Assert.True((await f.InstallAsync(target)).Success);
+
+        // The backup is checked too, so removal has something to restore from.
+        Assert.DoesNotContain("EADM", f.Host.AutostartValues.Keys);
+        Assert.True(File.Exists(f.App.UnlockerAutostartBackupFile));
     }
 }

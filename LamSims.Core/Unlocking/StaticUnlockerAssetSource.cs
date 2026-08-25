@@ -45,12 +45,18 @@ public sealed class StaticUnlockerAssetSource(
     private readonly IReadOnlyDictionary<ClientKind, AssetPin> _pins = pins ?? ShippedPins;
     private readonly RetryOptions _retry = retry ?? RetryOptions.Default;
 
-    public async Task<string> GetDllAsync(ClientKind client, CancellationToken ct)
+    public async Task<ReadOnlyMemory<byte>> GetDllAsync(ClientKind client, CancellationToken ct)
     {
         var pin = _pins[client];
         var cached = paths.UnlockerAssetFile(pin.FileName);
 
-        if (File.Exists(cached) && await MatchesAsync(cached, pin.Sha256, ct)) return cached;
+        if (File.Exists(cached))
+        {
+            // Hashed over the bytes this returns, not over the file it read them from: the caller
+            // installs these bytes, so the check and the payload must be the same object.
+            var reused = await File.ReadAllBytesAsync(cached, ct);
+            if (Matches(reused, pin.Sha256)) return reused;
+        }
 
         paths.EnsureCreated();
         var temp = $"{cached}.{Path.GetRandomFileName()}.incoming";
@@ -123,16 +129,25 @@ public sealed class StaticUnlockerAssetSource(
             // A rename, not a copy: the payload is written to disk exactly once and no orphan is
             // left behind.
             AtomicFile.MoveIntoPlace(temp, cached);
-            return cached;
         }
         catch
         {
             if (File.Exists(temp)) File.Delete(temp);
             throw;
         }
+
+        // Re-read and re-hashed, for the same reason as the cache-reuse path above: what the caller
+        // installs is what was verified here, whatever happens to the file afterwards.
+        var bytes = await File.ReadAllBytesAsync(cached, ct);
+        if (!Matches(bytes, pin.Sha256))
+            throw new UnlockerAssetMismatchException(pin.Url, pin.Sha256, Digest(bytes));
+
+        return bytes;
     }
 
-    private static async Task<bool> MatchesAsync(string path, string expected, CancellationToken ct) =>
-        string.Equals(await Sha256Verifier.ComputeAsync(path, ct), expected,
-                      StringComparison.OrdinalIgnoreCase);
+    private static bool Matches(ReadOnlySpan<byte> bytes, string expected) =>
+        string.Equals(Digest(bytes), expected, StringComparison.OrdinalIgnoreCase);
+
+    private static string Digest(ReadOnlySpan<byte> bytes) =>
+        Convert.ToHexStringLower(System.Security.Cryptography.SHA256.HashData(bytes));
 }

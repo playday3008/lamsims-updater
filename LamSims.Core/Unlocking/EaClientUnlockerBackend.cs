@@ -130,7 +130,7 @@ public sealed partial class EaClientUnlockerBackend(
 
         // Step 2. Before any mutation, so a digest mismatch or a dead mirror changes nothing.
         steps.Begin("Fetching the unlocker");
-        string dll;
+        ReadOnlyMemory<byte> dll;
         try
         {
             dll = await assets.GetDllAsync(target.Client, ct);
@@ -191,7 +191,8 @@ public sealed partial class EaClientUnlockerBackend(
         return await InstallRestAsync(target, dll, steps, warnings, ea, ct);
     }
 
-    private async Task<UnlockerResult> InstallRestAsync(UnlockerTarget target, string dll, Steps steps,
+    private async Task<UnlockerResult> InstallRestAsync(UnlockerTarget target,
+                                                       ReadOnlyMemory<byte> dll, Steps steps,
                                                        List<string> warnings, bool ea,
                                                        CancellationToken ct)
     {
@@ -215,7 +216,10 @@ public sealed partial class EaClientUnlockerBackend(
         var installed = Path.Combine(target.ClientPath, DllName);
         try
         {
-            File.Copy(dll, installed, overwrite: true);
+            // Written from the verified bytes rather than copied from the cache, and atomically: a
+            // torn version.dll is one EA Desktop cannot load, and File.Exists would still call it
+            // installed.
+            await AtomicFile.WriteAllBytesAsync(installed, dll, ct);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
@@ -236,7 +240,7 @@ public sealed partial class EaClientUnlockerBackend(
                     ?? throw new IOException($"'{target.ClientPath}' has no parent directory.");
                 var staged = Path.Combine(parent, "StagedEADesktop", "EA Desktop");
                 Directory.CreateDirectory(staged);
-                File.Copy(dll, Path.Combine(staged, DllName), overwrite: true);
+                await AtomicFile.WriteAllBytesAsync(Path.Combine(staged, DllName), dll, ct);
             }
             catch (Exception e) when (e is IOException or UnauthorizedAccessException)
             {
@@ -272,7 +276,7 @@ public sealed partial class EaClientUnlockerBackend(
                 Directory.CreateDirectory(appPaths.Root);
                 await AtomicFile.WriteAllTextAsync(appPaths.UnlockerAutostartBackupFile,
                     System.Text.Json.JsonSerializer.Serialize(
-                        new AutostartBackup(AutostartValueName, existing)), ct);
+                        new AutostartBackup(AutostartValueName, existing.Value, existing.Kind)), ct);
                 host.RemoveAutostartValue(AutostartValueName);
             }
         }
@@ -303,7 +307,7 @@ public sealed partial class EaClientUnlockerBackend(
         }
     }
 
-    internal sealed record AutostartBackup(string Name, string Value);
+    internal sealed record AutostartBackup(string Name, string Value, AutostartValueKind Kind);
 
     internal const int RemoveStepsEaApp = 9;
     internal const int RemoveStepsOrigin = 6;
@@ -455,16 +459,23 @@ public sealed partial class EaClientUnlockerBackend(
                     if (backup is not null)
                         warnings.Add("The autostart backup was incomplete, so it was discarded.");
                 }
-                // Only when the slot is still empty. The client can re-create its own Run entry with
-                // a newer path between install and removal, and restoring the recorded value over
-                // that would downgrade the user's autostart to a stale command line.
-                else if (host.ReadAutostartValue(backup.Name) is null)
+                // The client can re-create its own Run entry with a newer path between install and
+                // removal, and restoring the recorded value over that would downgrade the user's
+                // autostart to a stale command line.
+                else if (host.ReadAutostartValue(backup.Name) is not null)
                 {
-                    host.WriteAutostartValue(backup.Name, backup.Value);
+                    warnings.Add("The autostart entry had been re-created, so it was left as it is.");
+                }
+                else if (backup.Kind == AutostartValueKind.Unsupported)
+                {
+                    // Removed on install because the entry is deleted type-blind, but it was never
+                    // text, so writing it back as text would change what the client reads.
+                    warnings.Add("The autostart entry was not a text value, so it could not be put back.");
                 }
                 else
                 {
-                    warnings.Add("The autostart entry had been re-created, so it was left as it is.");
+                    host.WriteAutostartValue(backup.Name,
+                        new AutostartValue(backup.Value, backup.Kind));
                 }
 
                 File.Delete(backupFile);

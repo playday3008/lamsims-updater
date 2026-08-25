@@ -66,12 +66,34 @@ public sealed class WindowsUnlockerHost : IUnlockerHost
         }
     }
 
-    public string? ReadAutostartValue(string name)
+    [SupportedOSPlatform("windows")]
+    private static AutostartValue? ReadAutostart(string name)
+    {
+        using var key = Registry.CurrentUser.OpenSubKey(RunKey);
+
+        // DoNotExpandEnvironmentNames: read expanded, a REG_EXPAND_SZ entry would be written back as
+        // one machine's answer to "%ProgramFiles%" instead of the variable the user had.
+        var raw = key?.GetValue(name, null, RegistryValueOptions.DoNotExpandEnvironmentNames);
+        if (raw is null || key is null) return null;
+
+        var kind = key.GetValueKind(name) switch
+        {
+            RegistryValueKind.String => AutostartValueKind.String,
+            RegistryValueKind.ExpandString => AutostartValueKind.ExpandString,
+            _ => AutostartValueKind.Unsupported,
+        };
+
+        return new AutostartValue(
+            Convert.ToString(raw, System.Globalization.CultureInfo.InvariantCulture) ?? string.Empty,
+            kind);
+    }
+
+    public AutostartValue? ReadAutostartValue(string name)
     {
         if (!OperatingSystem.IsWindows()) return null;
         try
         {
-            return ReadValue(Registry.CurrentUser, RunKey, name);
+            return ReadAutostart(name);
         }
         catch (Exception e) when (e is System.Security.SecurityException or UnauthorizedAccessException
                                       or IOException)
@@ -80,11 +102,20 @@ public sealed class WindowsUnlockerHost : IUnlockerHost
         }
     }
 
-    public void WriteAutostartValue(string name, string value)
+    public void WriteAutostartValue(string name, AutostartValue value)
     {
         if (!OperatingSystem.IsWindows()) return;
-        using var key = Registry.CurrentUser.OpenSubKey(RunKey, writable: true);
-        key?.SetValue(name, value, RegistryValueKind.String);
+
+        // CreateSubKey, not OpenSubKey: the Run key is absent on an account that has never had an
+        // autostart entry, and OpenSubKey answers null for a missing key, which the null-conditional
+        // below would turn into a silent no-op — the unlocker would report the autostart step done
+        // with nothing written. Reading and removing keep OpenSubKey, where a missing key genuinely
+        // means there is nothing to read or remove.
+        using var key = Registry.CurrentUser.CreateSubKey(RunKey, writable: true);
+        key?.SetValue(name, value.Value,
+            value.Kind == AutostartValueKind.ExpandString
+                ? RegistryValueKind.ExpandString
+                : RegistryValueKind.String);
     }
 
     public void RemoveAutostartValue(string name)

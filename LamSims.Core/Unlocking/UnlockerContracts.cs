@@ -52,7 +52,13 @@ public interface IUnlockerBackend
 
 public interface IUnlockerAssetSource
 {
-    Task<string> GetDllAsync(ClientKind client, CancellationToken ct);
+    /// <summary>
+    /// The verified DLL's BYTES, not a path to them. The caller writes these under elevation seconds
+    /// after this returns, and the cache they came from sits in a download directory the user can
+    /// point anywhere, so handing back a path would leave a window in which the file that was
+    /// checked and the file that gets installed are not the same file.
+    /// </summary>
+    Task<ReadOnlyMemory<byte>> GetDllAsync(ClientKind client, CancellationToken ct);
 }
 
 public sealed class UnlockerAssetMismatchException(string url, string expected, string actual)
