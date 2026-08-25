@@ -12,8 +12,14 @@ jobs:
   verify:
     uses: ./.github/workflows/ci.yml
 
+  # The uid-0 leg, which ci.yml does not contain: it is what catches a test that arranges a
+  # refusal with a Unix file mode and forgets to say so. That test passes vacuously everywhere
+  # else, so without this job a release can ship one.
+  verify-root:
+    uses: ./.github/workflows/root-check.yml
+
   release:
-    needs: verify
+    needs: [verify, verify-root]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
