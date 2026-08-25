@@ -8,6 +8,7 @@ using System.Collections.Concurrent;
 using System.Net;
 using System.Net.Http.Headers;
 using Microsoft.Win32.SafeHandles;
+using LamSims.Core.Logging;
 
 namespace LamSims.Core.Downloading;
 
@@ -76,16 +77,26 @@ public sealed class ChunkFetcher
     private readonly HttpClient _client;
     private readonly RetryOptions _retry;
     private readonly IDelayProvider _delay;
+    private readonly ILogSink _log;
 
     /// <summary>Mirrors that answered a conditional range request with 200, by url.</summary>
     private readonly ConcurrentDictionary<string, byte> _setAside = new(StringComparer.Ordinal);
 
-    public ChunkFetcher(HttpClient client, RetryOptions retry, IDelayProvider delay)
+    public ChunkFetcher(HttpClient client, RetryOptions retry, IDelayProvider delay, ILogSink? log = null)
     {
         _client = client;
         _retry = retry;
         _delay = delay;
+        _log = log ?? NullLogSink.Instance;
     }
+
+    /// <summary>
+    /// The pack this fetcher's owning download is for, so a log line can be attributed to it.
+    /// One instance already serves a whole download (see the class remarks), so this is set
+    /// once, right after construction, rather than threaded through FetchAsync's parameters,
+    /// which stay exactly what every caller already passes.
+    /// </summary>
+    internal string? Code { get; set; }
 
     /// <summary>Returns the mirror that served the chunk, for the resume sidecar.</summary>
     public async Task<MirrorSource> FetchAsync(
@@ -121,12 +132,16 @@ public sealed class ChunkFetcher
                 progress?.Abandoned(worker);
                 _setAside[mirror.Url.ToString()] = 0;
                 lastError = e;
+                _log.Write(LogLine.Warning($"{mirror.Url} failed ({e.Message}), rotating", Code));
             }
             catch (Exception e) when (e is HttpRequestException or IOException && !ct.IsCancellationRequested)
             {
                 progress?.Abandoned(worker);
                 lastError = e;
+                _log.Write(LogLine.Warning($"{mirror.Url} failed ({e.Message}), rotating", Code));
                 if (attempt == _retry.MaxAttempts - 1) break;
+                _log.Write(LogLine.Info(
+                    $"Retry {attempt + 1} of {_retry.MaxAttempts} for chunk {chunk.Index}", Code));
                 await _delay.DelayAsync(BackoffFor(attempt), ct);
             }
         }

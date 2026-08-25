@@ -4,6 +4,7 @@ using System.IO;
 using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
+using LamSims.Core.Logging;
 
 namespace LamSims.Core.Downloading;
 
@@ -22,14 +23,17 @@ public sealed class SingleStreamDownloader
     private readonly DownloadPaths _paths;
     private readonly RetryOptions _retry;
     private readonly IDelayProvider _delay;
+    private readonly ILogSink _log;
 
     public SingleStreamDownloader(
-        HttpClient client, DownloadPaths paths, RetryOptions retry, IDelayProvider delay)
+        HttpClient client, DownloadPaths paths, RetryOptions retry, IDelayProvider delay,
+        ILogSink? log = null)
     {
         _client = client;
         _paths = paths;
         _retry = retry;
         _delay = delay;
+        _log = log ?? NullLogSink.Instance;
     }
 
     public async Task<DownloadResult> DownloadAsync(
@@ -84,8 +88,23 @@ public sealed class SingleStreamDownloader
                 if (attempt > 0)
                     await _delay.DelayAsync(BackoffFor(attempt - 1), ct);
 
-                return await new ArchiveFinalizer(_paths)
+                var result = await new ArchiveFinalizer(_paths)
                     .FinalizeAsync(request.Code, request.Sha256, state, usedSingleStream: true, ct);
+
+                switch (result.Outcome)
+                {
+                    case DownloadOutcome.Completed:
+                        _log.Write(LogLine.Info(
+                            $"sha256 verified {result.ActualSha256![..8]}…", request.Code));
+                        break;
+                    case DownloadOutcome.ChecksumMismatch:
+                        _log.Write(LogLine.Error(
+                            $"Digest mismatch: expected {request.Sha256[..8]}…, got {result.ActualSha256![..8]}…",
+                            request.Code));
+                        break;
+                }
+
+                return result;
             }
             catch (OperationCanceledException) when (ct.IsCancellationRequested)
             {

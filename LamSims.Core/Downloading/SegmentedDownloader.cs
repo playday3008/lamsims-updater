@@ -8,6 +8,7 @@ using System.Threading.Tasks;
 using System.Collections.Concurrent;
 using System.Runtime.ExceptionServices;
 using Microsoft.Win32.SafeHandles;
+using LamSims.Core.Logging;
 
 namespace LamSims.Core.Downloading;
 
@@ -36,15 +37,18 @@ public sealed class SegmentedDownloader
     private readonly DownloadOptions _options;
     private readonly RetryOptions _retry;
     private readonly IDelayProvider _delay;
+    private readonly ILogSink _log;
 
     public SegmentedDownloader(
-        HttpClient client, DownloadPaths paths, DownloadOptions options, RetryOptions retry, IDelayProvider delay)
+        HttpClient client, DownloadPaths paths, DownloadOptions options, RetryOptions retry,
+        IDelayProvider delay, ILogSink? log = null)
     {
         _client = client;
         _paths = paths;
         _options = options;
         _retry = retry;
         _delay = delay;
+        _log = log ?? NullLogSink.Instance;
     }
 
     /// <summary>
@@ -76,10 +80,16 @@ public sealed class SegmentedDownloader
             var (mirrors, rangeLess) = await ProbeMirrorsAsync(request, ct);
 
             // A ranged mirror is always preferred; the fallback runs only when no mirror
-            // honours ranges at all.
+            // honours ranges at all. This path never spins up workers, so there is no
+            // connection count to report — a user on a range-less mirror would otherwise see
+            // nothing between the queue starting and the digest line, minutes of apparently
+            // dead log on a big pack.
             if (mirrors.Count == 0)
-                return await new SingleStreamDownloader(_client, _paths, _retry, _delay)
+            {
+                LogFetchStart(request, connections: null);
+                return await new SingleStreamDownloader(_client, _paths, _retry, _delay, _log)
                     .DownloadAsync(request, rangeLess, progress, ct);
+            }
 
             var chunks = ChunkPlan.Create(request.Size, _options.ChunkSize);
 
@@ -90,6 +100,21 @@ public sealed class SegmentedDownloader
 
             var pending = chunks.Where(c => !resumable.Contains(c.Index)).ToList();
             var completedBytes = chunks.Where(c => resumable.Contains(c.Index)).Sum(c => c.Length);
+
+            // The actual worker count RunWorkersAsync will spin up, not chunks.Count: a resume
+            // can leave fewer chunks pending than the plan has, and either way the connection
+            // budget caps at _options.Connections. Computed once, here, and threaded through to
+            // RunWorkersAsync rather than recomputed there, so the logged number and the number
+            // of workers that actually run can never drift apart.
+            var workerCount = Math.Min(_options.Connections, Math.Max(pending.Count, 1));
+
+            LogFetchStart(request, workerCount);
+
+            if (carried.Count > 0)
+            {
+                _log.Write(LogLine.Info(
+                    $"Resuming {carried.Count} of {chunks.Count} chunks from a previous run", request.Code));
+            }
 
             var tracker = new ProgressTracker(request.Code, request.Size, completedBytes);
             Preallocate(partFile, request.Size);
@@ -104,11 +129,27 @@ public sealed class SegmentedDownloader
             using (var handle = File.OpenHandle(
                 partFile, FileMode.Open, FileAccess.Write, FileShare.ReadWrite, FileOptions.Asynchronous))
             {
-                await RunWorkersAsync(request, mirrors, pending, handle, state, done, tracker, progress, ct);
+                await RunWorkersAsync(
+                    request, mirrors, pending, handle, state, done, tracker, progress, workerCount, ct);
             }
 
-            return await new ArchiveFinalizer(_paths)
+            var result = await new ArchiveFinalizer(_paths)
                 .FinalizeAsync(request.Code, request.Sha256, state, usedSingleStream: false, ct);
+
+            switch (result.Outcome)
+            {
+                case DownloadOutcome.Completed:
+                    _log.Write(LogLine.Info(
+                        $"sha256 verified {result.ActualSha256![..8]}…", request.Code));
+                    break;
+                case DownloadOutcome.ChecksumMismatch:
+                    _log.Write(LogLine.Error(
+                        $"Digest mismatch: expected {request.Sha256[..8]}…, got {result.ActualSha256![..8]}…",
+                        request.Code));
+                    break;
+            }
+
+            return result;
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
@@ -157,6 +198,7 @@ public sealed class SegmentedDownloader
                 // Per url, including the size disagreement raised just above: one stale mirror
                 // must not stop the mirrors after it from being probed.
                 lastError = e;
+                _log.Write(LogLine.Warning($"{url} failed ({e.Message}), rotating", request.Code));
             }
         }
 
@@ -223,6 +265,20 @@ public sealed class SegmentedDownloader
         return saved.CompletedChunks.Where(c => trustedMirrors.Contains(c.MirrorUrl)).ToArray();
     }
 
+    /// <summary>
+    /// The "Fetching" and size/connections lines every path emits before transferring a byte.
+    /// <paramref name="connections"/> is null on the range-less path, where no workers ever run
+    /// and a connection count would be meaningless — so the suffix is left off entirely rather
+    /// than printing a number that describes nothing real.
+    /// </summary>
+    private void LogFetchStart(DownloadRequest request, int? connections)
+    {
+        _log.Write(LogLine.Info($"Fetching {request.Urls[0]}", request.Code));
+
+        var suffix = connections is { } n ? $" over {n} connections" : "";
+        _log.Write(LogLine.Info($"{LogFormat.Bytes(request.Size)}{suffix}", request.Code));
+    }
+
     private static void Preallocate(string path, long size)
     {
         using var handle = File.OpenHandle(path, FileMode.OpenOrCreate, FileAccess.Write, FileShare.ReadWrite);
@@ -239,12 +295,12 @@ public sealed class SegmentedDownloader
         Dictionary<int, CompletedChunk> done,
         ProgressTracker tracker,
         IProgress<DownloadProgress>? progress,
+        int workerCount,
         CancellationToken ct)
     {
         var queue = new ChunkQueue(pending);
-        var fetcher = new ChunkFetcher(_client, _retry, _delay);
+        var fetcher = new ChunkFetcher(_client, _retry, _delay, _log) { Code = request.Code };
         var errors = new ConcurrentQueue<Exception>();
-        var workerCount = Math.Min(_options.Connections, Math.Max(pending.Count, 1));
         var sink = new TrackerSink(tracker, progress);
 
         // Held across the done-set mutation AND the sidecar write, so snapshots persist in

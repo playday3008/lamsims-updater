@@ -6,23 +6,13 @@ using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
-using System.Security.Cryptography;
 using LamSims.Core.Downloading;
+using static LamSims.Core.Tests.Payloads;
 
 namespace LamSims.Core.Tests;
 
 public class SegmentedDownloaderTests
 {
-    private static byte[] Payload(int size)
-    {
-        var bytes = new byte[size];
-        Random.Shared.NextBytes(bytes);
-        return bytes;
-    }
-
-    private static string Sha256Of(byte[] bytes) =>
-        Convert.ToHexString(SHA256.HashData(bytes)).ToLowerInvariant();
-
     private static SegmentedDownloader Downloader(HttpClient client, DownloadPaths paths, int connections, long chunkSize) =>
         new(client, paths, new DownloadOptions { Connections = connections, ChunkSize = chunkSize },
             RetryOptions.Default, new FakeDelayProvider());
@@ -30,7 +20,7 @@ public class SegmentedDownloaderTests
     [Fact]
     public async Task Downloads_and_verifies_a_multi_chunk_archive()
     {
-        var content = Payload(1_000_000);
+        var content = Payloads.Random(1_000_000);
         await using var server = await TestFileServer.StartAsync(content);
         using var temp = new TempDir();
         var paths = new DownloadPaths(temp.Path);
@@ -50,7 +40,7 @@ public class SegmentedDownloaderTests
     [Fact]
     public async Task Spreads_work_across_mirrors()
     {
-        var content = Payload(500_000);
+        var content = Payloads.Random(500_000);
         await using var a = await TestFileServer.StartAsync(content);
         await using var b = await TestFileServer.StartAsync(content);
         using var temp = new TempDir();
@@ -69,7 +59,7 @@ public class SegmentedDownloaderTests
     [Fact]
     public async Task Fails_fast_when_the_server_size_disagrees_with_the_request()
     {
-        var content = Payload(100_000);
+        var content = Payloads.Random(100_000);
         await using var server = await TestFileServer.StartAsync(content);
         using var temp = new TempDir();
         var paths = new DownloadPaths(temp.Path);
@@ -88,7 +78,7 @@ public class SegmentedDownloaderTests
     [Fact]
     public async Task Quarantines_an_archive_whose_digest_does_not_match()
     {
-        var content = Payload(100_000);
+        var content = Payloads.Random(100_000);
         await using var server = await TestFileServer.StartAsync(content);
         using var temp = new TempDir();
         var paths = new DownloadPaths(temp.Path);
@@ -107,7 +97,7 @@ public class SegmentedDownloaderTests
     [Fact]
     public async Task Resume_refetches_only_the_missing_chunks()
     {
-        var content = Payload(400_000);
+        var content = Payloads.Random(400_000);
         await using var server = await TestFileServer.StartAsync(content);
         using var temp = new TempDir();
         var paths = new DownloadPaths(temp.Path);
@@ -151,7 +141,7 @@ public class SegmentedDownloaderTests
     [Fact]
     public async Task A_changed_validator_discards_that_mirrors_progress()
     {
-        var content = Payload(400_000);
+        var content = Payloads.Random(400_000);
         var options = new TestFileServerOptions { ETag = "\"v1\"" };
         await using var server = await TestFileServer.StartAsync(content, options);
         using var temp = new TempDir();
@@ -188,7 +178,7 @@ public class SegmentedDownloaderTests
     [Fact]
     public async Task Only_the_changed_mirrors_chunks_are_refetched()
     {
-        var content = Payload(400_000);
+        var content = Payloads.Random(400_000);
         var staleOptions = new TestFileServerOptions { ETag = "\"v1\"" };
         await using var stale = await TestFileServer.StartAsync(content, staleOptions);
         await using var steady = await TestFileServer.StartAsync(
@@ -251,7 +241,7 @@ public class SegmentedDownloaderTests
         // bytes. Failing the whole download over that makes the pack permanently unfetchable
         // even with a healthy mirror listed, and the probe re-derives the same unstable
         // validator on every run, so it never self-heals.
-        var content = Payload(400_000);
+        var content = Payloads.Random(400_000);
         var changingOptions = new TestFileServerOptions { ETag = "\"v1\"" };
         await using var changing = await TestFileServer.StartAsync(content, changingOptions);
         await using var steady = await TestFileServer.StartAsync(
@@ -279,7 +269,7 @@ public class SegmentedDownloaderTests
     [Fact]
     public async Task A_validator_change_with_no_mirror_left_is_reported_rather_than_thrown()
     {
-        var content = Payload(400_000);
+        var content = Payloads.Random(400_000);
         var options = new TestFileServerOptions { ETag = "\"v1\"" };
         await using var server = await TestFileServer.StartAsync(content, options);
         using var temp = new TempDir();
@@ -299,8 +289,8 @@ public class SegmentedDownloaderTests
     [Fact]
     public async Task A_mirror_reporting_the_wrong_size_does_not_stop_the_others_being_probed()
     {
-        var content = Payload(400_000);
-        await using var stale = await TestFileServer.StartAsync(Payload(123_456));
+        var content = Payloads.Random(400_000);
+        await using var stale = await TestFileServer.StartAsync(Payloads.Random(123_456));
         await using var current = await TestFileServer.StartAsync(content);
         using var temp = new TempDir();
         var paths = new DownloadPaths(temp.Path);
@@ -318,7 +308,7 @@ public class SegmentedDownloaderTests
     [Fact]
     public async Task A_torn_sidecar_restarts_the_download_instead_of_throwing()
     {
-        var content = Payload(200_000);
+        var content = Payloads.Random(200_000);
         await using var server = await TestFileServer.StartAsync(content);
         using var temp = new TempDir();
         var paths = new DownloadPaths(temp.Path);
@@ -339,7 +329,7 @@ public class SegmentedDownloaderTests
         // PartState is a positional record, so a JSON document that omits CompletedChunks and
         // Mirrors, or sets them to null, deserializes with both left null. The part file is
         // exactly the archive's length, the precondition for trusting a sidecar at all.
-        var content = Payload(200_000);
+        var content = Payloads.Random(200_000);
         await using var server = await TestFileServer.StartAsync(content);
         using var temp = new TempDir();
         var paths = new DownloadPaths(temp.Path);
@@ -374,7 +364,7 @@ public class SegmentedDownloaderTests
         // One step past the absent-collection case: the list is there, an element inside it is
         // not. No serializer writes this, but the sidecar is a file on disk that anything may
         // have written, and the projections over it would dereference the null.
-        var content = Payload(200_000);
+        var content = Payloads.Random(200_000);
         await using var server = await TestFileServer.StartAsync(content);
         using var temp = new TempDir();
         var paths = new DownloadPaths(temp.Path);
@@ -407,7 +397,7 @@ public class SegmentedDownloaderTests
         // The sidecar is a file on disk; anything may have written it. A repeated index, or one
         // outside the plan, is nobody's valid state, and reading it as a dictionary keyed by
         // index would throw straight out of DownloadAsync.
-        var content = Payload(200_000);
+        var content = Payloads.Random(200_000);
         await using var server = await TestFileServer.StartAsync(content);
         using var temp = new TempDir();
         var paths = new DownloadPaths(temp.Path);
@@ -444,7 +434,7 @@ public class SegmentedDownloaderTests
         // The sidecar claims chunk 0 is complete, but the partial file is shorter than the
         // archive. Preallocation would extend it with zeros and the download would skip those
         // "complete" bytes, so the archive would fail its checksum with nothing to show why.
-        var content = Payload(200_000);
+        var content = Payloads.Random(200_000);
         await using var server = await TestFileServer.StartAsync(content);
         using var temp = new TempDir();
         var paths = new DownloadPaths(temp.Path);
@@ -476,7 +466,7 @@ public class SegmentedDownloaderTests
     [Fact]
     public async Task Cancellation_keeps_the_partial_file_and_its_sidecar()
     {
-        var content = Payload(2_000_000);
+        var content = Payloads.Random(2_000_000);
         await using var server = await TestFileServer.StartAsync(content);
         using var temp = new TempDir();
         var paths = new DownloadPaths(temp.Path);
@@ -505,7 +495,7 @@ public class SegmentedDownloaderTests
     [Fact]
     public async Task Reports_monotonic_progress_up_to_the_total()
     {
-        var content = Payload(500_000);
+        var content = Payloads.Random(500_000);
         await using var server = await TestFileServer.StartAsync(content);
         using var temp = new TempDir();
         var paths = new DownloadPaths(temp.Path);
@@ -541,7 +531,7 @@ public class SegmentedDownloaderTests
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS())
             return;
 
-        var content = Payload(1000);
+        var content = Payloads.Random(1000);
         await using var server = await TestFileServer.StartAsync(content);
         using var temp = new TempDir();
         var paths = new DownloadPaths(temp.Path);
@@ -577,7 +567,7 @@ public class SegmentedDownloaderTests
         // EnsureCreated itself throws and must be inside the try.
         if (!OperatingSystem.IsLinux() && !OperatingSystem.IsMacOS()) return;
 
-        var content = Payload(1000);
+        var content = Payloads.Random(1000);
         await using var server = await TestFileServer.StartAsync(content);
         using var temp = new TempDir();
         using var locked = new ReadOnlyDir(temp.Path);
@@ -596,7 +586,7 @@ public class SegmentedDownloaderTests
     {
         // AppSettings.DownloadDirectory is free text, and a blank one reaches
         // Directory.CreateDirectory(""), an ArgumentException outside every filter here.
-        var content = Payload(1000);
+        var content = Payloads.Random(1000);
         await using var server = await TestFileServer.StartAsync(content);
         using var client = HttpFactory.Create(4);
 
@@ -613,7 +603,7 @@ public class SegmentedDownloaderTests
     [Fact]
     public async Task A_pack_code_that_is_not_a_file_name_is_reported_rather_than_thrown()
     {
-        var content = Payload(1000);
+        var content = Payloads.Random(1000);
         await using var server = await TestFileServer.StartAsync(content);
         using var temp = new TempDir();
         using var client = HttpFactory.Create(4);
@@ -630,7 +620,7 @@ public class SegmentedDownloaderTests
     [Fact]
     public async Task Refuses_to_start_without_room_on_disk()
     {
-        var content = Payload(1000);
+        var content = Payloads.Random(1000);
         await using var server = await TestFileServer.StartAsync(content);
         using var temp = new TempDir();
         var paths = new DownloadPaths(temp.Path);
@@ -650,7 +640,7 @@ public class SegmentedDownloaderTests
     {
         // Every ranged response is cut short, so no chunk can complete. A mirror that accepts the
         // connection and then stops sending is the ordinary way a real download dies.
-        var content = Payload(2_000_000);
+        var content = Payloads.Random(2_000_000);
         await using var server = await TestFileServer.StartAsync(
             content, new TestFileServerOptions { DropAfterBytes = 1024 });
         using var temp = new TempDir();
@@ -675,7 +665,7 @@ public class SegmentedDownloaderTests
         // Deliver fires after the chunk completes, at exactly TotalBytes. At 2..Connections chunks
         // the current code already delivers one update per chunk, so a test written at that size
         // passes today and detects nothing.
-        var content = Payload(300_000);
+        var content = Payloads.Random(300_000);
         await using var server = await TestFileServer.StartAsync(content);
         using var temp = new TempDir();
         var paths = new DownloadPaths(temp.Path);
@@ -700,7 +690,7 @@ public class SegmentedDownloaderTests
     {
         // A resume with nothing left to fetch has an empty pending set, so no worker ever runs and
         // today the caller is told nothing at all before finalizing.
-        var content = Payload(400_000);
+        var content = Payloads.Random(400_000);
         await using var server = await TestFileServer.StartAsync(content);
         using var temp = new TempDir();
         var paths = new DownloadPaths(temp.Path);
@@ -741,7 +731,7 @@ public class SegmentedDownloaderTests
     {
         // The maximum is asserted because an overshoot latches Deliver's _lastAccepted and
         // suppresses the true final snapshot, which checking the last value alone would miss.
-        var content = Payload(400_000);
+        var content = Payloads.Random(400_000);
         await using var server = await TestFileServer.StartAsync(content, new TestFileServerOptions
         {
             DropAfterBytes = 30_000,
