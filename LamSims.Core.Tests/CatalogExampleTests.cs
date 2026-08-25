@@ -15,7 +15,7 @@ public class CatalogExampleTests
     /// catalog.schema.json is copied to the output directory, and a fixed relative depth would
     /// break when the output path changes.
     /// </summary>
-    private static string RepositoryRoot()
+    internal static string RepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
 
