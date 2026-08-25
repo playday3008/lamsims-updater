@@ -48,10 +48,17 @@ public sealed partial class MainViewModel : ObservableObject
             services.UnlockerHost,
             services.Dispatcher,
             shutdown: ShutdownAsync,
+            exit: () => RequestClose?.Invoke(),
             banner: Raise);
     }
 
     public UnlockerViewModel Unlocker { get; }
+
+    /// <summary>
+    /// Set by the window: closing it is the view's business, but the unlocker's elevated relaunch is
+    /// the one path that has to close it from here, because ShutdownAsync alone leaves the shell up.
+    /// </summary>
+    public Action? RequestClose { get; set; }
 
     // These wrappers keep the three delegate fields read: a private field assigned and never
     // read is CS0414, and this repository builds warnings as errors. An uncalled private method

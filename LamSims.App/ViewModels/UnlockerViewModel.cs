@@ -48,6 +48,7 @@ public sealed partial class UnlockerViewModel(
     IUnlockerHost host,
     IUiDispatcher dispatcher,
     Func<Task> shutdown,
+    Action exit,
     Action<Banner> banner) : ObservableObject
 {
     public bool IsSupported => service.IsSupported;
@@ -172,6 +173,11 @@ public sealed partial class UnlockerViewModel(
         }
 
         await shutdown();
+
+        // Shutdown flushes and disposes; it does not close the window, and the window greys itself
+        // on IsShuttingDown. Without this the accepted prompt leaves a dead shell beside the
+        // elevated instance.
+        exit();
     }
 
     private void SetBusy(bool busy)

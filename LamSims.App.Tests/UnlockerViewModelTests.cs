@@ -14,15 +14,18 @@ public class UnlockerViewModelTests
         RecordingUnlockerBackend backend,
         IUnlockerHost? host = null,
         Func<Task>? shutdown = null,
+        Action? exit = null,
         Action<Banner>? banner = null) =>
         new(new UnlockerService([backend]), new StubUnlockerAssets(), host ?? new FakeUnlockerHost(),
-            new ImmediateDispatcher(), shutdown ?? (() => Task.CompletedTask), banner ?? (_ => { }));
+            new ImmediateDispatcher(), shutdown ?? (() => Task.CompletedTask), exit ?? (() => { }),
+            banner ?? (_ => { }));
 
     [Fact]
     public async Task Unsupported_service_reports_no_targets_and_no_support()
     {
         var vm = new UnlockerViewModel(new UnlockerService([]), new StubUnlockerAssets(),
-            new FakeUnlockerHost(), new ImmediateDispatcher(), () => Task.CompletedTask, _ => { });
+            new FakeUnlockerHost(), new ImmediateDispatcher(), () => Task.CompletedTask, () => { },
+            _ => { });
 
         Assert.False(vm.IsSupported);
 
@@ -208,13 +211,16 @@ public class UnlockerViewModelTests
         var host = new FakeUnlockerHost(order) { RelaunchAccepted = true };
         var shutdown = new FakeShutdown(order);
         var backend = new RecordingUnlockerBackend(Target()) { NextResult = UnlockerResult.NeedsElevation() };
-        var vm = Build(backend, host: host, shutdown: shutdown.RunAsync);
+        var vm = Build(backend, host: host, shutdown: shutdown.RunAsync,
+                       exit: () => order.Add("Exit"));
         await vm.RefreshAsync(CancellationToken.None);
         await vm.Targets[0].InstallCommand.ExecuteAsync(null);
 
         await vm.RelaunchElevatedCommand.ExecuteAsync(null);
 
-        Assert.Equal(["Relaunch", "CancelAll", "Dispose"], order);
+        // Exit last, and only after shutdown: shutdown does not close the window, so without it the
+        // accepted prompt leaves a greyed shell beside the elevated instance for ever.
+        Assert.Equal(["Relaunch", "CancelAll", "Dispose", "Exit"], order);
         Assert.True(shutdown.IsShuttingDown);
     }
 
@@ -315,6 +321,22 @@ public class UnlockerViewModelTests
         {
             started.TrySetException(e);
         }
+    }
+
+    // ---- pair: the shell is not closed on a DECLINED prompt, and is on an accepted one (above). ----
+    [Fact]
+    public async Task Declined_relaunch_does_not_close_the_shell()
+    {
+        var order = new List<string>();
+        var host = new FakeUnlockerHost(order) { RelaunchAccepted = false };
+        var backend = new RecordingUnlockerBackend(Target()) { NextResult = UnlockerResult.NeedsElevation() };
+        var vm = Build(backend, host: host, exit: () => order.Add("Exit"));
+        await vm.RefreshAsync(CancellationToken.None);
+        await vm.Targets[0].InstallCommand.ExecuteAsync(null);
+
+        await vm.RelaunchElevatedCommand.ExecuteAsync(null);
+
+        Assert.Equal(["Relaunch"], order);
     }
 
     [Fact]

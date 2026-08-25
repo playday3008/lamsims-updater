@@ -265,4 +265,19 @@ public class MainWindowBindingTests
     private static MemberInfo? Member(Type type, string name) =>
         type.GetMember(name, BindingFlags.Public | BindingFlags.Instance)
             .FirstOrDefault(m => m is PropertyInfo or FieldInfo);
+
+    [Fact]
+    public void The_unlocker_region_binds_the_relaunch_command_on_the_region_view_model()
+    {
+        // Named separately from the sweep for the same reason as the context menu above: this button
+        // is the only route to an elevated relaunch, and no view test executes it.
+        var region = LoadWindow().Descendants()
+            .Single(e => e.Name.LocalName == "Expander"
+                         && e.Attribute("DataContext")?.Value == "{Binding Unlocker}");
+
+        Assert.Contains(region.Descendants(),
+            e => e.Attribute("Command")?.Value == "{Binding RelaunchElevatedCommand}");
+
+        Assert.NotNull(Member(typeof(UnlockerViewModel), "RelaunchElevatedCommand"));
+    }
 }

@@ -18,6 +18,15 @@ public partial class MainWindow : Window
         // The picker is the one service that needs a window handle, which is the whole reason
         // the view model takes an interface rather than calling a dialog itself.
         _viewModel = new MainViewModel(services with { Pickers = new StoragePickerService(this) });
+
+        // The unlocker's elevated relaunch has already shut down by the time it calls this, so both
+        // guards are set: OnClosing must not run shutdown a second time, it must just close.
+        _viewModel.RequestClose = () =>
+        {
+            _shutdownStarted = true;
+            _shutdownDone = true;
+            Close();
+        };
         DataContext = _viewModel;
     }
 
