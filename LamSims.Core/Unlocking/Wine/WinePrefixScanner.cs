@@ -72,13 +72,18 @@ public sealed class WinePrefixScanner(LauncherHomes homes, string userName,
     internal IReadOnlyList<WinePrefix> Describe(IReadOnlyList<PrefixCandidate> candidates)
     {
         var opened = new List<WinePrefix>();
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var seen = new HashSet<string>(StringComparer.Ordinal);
 
         // Grouped by RESOLVED path, not canonical: ~/.steam/steam is a symlink to
         // <data>/Steam on a real machine, and PathIdentity.Canonical is Path.GetFullPath, which
         // never resolves a link — so canonical-only dedup shows every Steam prefix twice.
+        //
+        // Ordinal, because these are whole paths on a Linux filesystem and "~/Games/Prefix" and
+        // "~/Games/prefix" are two prefixes there. Folding them dropped the second one before it
+        // could become a target, so it could be neither installed into nor removed from — and the
+        // count below reported the survivor as shared by "2 games".
         foreach (var group in candidates.GroupBy(c => Resolve(c.Path) ?? c.Path,
-                                                 StringComparer.OrdinalIgnoreCase))
+                                                 StringComparer.Ordinal))
         {
             var first = group.First();
             var count = group.Count();
@@ -312,7 +317,9 @@ public sealed class WinePrefixScanner(LauncherHomes homes, string userName,
     /// </summary>
     private IEnumerable<string> Libraries(string root)
     {
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // Ordinal for the same reason as Describe: two library paths differing only in case are
+        // two directories here.
+        var seen = new HashSet<string>(StringComparer.Ordinal);
         var resolved = PathIdentity.Canonical(root) ?? root;
         if (seen.Add(resolved)) yield return root;
 

@@ -198,4 +198,25 @@ public class UnlockerInstallRecordTests
 
         Assert.Null(store.Read("/scope/one", ClientKind.EaApp));
     }
+    /// <summary>
+    /// Two scopes differing only in case are two scopes. Keyed with case folded they shared one
+    /// file, so installing the second erased the first's record and the first's removal then had
+    /// nothing to restore from. Both halves are read back, because asserting only the second
+    /// would pass for a store that had thrown the first away.
+    /// </summary>
+    [Fact]
+    public async Task Two_scopes_that_differ_only_in_case_keep_their_own_records()
+    {
+        using var dir = new TempDir();
+        var (store, _) = Build(dir);
+
+        await store.WriteAsync("/scope/Prefix",
+            new UnlockerInstallRecord("/clients/upper", ClientKind.EaApp, true), CancellationToken.None);
+        await store.WriteAsync("/scope/prefix",
+            new UnlockerInstallRecord("/clients/lower", ClientKind.EaApp, true), CancellationToken.None);
+
+        Assert.Equal("/clients/upper", store.Read("/scope/Prefix", ClientKind.EaApp)?.ClientPath);
+        Assert.Equal("/clients/lower", store.Read("/scope/prefix", ClientKind.EaApp)?.ClientPath);
+    }
+
 }

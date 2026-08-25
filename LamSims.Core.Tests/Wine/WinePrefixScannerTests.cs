@@ -132,6 +132,35 @@ public class WinePrefixScannerTests
         Assert.DoesNotContain("need-for-speed", found[0].Environment.Detail);
     }
 
+    /// <summary>
+    /// Two prefixes whose paths differ only in case are two prefixes on a Linux filesystem, and
+    /// each has its own user.reg to override and its own record to undo. Deduplicated together,
+    /// only the first ever became a target: the second could be neither installed into nor removed
+    /// from, and the survivor was mislabelled as shared by "2 games". The label is asserted as well
+    /// as the count, because a Describe that returned two rows but still grouped them would report
+    /// the wrong detail on both.
+    /// </summary>
+    [LinuxFact]
+    public void Two_prefixes_that_differ_only_in_case_are_both_discovered()
+    {
+        using var dir = new TempDir();
+        var upper = Prefix(Path.Combine(dir.Path, "Prefix"));
+        var lower = Prefix(Path.Combine(dir.Path, "prefix"));
+        var notes = new Notes();
+
+        var found = Scanner(dir, notes).Describe([
+            new PrefixCandidate(upper, EnvironmentSource.Wine, "upper", false),
+            new PrefixCandidate(lower, EnvironmentSource.Wine, "lower", false),
+        ]);
+
+        var roots = found.Select(f => f.Root).ToList();
+
+        Assert.Equal(2, found.Count);
+        Assert.Contains(upper, roots);
+        Assert.Contains(lower, roots);
+        Assert.DoesNotContain(found, f => f.Environment.Detail.Contains("games"));
+    }
+
     [LinuxFact]
     public void A_prefix_named_once_keeps_its_own_label()
     {

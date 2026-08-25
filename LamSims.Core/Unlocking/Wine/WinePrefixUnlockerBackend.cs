@@ -389,7 +389,7 @@ public sealed class WinePrefixUnlockerBackend(
 
         return (await inner.DetectTargetsAsync(ct)).Any(
             other => !string.Equals(PathIdentity.Canonical(other.ClientPath) ?? other.ClientPath,
-                                    self, StringComparison.OrdinalIgnoreCase)
+                                    self, StringComparison.Ordinal)
                      && File.Exists(Path.Combine(other.ClientPath,
                                                  EaClientUnlockerBackend.DllName)));
     }

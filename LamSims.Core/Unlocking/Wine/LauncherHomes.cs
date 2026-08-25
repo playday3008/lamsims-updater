@@ -84,7 +84,9 @@ public sealed class LauncherHomes
     /// </summary>
     public IReadOnlyList<LauncherHome> For(EnvironmentSource source)
     {
-        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // Ordinal: a launcher home is a whole path on a Linux filesystem, where two spellings
+        // are two directories.
+        var seen = new HashSet<string>(StringComparer.Ordinal);
         var found = new List<LauncherHome>();
 
         foreach (var home in _homes.Where(h => h.Source == source && Exists(h.Root)))
