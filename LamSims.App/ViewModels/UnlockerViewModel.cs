@@ -107,6 +107,12 @@ public sealed partial class UnlockerViewModel(
         SetBusy(true);
         RequiresElevation = false;
 
+        // Cleared, not left: the row shows the previous run's "Done 9/9" until the first report of
+        // this one arrives, so a second install opens on a finished-looking progress bar.
+        CurrentStep = null;
+        Completed = 0;
+        Total = 0;
+
         // Not Progress<T>: it captures a SynchronizationContext at construction and posts to it, so
         // wrapping dispatcher.Post inside one marshals twice, and under xunit, where there is no
         // context, the callbacks land on the thread pool and the assertions after the awaited

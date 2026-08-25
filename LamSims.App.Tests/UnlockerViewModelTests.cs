@@ -89,16 +89,18 @@ public class UnlockerViewModelTests
     {
         var target = Target();
         var backend = new RecordingUnlockerBackend(target);
-        backend.ToReport.Add(new UnlockerProgress("Stopping the client", 1, 3));
-        backend.ToReport.Add(new UnlockerProgress("Done", 3, 3));
+        // Asymmetric on purpose: a terminal report of 3/3 cannot tell Completed from Total, so
+        // swapping the two assignments in RunAsync would leave this test green.
+        backend.ToReport.Add(new UnlockerProgress("Stopping the client", 1, 7));
+        backend.ToReport.Add(new UnlockerProgress("Done", 5, 7));
         var vm = Build(backend);
         await vm.RefreshAsync(CancellationToken.None);
 
         await vm.Targets[0].InstallCommand.ExecuteAsync(null);
 
         Assert.Equal("Done", vm.CurrentStep);
-        Assert.Equal(3, vm.Completed);
-        Assert.Equal(3, vm.Total);
+        Assert.Equal(5, vm.Completed);
+        Assert.Equal(7, vm.Total);
     }
 
     [Fact]
@@ -357,6 +359,31 @@ public class UnlockerViewModelTests
         hold.SetResult();
         await install;
         Assert.True(drain.IsCompleted);
+    }
+
+    [Fact]
+    public async Task A_second_run_starts_from_zero_rather_than_the_last_run_s_progress()
+    {
+        var backend = new RecordingUnlockerBackend(Target());
+        backend.ToReport.Add(new UnlockerProgress("Done", 4, 4));
+        var vm = Build(backend);
+        await vm.RefreshAsync(CancellationToken.None);
+        await vm.Targets[0].InstallCommand.ExecuteAsync(null);
+        Assert.Equal(4, vm.Completed);
+
+        var hold = new TaskCompletionSource();
+        backend.Hold = hold;
+        backend.ToReport.Clear();
+        var second = vm.Targets[0].InstallCommand.ExecuteAsync(null);
+
+        // Read DURING the second run, before it reports anything of its own: without the reset the
+        // row would still be showing the first run's "Done 4/4".
+        Assert.Equal(0, vm.Completed);
+        Assert.Equal(0, vm.Total);
+        Assert.Null(vm.CurrentStep);
+
+        hold.SetResult();
+        await second;
     }
 }
 
