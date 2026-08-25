@@ -73,6 +73,43 @@ public class ThemeSweepTests
         Assert.Contains("YellowBrush", fromStyles);
     }
 
+    /// <summary>
+    /// Generic family names — the CSS keywords, which are also fontconfig's aliases. Avalonia
+    /// resolves a FontFamily through the platform font manager, and no platform font manager
+    /// knows them: they match nothing and fall through to the default UI face.
+    /// </summary>
+    private static readonly string[] GenericFamilies =
+        ["monospace", "sans-serif", "serif", "cursive", "fantasy", "system-ui", "ui-monospace"];
+
+    /// <summary>
+    /// The log shipped with FontFamily="monospace". It resolved to proportional Noto Sans — so the
+    /// log was never monospaced — and it cost the renderer 363ms a frame against 24ms once the
+    /// family named something real, which is what made the window resize at about 7 FPS. A static
+    /// check, because the runtime one cannot be written portably: proving a family resolved needs
+    /// the real font manager, and the headless one this suite runs on stubs every glyph to the
+    /// same width, under which any family at all measures as monospaced.
+    /// </summary>
+    [Fact]
+    public void No_style_asks_for_a_font_family_no_font_manager_can_resolve()
+    {
+        var setters = XamlSource.Styles.Descendants()
+            .Where(e => e.Name.LocalName == "Setter"
+                        && e.Attribute("Property")?.Value == "FontFamily")
+            .Select(e => e.Attribute("Value")?.Value ?? "")
+            .ToList();
+
+        Assert.NotEmpty(setters);
+
+        var generic = setters
+            .SelectMany(value => value.Split(',', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries))
+            .Where(name => GenericFamilies.Contains(name, StringComparer.OrdinalIgnoreCase))
+            .Select(name => $"Controls.axaml asks for the generic family '{name}'. Avalonia cannot "
+                            + "resolve one: name real families instead, most wanted first.")
+            .ToList();
+
+        Assert.True(generic.Count == 0, string.Join(Environment.NewLine, generic));
+    }
+
     /// <summary>Class names the window applies, whether literally or through a binding.</summary>
     private static HashSet<string> AppliedClasses()
     {

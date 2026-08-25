@@ -14,6 +14,33 @@
     <Setter Property="Foreground" Value="{DynamicResource Subtext0Brush}"/>
   </Style>
 
+  <Style Selector="Border.log">
+    <Setter Property="Background" Value="{DynamicResource MantleBrush}"/>
+    <Setter Property="BorderBrush" Value="{DynamicResource Surface2Brush}"/>
+    <Setter Property="BorderThickness" Value="1"/>
+    <Setter Property="CornerRadius" Value="8"/>
+    <Setter Property="Padding" Value="10"/>
+  </Style>
+
+  <!-- Real family names, never the generic alias "monospace". Avalonia resolves a family through
+       the platform font manager, which does not know fontconfig's aliases: "monospace" matched
+       nothing, fell through to the default UI face, and cost the renderer 363ms a frame against
+       24ms for a name that resolves — measured over 20 visible log lines, a 15x difference, and
+       the reason the window resized at about 7 FPS. It was not even monospaced: it rendered in
+       proportional Noto Sans. First match wins, so this reads Windows, then Linux, then macOS. -->
+  <Style Selector="TextBlock.log-line">
+    <Setter Property="FontFamily" Value="Cascadia Mono, Consolas, DejaVu Sans Mono, Liberation Mono, Noto Sans Mono, Menlo"/>
+    <Setter Property="FontSize" Value="12"/>
+  </Style>
+
+  <Style Selector="TextBlock.log-warning">
+    <Setter Property="Foreground" Value="{DynamicResource YellowBrush}"/>
+  </Style>
+
+  <Style Selector="TextBlock.log-error">
+    <Setter Property="Foreground" Value="{DynamicResource RedBrush}"/>
+  </Style>
+
   <Style Selector="TextBlock.warning">
     <Setter Property="Foreground" Value="{DynamicResource YellowBrush}"/>
   </Style>

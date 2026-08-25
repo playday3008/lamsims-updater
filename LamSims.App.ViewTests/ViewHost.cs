@@ -40,14 +40,28 @@ public sealed class ViewHost : IDisposable
     /// parameter in its own signature.
     /// </summary>
     public static ViewHost Show(PackEntry[] packs, UnlockerService? unlockerService,
-        IUnlockerHost? unlockerHost, IUnlockerAssetSource? unlockerAssets)
+        IUnlockerHost? unlockerHost, IUnlockerAssetSource? unlockerAssets) =>
+        Show(packs, unlockerService, unlockerHost, unlockerAssets, out _);
+
+    /// <summary>
+    /// The log view test needs to write into the same <see cref="AppServices"/> the window was
+    /// built with and see the result rendered, so this hands that instance back rather than
+    /// leaving the caller to build a second, disconnected one. Built on <see cref="Services"/>,
+    /// the one factory both this and the other overloads share, so there remains a single
+    /// construction path rather than two that could drift apart.
+    /// </summary>
+    public static ViewHost Show(out AppServices services) =>
+        Show([], unlockerService: null, unlockerHost: null, unlockerAssets: null, out services);
+
+    private static ViewHost Show(PackEntry[] packs, UnlockerService? unlockerService,
+        IUnlockerHost? unlockerHost, IUnlockerAssetSource? unlockerAssets, out AppServices services)
     {
         var root = Directory.CreateTempSubdirectory("lamsims-view").FullName;
 
         var paths = new AppPaths(Path.Combine(root, "config"));
         paths.EnsureCreated();
 
-        var (services, queue) = Services(paths, unlockerService, unlockerHost, unlockerAssets);
+        (services, var queue) = Services(paths, unlockerService, unlockerHost, unlockerAssets);
 
         var viewModel = new MainViewModel(services, save: (_, _) => Task.CompletedTask);
         viewModel.BuildRows(packs);

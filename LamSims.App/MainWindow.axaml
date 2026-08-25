@@ -187,7 +187,8 @@
                Text="Finishing up — waiting for the current pack to stop…"
                IsVisible="{Binding IsShuttingDown}" />
 
-    <Panel IsEnabled="{Binding !IsShuttingDown}">
+    <Grid ColumnDefinitions="2*,8,*" IsEnabled="{Binding !IsShuttingDown}">
+      <Panel Grid.Column="0">
       <ListBox ItemsSource="{Binding FilteredRows}">
         <ListBox.ItemTemplate>
           <DataTemplate>
@@ -245,7 +246,31 @@
                  HorizontalAlignment="Center" VerticalAlignment="Center"
                  IsVisible="{Binding EmptyStateMessage,
                              Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
-    </Panel>
+      </Panel>
+
+      <Border Grid.Column="2" Classes="log" DataContext="{Binding Log}">
+        <DockPanel>
+          <Button DockPanel.Dock="Bottom" HorizontalAlignment="Right" Margin="0,6,0,0"
+                  Content="Clear" Command="{Binding ClearCommand}" />
+          <ScrollViewer Name="LogScroll" VerticalScrollBarVisibility="Auto">
+            <ItemsControl ItemsSource="{Binding Lines}">
+              <ItemsControl.ItemTemplate>
+                <DataTemplate>
+                  <Grid ColumnDefinitions="Auto,Auto,*" ColumnSpacing="6">
+                    <TextBlock Grid.Column="0" Classes="log-line secondary" Text="{Binding Time}" />
+                    <TextBlock Grid.Column="1" Classes="log-line secondary" Text="{Binding Code}" />
+                    <TextBlock Grid.Column="2" Classes="log-line" Text="{Binding Text}"
+                               Classes.log-warning="{Binding IsWarning}"
+                               Classes.log-error="{Binding IsError}"
+                               TextWrapping="Wrap" />
+                  </Grid>
+                </DataTemplate>
+              </ItemsControl.ItemTemplate>
+            </ItemsControl>
+          </ScrollViewer>
+        </DockPanel>
+      </Border>
+    </Grid>
 
   </DockPanel>
 </Window>

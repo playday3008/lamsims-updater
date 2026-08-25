@@ -3,9 +3,12 @@ using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
 using Xunit;
+using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
+using Avalonia.Threading;
 using LamSims.App;
 using LamSims.App.ViewModels;
+using LamSims.Core.Logging;
 using LamSims.Core.Settings;
 
 namespace LamSims.App.ViewTests;
@@ -31,7 +34,7 @@ public class ShippedWindowTests
         return () => closed;
     }
 
-    private static (MainWindow Window, StubQueue Queue, string Root) Open()
+    private static (MainWindow Window, StubQueue Queue, string Root, AppServices Services) Open()
     {
         var root = Directory.CreateTempSubdirectory("lamsims-shipped").FullName;
 
@@ -45,13 +48,25 @@ public class ShippedWindowTests
         var window = new MainWindow(services);
         window.Show();
 
-        return (window, queue, root);
+        return (window, queue, root, services);
+    }
+
+    /// <summary>
+    /// Headless does not pump on its own. Needed here (rather than <see cref="ViewHost.Pump"/>,
+    /// which is an instance method keyed to a <see cref="ViewHost"/> this class never builds one
+    /// of) because the log column's <c>ScrollViewer</c> only reports a real <c>Extent</c>/
+    /// <c>Viewport</c> after a layout pass has run.
+    /// </summary>
+    private static void Pump(Window window)
+    {
+        Dispatcher.UIThread.RunJobs();
+        window.UpdateLayout();
     }
 
     [AvaloniaFact]
     public void The_shipped_constructor_builds_a_view_model_and_starts_it()
     {
-        var (window, queue, root) = Open();
+        var (window, queue, root, _) = Open();
 
         try
         {
@@ -73,7 +88,7 @@ public class ShippedWindowTests
     [AvaloniaFact]
     public void Closing_defers_until_shutdown_finishes_and_then_closes_for_real()
     {
-        var (window, queue, root) = Open();
+        var (window, queue, root, _) = Open();
 
         try
         {
@@ -106,7 +121,7 @@ public class ShippedWindowTests
     [AvaloniaFact]
     public void A_second_close_while_the_first_is_still_shutting_down_does_not_close_the_window()
     {
-        var (window, queue, root) = Open();
+        var (window, queue, root, _) = Open();
 
         try
         {
@@ -141,6 +156,105 @@ public class ShippedWindowTests
         }
         finally
         {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// The auto-scroll handler MainWindow's real constructor wires up in
+    /// <see cref="MainWindow(AppServices)"/>. Only reachable through that constructor — every
+    /// other test in this project builds the window as <c>new MainWindow { DataContext = vm }</c>,
+    /// which never runs this code at all, per the class doc above.
+    /// </summary>
+    private static ScrollViewer LogScroll(MainWindow window) =>
+        window.FindControl<ScrollViewer>("LogScroll")
+        ?? throw new InvalidOperationException("LogScroll not found in the window's visual tree");
+
+    /// <summary>Enough lines, each on its own row, to make the region taller than its viewport —
+    /// the premise both scroll tests below need before "already at the bottom" or "scrolled away
+    /// from it" means anything.</summary>
+    private static void FillPastOneScreen(AppServices services)
+    {
+        for (var i = 0; i < 200; i++) services.Log.Write(LogLine.Info($"log line {i}"));
+    }
+
+    [AvaloniaFact]
+    public void A_new_line_keeps_the_log_scrolled_to_the_tail_when_already_at_the_bottom()
+    {
+        var (window, _, root, services) = Open();
+
+        try
+        {
+            var scroll = LogScroll(window);
+
+            FillPastOneScreen(services);
+            Pump(window);
+
+            Assert.True(scroll.Extent.Height > scroll.Viewport.Height,
+                "the log never became tall enough to scroll, so this test proves nothing");
+
+            // ScrollToEnd() rather than trusting the burst above already left it there: the point
+            // under test is what a line written WHILE at the bottom does, not what a burst does.
+            scroll.ScrollToEnd();
+            Pump(window);
+
+            services.Log.Write(LogLine.Info("the tail line"));
+            Pump(window);
+
+            // Recomputed AFTER the write, not before: the new line grows Extent, so the bottom
+            // the tail line lives at is further down than where the pre-write bottom was. Checking
+            // against the stale, pre-write threshold would pass even if auto-scroll never fired at
+            // all, since the untouched offset from before the write already satisfied it.
+            var bottomNow = scroll.Extent.Height - scroll.Viewport.Height;
+
+            Assert.True(scroll.Offset.Y >= bottomNow - 4,
+                $"a line written at the bottom did not keep the view on the tail: "
+                + $"offset={scroll.Offset.Y}, bottom={bottomNow}");
+        }
+        finally
+        {
+            var closed = ClosedFlag(window);
+            window.Close();
+            ViewHost.PumpUntil(closed);
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    [AvaloniaFact]
+    public void A_new_line_does_not_yank_the_log_down_when_scrolled_away_from_the_bottom()
+    {
+        var (window, _, root, services) = Open();
+
+        try
+        {
+            var scroll = LogScroll(window);
+
+            FillPastOneScreen(services);
+            Pump(window);
+
+            Assert.True(scroll.Extent.Height > scroll.Viewport.Height,
+                "the log never became tall enough to scroll, so this test proves nothing");
+
+            // The user has scrolled up to read an earlier line.
+            scroll.ScrollToHome();
+            Pump(window);
+
+            var readingOffset = scroll.Offset.Y;
+            Assert.True(readingOffset < scroll.Extent.Height - scroll.Viewport.Height - 4,
+                "test setup did not actually leave the view scrolled away from the bottom");
+
+            services.Log.Write(LogLine.Info("a line written while the user reads upward"));
+            Pump(window);
+
+            Assert.True(Math.Abs(scroll.Offset.Y - readingOffset) < 0.5,
+                $"a line written elsewhere yanked the view down: "
+                + $"was at {readingOffset}, now at {scroll.Offset.Y}");
+        }
+        finally
+        {
+            var closed = ClosedFlag(window);
+            window.Close();
+            ViewHost.PumpUntil(closed);
             Directory.Delete(root, recursive: true);
         }
     }

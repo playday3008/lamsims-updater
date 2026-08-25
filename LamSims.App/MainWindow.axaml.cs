@@ -29,6 +29,16 @@ public partial class MainWindow : Window
             Close();
         };
         DataContext = _viewModel;
+
+        // Only when the user is already at the bottom: yanking the view down while someone is
+        // reading a line further up is worse than not following.
+        _viewModel.Log.Lines.CollectionChanged += (_, _) =>
+        {
+            var scroll = this.FindControl<ScrollViewer>("LogScroll");
+            if (scroll is null) return;
+            if (scroll.Offset.Y >= scroll.Extent.Height - scroll.Viewport.Height - 4)
+                scroll.ScrollToEnd();
+        };
     }
 
     protected override async void OnOpened(EventArgs e)

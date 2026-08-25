@@ -284,4 +284,16 @@ public class MainWindowBindingTests
 
         Assert.NotNull(Member(typeof(UnlockerViewModel), "RelaunchElevatedCommand"));
     }
+
+    [Fact]
+    public void The_log_region_binds_the_clear_command_on_the_log_view_model()
+    {
+        var region = LoadWindow().Descendants()
+            .Single(e => e.Name.LocalName == "Border"
+                         && e.Attribute("DataContext")?.Value == "{Binding Log}");
+
+        Assert.Contains(region.Descendants(),
+                        e => e.Attribute("Command")?.Value == "{Binding ClearCommand}");
+        Assert.NotNull(Member(typeof(LogViewModel), "ClearCommand"));
+    }
 }
