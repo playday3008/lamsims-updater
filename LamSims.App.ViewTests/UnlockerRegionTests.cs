@@ -179,4 +179,29 @@ public class UnlockerRegionTests
 
         Assert.Equal(2, installButtons.Count);
     }
+
+    /// <summary>
+    /// The row template's three TextBlocks, read as rendered. Nothing else in the suite looks at
+    /// them, so a deleted or re-pointed status TextBlock would ship in silence.
+    /// </summary>
+    [AvaloniaFact]
+    public void Each_row_renders_its_name_its_path_and_its_status()
+    {
+        var first = Target("/clients/ea", "EA app", ClientKind.EaApp);
+        var second = Target("/clients/origin", "Origin", ClientKind.Origin);
+        using var host = ShowExpanded(out _, first, second);
+
+        foreach (var target in (UnlockerTarget[])[first, second])
+        {
+            var texts = host.Window.GetVisualDescendants().OfType<TextBlock>()
+                .Where(t => t.DataContext is UnlockerTargetViewModel row
+                            && row.ClientPath == target.ClientPath)
+                .Select(t => t.Text)
+                .ToList();
+
+            Assert.Contains(target.DisplayName, texts);
+            Assert.Contains(target.ClientPath, texts);
+            Assert.Contains("Not installed", texts);
+        }
+    }
 }
