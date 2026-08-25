@@ -556,6 +556,20 @@ public sealed partial class MainViewModel : ObservableObject
 
         IsShuttingDown = true;
 
+        // First, and before anything is torn down: an unlocker operation cannot be cancelled, and
+        // the process exiting inside its File.Copy is the damage the shutdown wait exists to prevent.
+        // Guarded for the same reason as the flush below: this runs under OnClosing's `async void`,
+        // where an escaping exception is an unhandled crash on close.
+        try
+        {
+            await Unlocker.DrainAsync();
+        }
+        catch (Exception e)
+        {
+            Raise(new Banner("unlocker-error",
+                $"The unlocker did not finish cleanly: {e.Message}", BannerKind.Error));
+        }
+
         // This runs from OnClosing's `async void`, where an escaping exception is an unhandled
         // crash on close, and a crash here is the same mid-extract exit the wait above prevents.
         // FlushSettingsNowAsync catches only IOException and UnauthorizedAccessException, so any

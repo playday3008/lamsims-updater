@@ -353,4 +353,32 @@ public class MainViewModelLifecycleTests
             started.TrySetException(e);
         }
     }
+
+    // ---- M1: an unlocker operation cannot be cancelled, so shutdown has to wait for it. Exiting
+    // inside step 7's File.Copy leaves the client a version.dll it cannot load, which detection
+    // then reports as "Installed". ----
+    [Fact(Timeout = 15000)]
+    public async Task Shutdown_waits_for_an_unlocker_operation_still_in_flight()
+    {
+        var backend = new RecordingUnlockerBackend(
+            new LamSims.Core.Unlocking.UnlockerTarget(
+                "test-backend", LamSims.Core.Unlocking.ClientKind.EaApp, "/clients/ea", "EA app"));
+        var hold = new TaskCompletionSource();
+        backend.Hold = hold;
+        var vm = TestHost.ViewModel(out var host,
+            unlockerService: new LamSims.Core.Unlocking.UnlockerService([backend]));
+        using var _h = host;
+        await vm.Unlocker.RefreshAsync(CancellationToken.None);
+        var install = vm.Unlocker.Targets[0].InstallCommand.ExecuteAsync(null);
+        await WaitUntil(() => backend.Calls.Count > 0);
+
+        var shutdown = vm.ShutdownAsync();
+
+        // The pair: shutdown has NOT finished while the operation runs, and it does finish once the
+        // operation is released. The second alone would pass for a shutdown that never waited.
+        Assert.False(shutdown.IsCompleted);
+        hold.SetResult();
+        await install;
+        await shutdown;
+    }
 }

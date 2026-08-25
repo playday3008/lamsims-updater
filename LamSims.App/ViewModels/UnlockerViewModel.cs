@@ -83,11 +83,21 @@ public sealed partial class UnlockerViewModel(
         }
     }
 
+    /// <summary>
+    /// The operation in flight, so shutdown can wait for it. It is not cancellable (see RunAsync),
+    /// and exiting the process midway through step 7 leaves the client a half-written version.dll it
+    /// cannot load, which detection then reports as "Installed".
+    /// </summary>
+    private Task _operation = Task.CompletedTask;
+
+    /// <summary>Completes when no unlocker operation is in flight.</summary>
+    public Task DrainAsync() => _operation;
+
     private Task RunInstallAsync(UnlockerTarget target) =>
-        RunAsync(target, (progress, ct) => service.InstallAsync(target, assets, progress, ct));
+        _operation = RunAsync(target, (progress, ct) => service.InstallAsync(target, assets, progress, ct));
 
     private Task RunRemoveAsync(UnlockerTarget target) =>
-        RunAsync(target, (progress, ct) => service.RemoveAsync(target, progress, ct));
+        _operation = RunAsync(target, (progress, ct) => service.RemoveAsync(target, progress, ct));
 
     private async Task RunAsync(UnlockerTarget target,
         Func<IProgress<UnlockerProgress>, CancellationToken, Task<UnlockerResult>> operation)

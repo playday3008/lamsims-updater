@@ -316,6 +316,26 @@ public class UnlockerViewModelTests
             started.TrySetException(e);
         }
     }
+
+    [Fact]
+    public async Task DrainAsync_completes_only_once_the_operation_has()
+    {
+        var backend = new RecordingUnlockerBackend(Target());
+        var hold = new TaskCompletionSource();
+        backend.Hold = hold;
+        var vm = Build(backend);
+        await vm.RefreshAsync(CancellationToken.None);
+
+        var install = vm.Targets[0].InstallCommand.ExecuteAsync(null);
+        var drain = vm.DrainAsync();
+
+        // The pair: it is still waiting while the operation runs AND it finishes when the operation
+        // does. Asserting only the second would pass for a DrainAsync that never waited at all.
+        Assert.False(drain.IsCompleted);
+        hold.SetResult();
+        await install;
+        Assert.True(drain.IsCompleted);
+    }
 }
 
 /// <summary>
