@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using System.IO.Compression;
 using LamSims.Core.Catalogs;
 using LamSims.Core.Downloading;
+using LamSims.Core.Logging;
 
 namespace LamSims.Core.Installing;
 
@@ -76,6 +77,7 @@ public sealed class ZipInstaller
     private readonly InstallStateStore _state;
     private readonly Func<string, long> _availableBytes;
     private readonly Action<InstallProgress>? _entryWritten;
+    private readonly ILogSink _log;
 
     /// <param name="availableBytes">
     /// Free bytes on the volume holding a path. Defaults to the real measurement; a test supplies
@@ -90,11 +92,13 @@ public sealed class ZipInstaller
     public ZipInstaller(
         InstallStateStore state,
         Func<string, long>? availableBytes = null,
-        Action<InstallProgress>? entryWritten = null)
+        Action<InstallProgress>? entryWritten = null,
+        ILogSink? log = null)
     {
         _state = state;
         _availableBytes = availableBytes ?? DiskSpace.GetAvailableBytes;
         _entryWritten = entryWritten;
+        _log = log ?? NullLogSink.Instance;
     }
 
     private void EnsureSpace(string path, long requiredBytes)
@@ -131,6 +135,8 @@ public sealed class ZipInstaller
 
         try
         {
+            _log.Write(LogLine.Info($"Installing into {gameDirectory}", pack.Code));
+
             EnsureSpace(gameDirectory, pack.RequiredInstallBytes);
 
             var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(gameDirectory));
@@ -265,6 +271,8 @@ public sealed class ZipInstaller
                 }
             }
 
+            _log.Write(LogLine.Info($"Installed {pack.Code}, {written} entries", pack.Code));
+
             var warnings = new List<string>();
 
             try
@@ -300,6 +308,7 @@ public sealed class ZipInstaller
         }
         catch (InsufficientDiskSpaceException e)
         {
+            _log.Write(LogLine.Error($"Install failed: {e.Message}", pack.Code));
             return InstallResult.InsufficientSpace(e.Message);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException
@@ -308,6 +317,7 @@ public sealed class ZipInstaller
             // ArgumentException covers the path APIs, which reject a name rather than failing
             // to use it: a UNC game directory on Windows reaches DriveInfo this way. This
             // method always returns an InstallResult.
+            _log.Write(LogLine.Error($"Install failed: {e.Message}", pack.Code));
             return InstallResult.Failed(e.Message, written);
         }
     }

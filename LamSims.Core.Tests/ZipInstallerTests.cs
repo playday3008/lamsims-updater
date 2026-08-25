@@ -5,19 +5,12 @@ using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
 using System.Runtime.Versioning;
-using LamSims.Core.Catalogs;
 using LamSims.Core.Installing;
 
 namespace LamSims.Core.Tests;
 
 public class ZipInstallerTests
 {
-    private const string Digest = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
-
-    private static PackEntry Pack(long? installedSize = null) => new(
-        "EP01", "The Sims 4 Get to Work", PackType.Expansion, 1024, installedSize, Digest,
-        new[] { new Uri("https://host-a.example.invalid/EP01.zip") }, new[] { "EP01" });
-
     /// <summary>The Sims 4 install directory always pre-exists; the installer requires it to.</summary>
     private static string GameDir(TempDir temp)
     {
@@ -40,7 +33,7 @@ public class ZipInstallerTests
         var archive = ZipBuilder.Create(temp.File("EP01.zip"), ("EP01/a.package", "one"));
         var game = Path.Combine(temp.Path, "Sisms 4");
 
-        var result = await Installer(temp).InstallAsync(Pack(), archive, game, null, CancellationToken.None);
+        var result = await Installer(temp).InstallAsync(ZipFixture.Pack(), archive, game, null, CancellationToken.None);
 
         Assert.Equal(InstallOutcome.Failed, result.Outcome);
         Assert.Contains(game, result.Error);
@@ -59,7 +52,7 @@ public class ZipInstallerTests
             ("Delta/EP01/patch.bin", "three"));
 
         var result = await Installer(temp).InstallAsync(
-            Pack(), archive, game, null, CancellationToken.None);
+            ZipFixture.Pack(), archive, game, null, CancellationToken.None);
 
         Assert.Equal(InstallOutcome.Installed, result.Outcome);
         Assert.Equal(3, result.EntriesWritten);
@@ -75,7 +68,7 @@ public class ZipInstallerTests
         var archive = ZipBuilder.Create(temp.File("EP01.zip"), ("EP01/a.package", "one"));
 
         await Installer(temp).InstallAsync(
-            Pack(), archive, GameDir(temp), null, CancellationToken.None);
+            ZipFixture.Pack(), archive, GameDir(temp), null, CancellationToken.None);
 
         Assert.False(File.Exists(archive));
     }
@@ -90,7 +83,7 @@ public class ZipInstallerTests
 
         var archive = ZipBuilder.Create(temp.File("EP01.zip"), ("EP01/a.package", "new"));
 
-        var result = await Installer(temp).InstallAsync(Pack(), archive, game, null, CancellationToken.None);
+        var result = await Installer(temp).InstallAsync(ZipFixture.Pack(), archive, game, null, CancellationToken.None);
 
         Assert.Equal(InstallOutcome.Installed, result.Outcome);
         Assert.Equal("new", await File.ReadAllTextAsync(Path.Combine(game, "EP01", "a.package")));
@@ -105,7 +98,7 @@ public class ZipInstallerTests
             ("EP01/a.package", "one"),
             ("../escaped.package", "hostile"));
 
-        var result = await Installer(temp).InstallAsync(Pack(), archive, game, null, CancellationToken.None);
+        var result = await Installer(temp).InstallAsync(ZipFixture.Pack(), archive, game, null, CancellationToken.None);
 
         Assert.Equal(InstallOutcome.Failed, result.Outcome);
         Assert.Contains("../escaped.package", result.Error);
@@ -132,7 +125,7 @@ public class ZipInstallerTests
         await cancellation.CancelAsync();
 
         var result = await Installer(temp).InstallAsync(
-            Pack(), archive, root, null, cancellation.Token);
+            ZipFixture.Pack(), archive, root, null, cancellation.Token);
 
         Assert.Equal(InstallOutcome.Cancelled, result.Outcome);
         Assert.Equal(0, result.EntriesWritten);
@@ -148,7 +141,7 @@ public class ZipInstallerTests
         var game = GameDir(temp);
         var archive = ZipBuilder.Create(temp.File("EP01.zip"), ("../game-evil/pwned.package", "hostile"));
 
-        var result = await Installer(temp).InstallAsync(Pack(), archive, game, null, CancellationToken.None);
+        var result = await Installer(temp).InstallAsync(ZipFixture.Pack(), archive, game, null, CancellationToken.None);
 
         Assert.Equal(InstallOutcome.Failed, result.Outcome);
         Assert.Contains("../game-evil/pwned.package", result.Error);
@@ -163,7 +156,7 @@ public class ZipInstallerTests
         var archive = ZipBuilder.Create(temp.File("EP01.zip"), ("/absolute.package", "hostile"));
 
         var result = await Installer(temp).InstallAsync(
-            Pack(), archive, GameDir(temp), null, CancellationToken.None);
+            ZipFixture.Pack(), archive, GameDir(temp), null, CancellationToken.None);
 
         Assert.Equal(InstallOutcome.Failed, result.Outcome);
         Assert.Contains("/absolute.package", result.Error);
@@ -177,7 +170,7 @@ public class ZipInstallerTests
         var game = GameDir(temp);
 
         var result = await Installer(temp).InstallAsync(
-            Pack(installedSize: long.MaxValue), archive, game, null, CancellationToken.None);
+            ZipFixture.Pack(installedSize: long.MaxValue), archive, game, null, CancellationToken.None);
 
         Assert.Equal(InstallOutcome.InsufficientSpace, result.Outcome);
         Assert.False(File.Exists(Path.Combine(game, "EP01", "a.package")));
@@ -196,10 +189,10 @@ public class ZipInstallerTests
         var archive = ZipBuilder.Create(temp.File("EP01.zip"), ("EP01/a.package", new string('z', 4096)));
         var game = GameDir(temp);
 
-        // Above Pack()'s 1024-byte archive size, below the 4096 bytes extraction will write.
+        // Above ZipFixture.Pack()'s 1024-byte archive size, below the 4096 bytes extraction will write.
         var installer = new ZipInstaller(Store(temp), _ => 2048);
 
-        var result = await installer.InstallAsync(Pack(), archive, game, null, CancellationToken.None);
+        var result = await installer.InstallAsync(ZipFixture.Pack(), archive, game, null, CancellationToken.None);
 
         Assert.Equal(InstallOutcome.InsufficientSpace, result.Outcome);
         Assert.False(File.Exists(Path.Combine(game, "EP01", "a.package")));
@@ -220,7 +213,7 @@ public class ZipInstallerTests
         var progress = new SyncProgress<InstallProgress>(reports.Add);
 
         await Installer(temp).InstallAsync(
-            Pack(), archive, GameDir(temp), progress, CancellationToken.None);
+            ZipFixture.Pack(), archive, GameDir(temp), progress, CancellationToken.None);
 
         Assert.Equal(2, reports.Count);
         Assert.Equal("EP01", reports[^1].Code);
@@ -236,7 +229,7 @@ public class ZipInstallerTests
         var game = GameDir(temp);
         var archive = ZipBuilder.Create(temp.File("EP01.zip"), ("EP01/empty/", ""));
 
-        var result = await Installer(temp).InstallAsync(Pack(), archive, game, null, CancellationToken.None);
+        var result = await Installer(temp).InstallAsync(ZipFixture.Pack(), archive, game, null, CancellationToken.None);
 
         Assert.Equal(InstallOutcome.Installed, result.Outcome);
         Assert.True(Directory.Exists(Path.Combine(game, "EP01", "empty")));
@@ -254,7 +247,7 @@ public class ZipInstallerTests
         var progress = new SyncProgress<InstallProgress>(_ => cancellation.Cancel());
 
         var result = await Installer(temp).InstallAsync(
-            Pack(), archive, GameDir(temp), progress, cancellation.Token);
+            ZipFixture.Pack(), archive, GameDir(temp), progress, cancellation.Token);
 
         Assert.Equal(InstallOutcome.Cancelled, result.Outcome);
         Assert.Equal(1, result.EntriesWritten);
@@ -272,7 +265,7 @@ public class ZipInstallerTests
         using var temp = new TempDir();
         var archive = ZipBuilder.Create(temp.File("EP01.zip"), ("EP01/a.package", "one"));
 
-        var result = await Installer(temp).InstallAsync(Pack(), archive, "  ", null, CancellationToken.None);
+        var result = await Installer(temp).InstallAsync(ZipFixture.Pack(), archive, "  ", null, CancellationToken.None);
 
         Assert.Equal(InstallOutcome.Failed, result.Outcome);
         Assert.Contains("gameDirectory", result.Error);
@@ -287,7 +280,7 @@ public class ZipInstallerTests
         await File.WriteAllTextAsync(archive, "this is not a zip file");
 
         var result = await Installer(temp).InstallAsync(
-            Pack(), archive, GameDir(temp), null, CancellationToken.None);
+            ZipFixture.Pack(), archive, GameDir(temp), null, CancellationToken.None);
 
         Assert.Equal(InstallOutcome.Failed, result.Outcome);
         Assert.NotNull(result.Error);
@@ -300,7 +293,7 @@ public class ZipInstallerTests
         using var temp = new TempDir();
 
         var result = await Installer(temp).InstallAsync(
-            Pack(), temp.File("absent.zip"), GameDir(temp), null, CancellationToken.None);
+            ZipFixture.Pack(), temp.File("absent.zip"), GameDir(temp), null, CancellationToken.None);
 
         Assert.Equal(InstallOutcome.Failed, result.Outcome);
         Assert.Contains("absent.zip", result.Error);
@@ -314,7 +307,7 @@ public class ZipInstallerTests
         Directory.CreateDirectory(Path.Combine(game, "EP01", "a.package"));
         var archive = ZipBuilder.Create(temp.File("EP01.zip"), ("EP01/a.package", "one"));
 
-        var result = await Installer(temp).InstallAsync(Pack(), archive, game, null, CancellationToken.None);
+        var result = await Installer(temp).InstallAsync(ZipFixture.Pack(), archive, game, null, CancellationToken.None);
 
         Assert.Equal(InstallOutcome.Failed, result.Outcome);
         Assert.Contains("EP01/a.package", result.Error);
@@ -329,7 +322,7 @@ public class ZipInstallerTests
             ("EP01/a", "one"),
             ("EP01/a/b.package", "two"));
 
-        var result = await Installer(temp).InstallAsync(Pack(), archive, game, null, CancellationToken.None);
+        var result = await Installer(temp).InstallAsync(ZipFixture.Pack(), archive, game, null, CancellationToken.None);
 
         Assert.Equal(InstallOutcome.Failed, result.Outcome);
         Assert.Contains("EP01/a/b.package", result.Error);
@@ -342,7 +335,7 @@ public class ZipInstallerTests
         var archive = ZipBuilder.Create(temp.File("EP01.zip"), ("EP01/a\0b.package", "hostile"));
 
         var result = await Installer(temp).InstallAsync(
-            Pack(), archive, GameDir(temp), null, CancellationToken.None);
+            ZipFixture.Pack(), archive, GameDir(temp), null, CancellationToken.None);
 
         Assert.Equal(InstallOutcome.Failed, result.Outcome);
     }
@@ -367,7 +360,7 @@ public class ZipInstallerTests
         try
         {
             File.SetUnixFileMode(archiveDir, lockedMode);
-            var result = await Installer(temp).InstallAsync(Pack(), archive, game, null, CancellationToken.None);
+            var result = await Installer(temp).InstallAsync(ZipFixture.Pack(), archive, game, null, CancellationToken.None);
 
             Assert.Equal(InstallOutcome.Installed, result.Outcome);
             Assert.Equal(1, result.EntriesWritten);
@@ -401,7 +394,7 @@ public class ZipInstallerTests
             entryWritten: _ => throw new InvalidOperationException("callback said no"));
 
         var result = await installer.InstallAsync(
-            Pack(), archive, game, null, CancellationToken.None);
+            ZipFixture.Pack(), archive, game, null, CancellationToken.None);
 
         Assert.Equal(InstallOutcome.Failed, result.Outcome);
         Assert.Contains("callback said no", result.Error);
@@ -417,7 +410,7 @@ public class ZipInstallerTests
         var archive = ZipBuilder.Create(temp.File("EP01.zip"), ("EP01/a.package", "one"));
 
         var result = await new ZipInstaller(store).InstallAsync(
-            Pack(), archive, game, null, CancellationToken.None);
+            ZipFixture.Pack(), archive, game, null, CancellationToken.None);
 
         Assert.Equal(InstallOutcome.Installed, result.Outcome);
         Assert.Empty(result.Warnings);
@@ -425,7 +418,7 @@ public class ZipInstallerTests
         var marker = store.TryLoad(game, "EP01");
         Assert.NotNull(marker);
         Assert.Equal(InstallMarkerStatus.Installed, marker.Status);
-        Assert.Equal(Digest, marker.ArchiveSha256);
+        Assert.Equal(ZipFixture.Digest, marker.ArchiveSha256);
         Assert.Equal("EP01", marker.Code);
     }
 
@@ -445,7 +438,7 @@ public class ZipInstallerTests
         var progress = new SyncProgress<InstallProgress>(_ => cancellation.Cancel());
 
         var result = await new ZipInstaller(store).InstallAsync(
-            Pack(), archive, game, progress, cancellation.Token);
+            ZipFixture.Pack(), archive, game, progress, cancellation.Token);
 
         Assert.Equal(InstallOutcome.Cancelled, result.Outcome);
         Assert.Equal(InstallMarkerStatus.Installing, store.TryLoad(game, "EP01")!.Status);
@@ -462,7 +455,7 @@ public class ZipInstallerTests
         var archive = ZipBuilder.Create(temp.File("EP01.zip"), ("../escaped.package", "hostile"));
 
         var result = await new ZipInstaller(store).InstallAsync(
-            Pack(), archive, game, null, CancellationToken.None);
+            ZipFixture.Pack(), archive, game, null, CancellationToken.None);
 
         Assert.Equal(InstallOutcome.Failed, result.Outcome);
         Assert.Null(store.TryLoad(game, "EP01"));
@@ -477,7 +470,7 @@ public class ZipInstallerTests
         var archive = ZipBuilder.Create(temp.File("EP01.zip"), ("EP01/a.package", "one"));
 
         var result = await new ZipInstaller(store).InstallAsync(
-            Pack(installedSize: long.MaxValue), archive, game, null, CancellationToken.None);
+            ZipFixture.Pack(installedSize: long.MaxValue), archive, game, null, CancellationToken.None);
 
         Assert.Equal(InstallOutcome.InsufficientSpace, result.Outcome);
         Assert.Null(store.TryLoad(game, "EP01"));
@@ -491,7 +484,7 @@ public class ZipInstallerTests
         var store = Store(temp);
 
         var result = await new ZipInstaller(store).InstallAsync(
-            Pack(), temp.File("absent.zip"), game, null, CancellationToken.None);
+            ZipFixture.Pack(), temp.File("absent.zip"), game, null, CancellationToken.None);
 
         Assert.Equal(InstallOutcome.Failed, result.Outcome);
         Assert.Null(store.TryLoad(game, "EP01"));
@@ -507,7 +500,7 @@ public class ZipInstallerTests
         var store = Store(temp);
 
         await new ZipInstaller(store).InstallAsync(
-            Pack(), ZipBuilder.Create(temp.File("first.zip"), ("EP01/a.package", "one")),
+            ZipFixture.Pack(), ZipBuilder.Create(temp.File("first.zip"), ("EP01/a.package", "one")),
             game, null, CancellationToken.None);
 
         Assert.Equal(InstallMarkerStatus.Installed, store.TryLoad(game, "EP01")!.Status);
@@ -519,7 +512,7 @@ public class ZipInstallerTests
         using var cancellation = new CancellationTokenSource();
         var progress = new SyncProgress<InstallProgress>(_ => cancellation.Cancel());
 
-        await new ZipInstaller(store).InstallAsync(Pack(), second, game, progress, cancellation.Token);
+        await new ZipInstaller(store).InstallAsync(ZipFixture.Pack(), second, game, progress, cancellation.Token);
 
         Assert.Equal(InstallMarkerStatus.Installing, store.TryLoad(game, "EP01")!.Status);
     }
@@ -539,7 +532,7 @@ public class ZipInstallerTests
         var archive = ZipBuilder.Create(temp.File("EP01.zip"), ("EP01/a.package", "one"));
 
         var result = await new ZipInstaller(store).InstallAsync(
-            Pack(), archive, game, null, CancellationToken.None);
+            ZipFixture.Pack(), archive, game, null, CancellationToken.None);
 
         Assert.Equal(InstallOutcome.Failed, result.Outcome);
         Assert.Equal(0, result.EntriesWritten);
@@ -574,7 +567,7 @@ public class ZipInstallerTests
         try
         {
             var result = await new ZipInstaller(store).InstallAsync(
-                Pack(), archive, game, progress, CancellationToken.None);
+                ZipFixture.Pack(), archive, game, progress, CancellationToken.None);
 
             Assert.Equal(InstallOutcome.Installed, result.Outcome);
             Assert.Equal(1, result.EntriesWritten);

@@ -11,6 +11,7 @@ using LamSims.Core;
 using LamSims.Core.Catalogs;
 using LamSims.Core.Downloading;
 using LamSims.Core.Installing;
+using LamSims.Core.Logging;
 
 namespace LamSims.Core.Tests;
 
@@ -36,7 +37,8 @@ public class PackWorkflowTests
         return path;
     }
 
-    private static PackWorkflow Workflow(TempDir temp, HttpClient client, out DownloadPaths paths)
+    private static PackWorkflow Workflow(
+        TempDir temp, HttpClient client, out DownloadPaths paths, ILogSink? log = null)
     {
         paths = new DownloadPaths(Path.Combine(temp.Path, "downloads"));
         var options = new DownloadOptions { Connections = 2 };
@@ -44,7 +46,7 @@ public class PackWorkflowTests
         return new PackWorkflow(
             new SegmentedDownloader(client, paths, options, RetryOptions.Default, new FakeDelayProvider()),
             new ZipInstaller(new InstallStateStore(Path.Combine(temp.Path, "installs"))),
-            paths);
+            paths, log);
     }
 
     /// <summary>
@@ -53,10 +55,10 @@ public class PackWorkflowTests
     /// real but unexercised unless a test knocks the record aside.
     /// </summary>
     private static async Task<(PackWorkflow Workflow, PackEntry Pack, string GameDir, DownloadPaths Paths, byte[] ArchiveBytes)>
-        BuildWorkflowWithArchiveOnDiskAsync(TempDir temp, HttpClient client)
+        BuildWorkflowWithArchiveOnDiskAsync(TempDir temp, HttpClient client, ILogSink? log = null)
     {
         var archive = BuildArchive(temp);
-        var workflow = Workflow(temp, client, out var paths);
+        var workflow = Workflow(temp, client, out var paths, log);
         paths.EnsureCreated();
         await File.WriteAllBytesAsync(paths.ArchiveFile("EP01"), archive);
 
@@ -91,8 +93,9 @@ public class PackWorkflowTests
         using var temp = new TempDir();
         using var client = new HttpClient();
         var phases = new List<PackPhase>();
+        var log = new RecordingLogSink();
 
-        var (workflow, pack, gameDir, paths, _) = await BuildWorkflowWithArchiveOnDiskAsync(temp, client);
+        var (workflow, pack, gameDir, paths, _) = await BuildWorkflowWithArchiveOnDiskAsync(temp, client, log);
         // Archive present and correct, but no <code>.zip.json beside it.
         File.Delete(paths.ArchiveDigestFile(pack.Code));
 
@@ -100,6 +103,7 @@ public class PackWorkflowTests
             pack, gameDir, new SyncProgress<PackPhase>(phases.Add), null, null, CancellationToken.None);
 
         Assert.Equal(new[] { PackPhase.Verifying, PackPhase.Installing }, phases);
+        Assert.True(log.Logged("Verifying the archive", LogSeverity.Info));
     }
 
     [Fact]
@@ -108,14 +112,17 @@ public class PackWorkflowTests
         using var temp = new TempDir();
         using var client = new HttpClient();
         var phases = new List<PackPhase>();
+        var log = new RecordingLogSink();
 
-        var (workflow, pack, gameDir, _, _) = await BuildWorkflowWithArchiveOnDiskAsync(temp, client);
+        var (workflow, pack, gameDir, _, _) = await BuildWorkflowWithArchiveOnDiskAsync(temp, client, log);
         // BuildWorkflowWithArchiveOnDiskAsync leaves a matching record in place.
 
         await workflow.RunAsync(
             pack, gameDir, new SyncProgress<PackPhase>(phases.Add), null, null, CancellationToken.None);
 
         Assert.Equal(new[] { PackPhase.Installing }, phases);
+        Assert.True(log.Logged(
+            "Trusting the existing archive, its digest record still matches", LogSeverity.Info));
     }
 
     [Fact]
@@ -275,8 +282,9 @@ public class PackWorkflowTests
 
         await using var server = await TestFileServer.StartAsync(archive);
         using var client = new HttpClient();
+        var log = new RecordingLogSink();
 
-        var workflow = Workflow(temp, client, out var paths);
+        var workflow = Workflow(temp, client, out var paths, log);
         paths.EnsureCreated();
 
         var impostor = new byte[archive.Length];
@@ -294,6 +302,7 @@ public class PackWorkflowTests
         // Quarantined rather than overwritten: the user's file is not deleted because we
         // disagree about its hash, and the mismatch leaves evidence.
         Assert.True(File.Exists(paths.QuarantineFile("EP01")));
+        Assert.True(log.Logged("Archive quarantined:", LogSeverity.Warning));
     }
 
     [Fact]

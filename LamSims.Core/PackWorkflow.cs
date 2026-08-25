@@ -6,6 +6,7 @@ using System.Threading.Tasks;
 using LamSims.Core.Catalogs;
 using LamSims.Core.Downloading;
 using LamSims.Core.Installing;
+using LamSims.Core.Logging;
 
 namespace LamSims.Core;
 
@@ -40,13 +41,16 @@ public sealed class PackWorkflow : IPackRunner
     private readonly ZipInstaller _installer;
     private readonly DownloadPaths _paths;
     private readonly ArchiveDigestStore _digests;
+    private readonly ILogSink _log;
 
-    public PackWorkflow(SegmentedDownloader downloader, ZipInstaller installer, DownloadPaths paths)
+    public PackWorkflow(
+        SegmentedDownloader downloader, ZipInstaller installer, DownloadPaths paths, ILogSink? log = null)
     {
         _downloader = downloader;
         _installer = installer;
         _paths = paths;
         _digests = new ArchiveDigestStore(paths);
+        _log = log ?? NullLogSink.Instance;
     }
 
     public async Task<PackWorkflowResult> RunAsync(
@@ -125,12 +129,15 @@ public sealed class PackWorkflow : IPackRunner
             && record.Length == info.Length
             && record.LastWriteTimeUtc == new DateTimeOffset(info.LastWriteTimeUtc, TimeSpan.Zero))
         {
+            _log.Write(LogLine.Info(
+                "Trusting the existing archive, its digest record still matches", pack.Code));
             return ArchiveTrust.Trusted;
         }
 
         string actual;
         try
         {
+            _log.Write(LogLine.Info("Verifying the archive", pack.Code));
             Report(phase, PackPhase.Verifying);
             actual = await Sha256Verifier.ComputeAsync(archive, ct);
         }
@@ -147,6 +154,8 @@ public sealed class PackWorkflow : IPackRunner
 
         if (!string.Equals(actual, pack.Sha256, StringComparison.OrdinalIgnoreCase))
         {
+            var reason = $"digest mismatch (expected {pack.Sha256[..8]}…, got {actual[..8]}…)";
+            _log.Write(LogLine.Warning($"Archive quarantined: {reason}", pack.Code));
             Quarantine(pack.Code, archive, warnings);
             return ArchiveTrust.NeedsDownload;
         }
