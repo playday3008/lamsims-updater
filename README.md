@@ -35,6 +35,17 @@ Linux it is an install inside a Wine or Proton prefix. There is no unlocker on m
 
    On macOS you can still download and install packs, the unlocker part is just hidden.
 1. Run the app.
+1. Paste this into the `Catalog:` box at the top and hit Load:
+
+   ```
+   https://raw.githubusercontent.com/playday3008/lamsims-updater/ng/catalog.live.json
+   ```
+
+   That is the pack list, so the table stays empty until it loads. You only do this once — the app
+   saves it and picks it up again next time you start.
+
+   It also keeps a copy of the last list it loaded. If GitHub is unreachable later, hit "Use cached
+   copy" and carry on with that one.
 1. Select Browse and select your Sims 4 Base Game folder (Usually located in C:\Program Files\Electronic Arts\The Sims 4)
 1. Select Scan and wait for the app to find your DLCs and Packs that you have already downloaded.
 1. Select DLCs you want to download and install.
