@@ -94,7 +94,8 @@ public sealed class ViewHost : IDisposable
             unlockerNotes ?? new UnlockerNotes(),
             downloadPaths,
             new DownloadOptions(),
-            new OrphanCleaner(downloadPaths)), queue);
+            new OrphanCleaner(downloadPaths),
+            new LogRelay(new StubClock())), queue);
     }
 
     /// <summary>

@@ -10,6 +10,7 @@ using CommunityToolkit.Mvvm.Input;
 using LamSims.App.Services;
 using LamSims.Core.Catalogs;
 using LamSims.Core.Downloading;
+using LamSims.Core.Logging;
 using LamSims.Core.Queueing;
 using LamSims.Core.Scanning;
 using LamSims.Core.Settings;
@@ -22,6 +23,7 @@ public sealed partial class MainViewModel : ObservableObject
     private readonly Func<CancellationToken, Task<CatalogResolution>> _resolve;
     private readonly Func<CatalogSource, CancellationToken, Task<CatalogResolution>> _load;
     private readonly Func<AppSettings, CancellationToken, Task> _save;
+    private readonly ProgressTicker _ticker;
 
     public MainViewModel(
         AppServices services,
@@ -35,6 +37,12 @@ public sealed partial class MainViewModel : ObservableObject
         _load = load ?? services.Catalog.LoadAsync;
         _save = save ?? services.Settings.SaveAsync;
 
+        // Built here, not in Composition: MainWindow and the tests replace services.Dispatcher
+        // with `services with { Dispatcher = … }` after Build returns, and a LogViewModel built
+        // in Composition would have captured the dispatcher that gets thrown away.
+        Log = new LogViewModel(services.Log, services.Dispatcher);
+        _ticker = new ProgressTicker(services.Clock, services.Log);
+
         // Seeded without going through the property setters: those queue a save and, for the
         // download directory, move the engine. A value the user already chose is neither a
         // change nor a reason to write it back.
@@ -46,7 +54,7 @@ public sealed partial class MainViewModel : ObservableObject
 
         if (services.SettingsError is { } settingsError)
         {
-            Banners.Add(new Banner("settings-load",
+            Raise(new Banner("settings-load",
                 $"Your settings could not be fully applied and defaults are in use: {settingsError}",
                 BannerKind.Warning));
         }
@@ -63,6 +71,8 @@ public sealed partial class MainViewModel : ObservableObject
     }
 
     public UnlockerViewModel Unlocker { get; }
+
+    public LogViewModel Log { get; }
 
     /// <summary>
     /// Set by the window: closing it is the view's business, but the unlocker's elevated relaunch is
@@ -325,6 +335,15 @@ public sealed partial class MainViewModel : ObservableObject
     {
         Dismiss(banner.Id);
         Banners.Add(banner);
+
+        // A banner is the one thing a user is guaranteed to have seen; the log keeps it after the
+        // banner itself is dismissed.
+        _services.Log.Write(banner.Kind switch
+        {
+            BannerKind.Error => LogLine.Error(banner.Text),
+            BannerKind.Warning => LogLine.Warning(banner.Text),
+            _ => LogLine.Info(banner.Text),
+        });
     }
 
     private void Dismiss(string id)
@@ -496,6 +515,8 @@ public sealed partial class MainViewModel : ObservableObject
         BrowseDownloadsCommand.NotifyCanExecuteChanged();
 
         ApplyQueueState(update.State);
+
+        foreach (var item in update.Items) _ticker.Observe(item);
 
         // Every update carries every item, so a completion echoes for the rest of the session
         // and the set below is what stops it rescanning each time. The set also has to be

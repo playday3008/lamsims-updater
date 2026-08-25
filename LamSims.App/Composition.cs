@@ -72,23 +72,30 @@ public static class Composition
         var installState = new InstallStateStore(paths.InstallStateDirectory);
 
         var effectiveDelays = delays ?? new SystemDelayProvider();
+        var clock = new SystemClock();
+
+        // The relay Core writes into and MainViewModel's LogViewModel later drains. Built here,
+        // with no dispatcher, for the same reason LogRelay's own doc gives: it must outlive the
+        // Dispatcher/Pickers members MainWindow and the tests replace with `services with { … }`
+        // after Build returns.
+        var log = new LogRelay(clock);
 
         var downloader = new SegmentedDownloader(
-            http, downloadPaths, options, RetryOptions.Default, effectiveDelays);
-        var installer = new ZipInstaller(installState);
-        var workflow = new PackWorkflow(downloader, installer, downloadPaths);
+            http, downloadPaths, options, RetryOptions.Default, effectiveDelays, log);
+        var installer = new ZipInstaller(installState, log: log);
+        var workflow = new PackWorkflow(downloader, installer, downloadPaths, log);
         var queue = new PackQueue(workflow, downloadPaths);
 
         // The unlocker must not create its own HttpClient: it fetches over the same one the
         // catalog and the queue use, so a test that redirects `http` redirects it too.
         var unlockerHost = new WindowsUnlockerHost();
-        var unlockerAssets = new StaticUnlockerAssetSource(http, downloadPaths);
+        var unlockerAssets = new StaticUnlockerAssetSource(http, downloadPaths, log: log);
         var unlockerNotes = new UnlockerNotes();
 
         // Both backends are registered and each reports IsSupported for its own platform, so the
         // service asks only the one that can work here.
         var unlockerBackend = new EaClientUnlockerBackend(
-            unlockerHost, new UnlockerPaths(), paths, effectiveDelays);
+            unlockerHost, new UnlockerPaths(), paths, effectiveDelays, log: log);
 
         // The home directory and both XDG values are read HERE, at the edge, and injected: nothing
         // under Unlocking/Wine calls Environment, which is what makes discovery testable. The
@@ -102,7 +109,7 @@ public static class Composition
                 Environment.GetEnvironmentVariable("XDG_DATA_HOME"),
                 Environment.GetEnvironmentVariable("WINEPREFIX")),
             paths, effectiveDelays, new WineProcesses(), Environment.UserName,
-            () => settings.WinePrefix, unlockerNotes);
+            () => settings.WinePrefix, unlockerNotes, log);
 
         var unlockerService = new UnlockerService([unlockerBackend, wineBackend]);
 
@@ -111,12 +118,12 @@ public static class Composition
             settingsStore,
             settings,
             Combine(loaded.Error, faults),
-            new CatalogLoader(http, paths),
+            new CatalogLoader(http, paths, log: log),
             installState,
             new PackQueueController(queue),
             new AvaloniaUiDispatcher(),
             NullPickers.Instance,      // the window replaces this; it owns the TopLevel
-            new SystemClock(),
+            clock,
             commandLineCatalog,
             unlockerService,
             unlockerHost,
@@ -124,7 +131,8 @@ public static class Composition
             unlockerNotes,
             downloadPaths,
             options,
-            new OrphanCleaner(downloadPaths));
+            new OrphanCleaner(downloadPaths),
+            log);
     }
 
     private static bool TryCreate(string root, Action create, List<string> faults)

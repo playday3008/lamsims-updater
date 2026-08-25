@@ -29,4 +29,5 @@ public sealed record AppServices(
     UnlockerNotes UnlockerNotes,
     DownloadPaths DownloadPaths,
     DownloadOptions DownloadOptions,
-    OrphanCleaner Orphans);
+    OrphanCleaner Orphans,
+    LogRelay Log);

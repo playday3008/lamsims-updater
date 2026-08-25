@@ -95,7 +95,8 @@ public sealed class TestHost : IDisposable
             unlockerNotes ?? new UnlockerNotes(),
             downloadPaths,
             downloadOptions,
-            new OrphanCleaner(downloadPaths));
+            new OrphanCleaner(downloadPaths),
+            new LogRelay(clock));
 
         host = new TestHost
         {

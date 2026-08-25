@@ -136,6 +136,14 @@ public class EndToEndTests
             Assert.Null(vm.Rows[0].QueueState);      // the rescan cleared the terminal overlay
             Assert.Null(vm.Rows[0].CurrentEntry);    // and the sticky entry is blanked
             Assert.Equal(0, vm.PendingCount);
+
+            // The end-to-end proof CompositionTests.cs's relay test cannot give: these two lines
+            // exist nowhere but inside SegmentedDownloader.DownloadAsync and
+            // ZipInstaller.InstallAsync (LamSims.Core), so their presence in vm.Log.Lines means
+            // the ILogSink Composition.Build handed those two constructors really is the same
+            // LogRelay this MainViewModel drains, not a look-alike neither side ever writes to.
+            Assert.Contains(vm.Log.Lines, l => l.Text.StartsWith("Fetching "));
+            Assert.Contains(vm.Log.Lines, l => l.Code == "EP01" && l.Text.StartsWith("Installed EP01"));
         }
         finally
         {
@@ -217,6 +225,13 @@ public class EndToEndTests
             // "Verifying" alone passes even if the ladder regressed to re-downloading every
             // time, since a fresh download never reports Verifying either.
             Assert.Equal(0, server.RequestCount);
+
+            // PackWorkflow.ClassifyAsync is the only place that writes this exact line
+            // (LamSims.Core/PackWorkflow.cs:132-133), and RequestCount == 0 above rules out
+            // SegmentedDownloader ever having run, so this line can only have reached vm.Log
+            // through the relay Composition.Build gave PackWorkflow directly.
+            Assert.Contains(vm.Log.Lines,
+                l => l.Code == "EP01" && l.Text.Contains("Trusting the existing archive"));
         }
         finally
         {

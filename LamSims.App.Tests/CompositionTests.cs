@@ -1,9 +1,15 @@
 using System;
 using System.IO;
+using System.Linq;
+using System.Reflection;
+using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
 using System.Text.Json;
 using LamSims.App;
+using LamSims.App.ViewModels;
+using LamSims.Core.Logging;
+using LamSims.Core.Unlocking;
 
 namespace LamSims.App.Tests;
 
@@ -122,5 +128,136 @@ public class CompositionTests
         {
             Directory.Delete(root, recursive: true);
         }
+    }
+
+    /// <summary>
+    /// Pins the <c>MainViewModel</c>-side half of the wiring only: <c>Log</c> must be built over
+    /// the exact <see cref="LogRelay"/> instance carried on the <see cref="AppServices"/> it was
+    /// given — including after a test or <c>MainWindow</c> replaces other members with
+    /// <c>services with { Dispatcher = … }</c> — rather than over a freshly constructed relay of
+    /// its own. A <c>MainViewModel</c> that built its own would show an empty log forever no
+    /// matter what Core wrote.
+    ///
+    /// It does NOT exercise the other half — that Composition hands the SAME relay to the seven
+    /// Core constructors in the first place — because it writes directly through
+    /// <c>services.Log</c> rather than through a real Core call. <see cref="EndToEndTests"/>'s
+    /// <c>A_pack_downloads_installs_and_the_row_ends_up_installed</c> and
+    /// <c>A_second_run_over_a_vouched_for_archive_never_reports_verifying</c> cover that half, by
+    /// asserting on log lines that only <see cref="LamSims.Core.Downloading.SegmentedDownloader"/>,
+    /// <see cref="LamSims.Core.Installing.ZipInstaller"/> and <see cref="LamSims.Core.PackWorkflow"/>
+    /// can have written.
+    /// </summary>
+    [Fact(Timeout = 15000)]
+    public async Task The_view_models_log_is_built_over_the_relay_AppServices_carries()
+    {
+        var root = Directory.CreateTempSubdirectory("lamsims-composition-log").FullName;
+
+        try
+        {
+            var services = Composition.Build(commandLineCatalog: null, overrideRoot: root);
+            var vm = new MainViewModel(services with { Dispatcher = new ImmediateDispatcher() });
+
+            services.Log.Write(LogLine.Info("from core"));
+
+            Assert.Contains(vm.Log.Lines, l => l.Text == "from core");
+
+            await services.Queue.DisposeAsync();
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// The gap the three EndToEndTests-based assertions could not reach: they exercise a real
+    /// CatalogLoader.ResolveAsync — Composition.Build gives services.Catalog the same relay it
+    /// gives every other Core constructor, and ResolveAsync logs every failing candidate
+    /// (CatalogLoader.cs:130) regardless of whether the failure is ultimately reported or passed
+    /// over. A command-line candidate pointing at a path that does not exist is itself a failing
+    /// candidate, so this needs no catalog file, no HTTP server, and no MainViewModel.StartAsync —
+    /// just services.Catalog.ResolveAsync called directly, the same call MainViewModel's own
+    /// _resolve default makes.
+    /// </summary>
+    [Fact(Timeout = 15000)]
+    public async Task Composition_wires_the_relay_into_the_catalog_loader()
+    {
+        var root = Directory.CreateTempSubdirectory("lamsims-composition-catalog-log").FullName;
+
+        try
+        {
+            var missing = Path.Combine(root, "does-not-exist.json");
+            var services = Composition.Build(commandLineCatalog: missing, overrideRoot: root);
+            var vm = new MainViewModel(services with { Dispatcher = new ImmediateDispatcher() });
+
+            await services.Catalog.ResolveAsync(
+                services.CommandLineCatalog, services.Current.CatalogSource, CancellationToken.None);
+
+            Assert.Contains(vm.Log.Lines, l => l.IsError && l.Text.Contains("Catalog load failed"));
+
+            await services.Queue.DisposeAsync();
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// The three of Composition's seven relay wiring sites the hand-written tests above cannot
+    /// reach: StaticUnlockerAssetSource, EaClientUnlockerBackend and WinePrefixUnlockerBackend
+    /// were parked as untestable because driving them for real needs an EA client or a Wine
+    /// prefix. That reasoning conflated driving the SERVICE with checking the WIRING — this
+    /// checks only that Composition.Build handed each constructor the SAME LogRelay instance it
+    /// gave everything else, by reflecting on each one's private `_log` field, which needs
+    /// neither. It runs on any OS and guards all seven sites (the other four already have a
+    /// hand-written test proving lines actually flow, which reflection cannot prove) plus any
+    /// constructor added to the graph later.
+    /// </summary>
+    [Fact(Timeout = 15000)]
+    public async Task Composition_wires_the_same_relay_into_every_service_that_takes_one()
+    {
+        var root = Directory.CreateTempSubdirectory("lamsims-composition-relay-sweep").FullName;
+
+        try
+        {
+            var services = Composition.Build(commandLineCatalog: null, overrideRoot: root);
+
+            Assert.Same(services.Log, LogField(services.UnlockerAssets));
+
+            var backendsField = typeof(UnlockerService).GetField(
+                "_backends", BindingFlags.NonPublic | BindingFlags.Instance);
+            Assert.NotNull(backendsField);
+
+            var backends = (IUnlockerBackend[])backendsField!.GetValue(services.Unlocker)!;
+
+            // Both backends, not just however many happen to be registered: a sweep that silently
+            // passed over an empty array would prove nothing about either one.
+            Assert.Equal(2, backends.Length);
+
+            foreach (var backend in backends)
+            {
+                Assert.Same(services.Log, LogField(backend));
+            }
+
+            await services.Queue.DisposeAsync();
+        }
+        finally
+        {
+            Directory.Delete(root, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Reads the private `_log` field every constructor in LogView design §3's table stores its
+    /// sink under (`_log = log ?? NullLogSink.Instance`). Missing entirely — rather than merely
+    /// holding a different sink — is reported by name instead of a null reference exception, so a
+    /// renamed field fails this test loudly rather than as a mysterious NullReferenceException.
+    /// </summary>
+    private static object LogField(object service)
+    {
+        var field = service.GetType().GetField("_log", BindingFlags.NonPublic | BindingFlags.Instance);
+        Assert.True(field is not null, $"{service.GetType().Name} has no private '_log' field");
+        return field!.GetValue(service)!;
     }
 }
