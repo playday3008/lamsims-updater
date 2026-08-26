@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using Xunit;
 using LamSims.Core.Unlocking;
+using LamSims.Core.Logging;
 using LamSims.Core.Unlocking.Wine;
 
 namespace LamSims.Core.Tests;
@@ -21,8 +22,10 @@ public class SteamDiscoveryTests
         return Path.Combine(container, "pfx");
     }
 
-    private static WinePrefixScanner Scanner(TempDir dir, Notes notes) =>
-        new(new LauncherHomes(dir.Path, null, null, null), "playday", notes);
+    private static WinePrefixScanner Scanner(TempDir dir, Notes notes,
+                                             RecordingLogSink? log = null) =>
+        new(new LauncherHomes(dir.Path, null, null, null), "playday", notes,
+            log: log ?? new RecordingLogSink());
 
     private static string Root(TempDir dir)
     {
@@ -191,12 +194,16 @@ public class SteamDiscoveryTests
         App(root, "1222670");
         var notes = new Notes();
 
+        // The LOG. An unreadable libraryfolders.vdf is a fact about Steam's own file: the scan
+        // carries on without it, and the window's note list is for what a user must act on.
+        var log = new RecordingLogSink();
+
         try
         {
-            var found = Scanner(dir, notes).Scan(null);
+            var found = Scanner(dir, notes, log).Scan(null);
 
             Assert.Single(found);
-            Assert.True(notes.Any("could not be read"), string.Join("\n", notes.Lines));
+            Assert.True(log.Logged("could not be read"), string.Join("\n", log.Texts));
         }
         finally
         {

@@ -1,5 +1,6 @@
 using System;
 using System.IO;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 using Xunit;
@@ -103,16 +104,60 @@ public class WineEndToEndTests
         app.EnsureCreated();
 
         var notes = new Notes();
+        var log = new RecordingLogSink();
         var backend = new WinePrefixUnlockerBackend(
             new LauncherHomes(Path.Combine(dir.Path, "empty-home"), null, null, null), app,
-            new FakeDelayProvider(), new FakeWineProcesses(), "playday", () => null, notes);
+            new FakeDelayProvider(), new FakeWineProcesses(), "playday", () => null, notes, log);
 
         Assert.Empty(await backend.DetectTargetsAsync(CancellationToken.None));
 
-        // No REJECTION notes: nothing was examined, so nothing can be complained about. Not
-        // Assert.Empty on the whole list — the scanner's sandbox diagnostic keys off /.flatpak-info,
-        // which exists when the suite itself runs inside a Flatpak, and that note is correct there.
+        // No REJECTION at all, in either channel: nothing was examined, so nothing can be
+        // complained about. The rejection line is asserted against the LOG, which is where it goes
+        // now — against the notes it would hold whether the routing worked or not. Not Assert.Empty
+        // on the whole note list — the scanner's sandbox diagnostic keys off /.flatpak-info, which
+        // exists when the suite itself runs inside a Flatpak, and that note is correct there.
+        Assert.False(log.Logged("is not a Wine prefix"), string.Join("\n", log.Texts));
+        Assert.False(log.Logged("no EA app or Origin"), string.Join("\n", log.Texts));
+    }
+
+    /// <summary>
+    /// The shipped complaint, as a test. A real Linux machine hands the scanner far more paths than
+    /// are prefixes — every Steam compatdata container, every Heroic game directory — and a prefix
+    /// that IS one usually holds no EA client. Every one of those used to put a line in the window's
+    /// note list, above the unlocker's own buttons: the reported symptom was thirty lines of
+    /// "'/…/compatdata/220/pfx' is not a Wine prefix" and an Install button arranged off screen.
+    ///
+    /// The note list is now for what a user must act on, so on this machine it holds exactly one
+    /// thing — that nothing was found, and where to point the setting. The log holds the reasoning.
+    /// Both halves matter: notes-only would pass against a build that reported nothing anywhere,
+    /// and log-only would pass against one that still showed every line.
+    /// </summary>
+    [LinuxFact]
+    public async Task A_machine_full_of_directories_that_are_not_prefixes_says_so_once()
+    {
+        using var dir = new TempDir();
+        var app = new AppPaths(Path.Combine(dir.Path, "app"));
+        app.EnsureCreated();
+
+        var home = Path.Combine(dir.Path, "home");
+        var compatdata = Path.Combine(home, ".local", "share", "Steam", "steamapps", "compatdata");
+        foreach (var appId in new[] { "220", "440", "570", "730", "1222670" })
+            Directory.CreateDirectory(Path.Combine(compatdata, appId, "pfx"));
+
+        var notes = new Notes();
+        var log = new RecordingLogSink();
+        var backend = new WinePrefixUnlockerBackend(
+            new LauncherHomes(home, null, null, null), app,
+            new FakeDelayProvider(), new FakeWineProcesses(), "playday", () => null, notes, log);
+
+        Assert.Empty(await backend.DetectTargetsAsync(CancellationToken.None));
+
+        // Not Assert.Empty on the note list — the sandbox diagnostic keys off /.flatpak-info, which
+        // exists when the suite itself runs inside a Flatpak, and that note is correct there.
         Assert.DoesNotContain(notes.Lines, l => l.Contains("is not a Wine prefix", StringComparison.Ordinal));
-        Assert.DoesNotContain(notes.Lines, l => l.Contains("no EA app or Origin", StringComparison.Ordinal));
+        Assert.Single(notes.Lines, l => l.Contains("No Wine prefix was found", StringComparison.Ordinal));
+
+        // The reasoning is not discarded, it is filed: one line per container the scan looked at.
+        Assert.Equal(5, log.Texts.Count(t => t.Contains("is not a Wine prefix", StringComparison.Ordinal)));
     }
 }

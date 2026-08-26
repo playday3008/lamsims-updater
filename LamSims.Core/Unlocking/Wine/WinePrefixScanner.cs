@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text.Json;
+using LamSims.Core.Logging;
 
 namespace LamSims.Core.Unlocking.Wine;
 
@@ -24,8 +25,19 @@ public sealed record PrefixCandidate(string Path, EnvironmentSource Source, stri
 /// </summary>
 public sealed class WinePrefixScanner(LauncherHomes homes, string userName,
                                       IProgress<string>? notes = null,
-                                      string flatpakInfoFile = "/.flatpak-info")
+                                      string flatpakInfoFile = "/.flatpak-info",
+                                      ILogSink? log = null)
 {
+    /// <summary>
+    /// Where the per-candidate rejections go. Five launchers between them mention far more paths
+    /// than are prefixes — every Steam compatdata container, every Heroic game directory — and
+    /// each rejection used to be reported to <c>notes</c>, which the window renders in front of
+    /// the user. That put thirty lines of "nobody claimed this was a prefix" above the Install
+    /// button. What the user must act on still goes to <c>notes</c>; the enumeration's own
+    /// reasoning comes here.
+    /// </summary>
+    private readonly ILogSink _log = log ?? NullLogSink.Instance;
+
     public IReadOnlyList<WinePrefix> Scan(string? configuredPrefix)
     {
         var candidates = new List<PrefixCandidate>();
@@ -43,6 +55,18 @@ public sealed class WinePrefixScanner(LauncherHomes homes, string userName,
         candidates.AddRange(FromBottles());
 
         var found = Describe(candidates);
+
+        // The one candidate the user typed themselves, and the one rejection that is an answer to
+        // something they did rather than a by-product of enumerating. Asked directly rather than
+        // recovered from Describe: opening the prefix again to learn the reason would re-report its
+        // architecture and its Windows users, and a membership test over `found` cannot tell a path
+        // that was rejected from one that deduplicated into another candidate's group.
+        if (!string.IsNullOrWhiteSpace(configuredPrefix)
+            && WinePrefix.WhyNotAPrefix(configuredPrefix) is { } why)
+        {
+            notes?.Report($"The Wine prefix setting names '{configuredPrefix}', which is not a "
+                          + $"Wine prefix: {why}.");
+        }
 
         if (found.Count == 0)
         {
@@ -96,7 +120,7 @@ public sealed class WinePrefixScanner(LauncherHomes homes, string userName,
                 : first.Detail is { Length: > 0 } named ? named : DirectoryName(group.Key);
 
             var prefix = WinePrefix.TryOpen(group.Key, new TargetEnvironment(
-                first.Source, detail, first.Flatpak), userName, notes);
+                first.Source, detail, first.Flatpak), userName, _log);
             if (prefix is null) continue;
 
             // The resolved path is the group key, but TryOpen may have descended into `pfx`, so the
@@ -268,6 +292,14 @@ public sealed class WinePrefixScanner(LauncherHomes homes, string userName,
         }
     }
 
+    /// <summary>
+    /// A launcher's own config that could not be read or did not parse. The log, not the notes: this
+    /// is a fact about someone else's file, the scan carries on without it, and a user with five
+    /// launchers installed would collect these for launchers they have never configured. A warning
+    /// rather than an aside, because an unreadable config can hide a prefix they expected to see.
+    /// </summary>
+    private void Diagnostic(string message) => _log.Write(LogLine.Warning(message));
+
     private static string? Clean(string value)
     {
         value = value.Trim();
@@ -284,8 +316,6 @@ public sealed class WinePrefixScanner(LauncherHomes homes, string userName,
 
         return value.Length == 0 ? null : value;
     }
-
-    internal void Note(string message) => notes?.Report(message);
 
     private IEnumerable<PrefixCandidate> FromSteam()
     {
@@ -346,7 +376,7 @@ public sealed class WinePrefixScanner(LauncherHomes homes, string userName,
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            Note($"Steam: '{file}' could not be read: {e.Message}.");
+            Diagnostic($"Steam: '{file}' could not be read: {e.Message}.");
             return [];
         }
 
@@ -466,7 +496,7 @@ public sealed class WinePrefixScanner(LauncherHomes homes, string userName,
                     // discovery chain.
                     if (document.RootElement.ValueKind != JsonValueKind.Object)
                     {
-                        Note($"Heroic: '{file}' root is not a JSON object, skipping.");
+                        Diagnostic($"Heroic: '{file}' root is not a JSON object, skipping.");
                         continue;
                     }
 
@@ -495,7 +525,7 @@ public sealed class WinePrefixScanner(LauncherHomes homes, string userName,
                 // is not an object.
                 if (settings.RootElement.ValueKind != JsonValueKind.Object)
                 {
-                    Note($"Heroic: '{config}' root is not a JSON object, skipping.");
+                    Diagnostic($"Heroic: '{config}' root is not a JSON object, skipping.");
                     continue;
                 }
 
@@ -540,7 +570,7 @@ public sealed class WinePrefixScanner(LauncherHomes homes, string userName,
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
         {
-            Note($"'{directory}' could not be read: {e.Message}.");
+            Diagnostic($"'{directory}' could not be read: {e.Message}.");
             return [];
         }
     }
@@ -558,7 +588,7 @@ public sealed class WinePrefixScanner(LauncherHomes homes, string userName,
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException or JsonException)
         {
-            Note($"{source}: '{file}' could not be read: {e.Message}.");
+            Diagnostic($"{source}: '{file}' could not be read: {e.Message}.");
             return null;
         }
     }

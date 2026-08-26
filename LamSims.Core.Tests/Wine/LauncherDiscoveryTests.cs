@@ -3,14 +3,17 @@ using System.IO;
 using System.Linq;
 using Xunit;
 using LamSims.Core.Unlocking;
+using LamSims.Core.Logging;
 using LamSims.Core.Unlocking.Wine;
 
 namespace LamSims.Core.Tests;
 
 public class LauncherDiscoveryTests
 {
-    private static WinePrefixScanner Scanner(TempDir dir, Notes notes) =>
-        new(new LauncherHomes(dir.Path, null, null, null), "playday", notes);
+    private static WinePrefixScanner Scanner(TempDir dir, Notes notes,
+                                             RecordingLogSink? log = null) =>
+        new(new LauncherHomes(dir.Path, null, null, null), "playday", notes,
+            log: log ?? new RecordingLogSink());
 
     private static string Write(string path, string contents)
     {
@@ -129,9 +132,16 @@ public class LauncherDiscoveryTests
         Write(Path.Combine(dir.Path, ".local", "share", "lutris", "games", "x.yml"),
               $"name: EA app\nprefix: {notReally}\n");
         var notes = new Notes();
+        var log = new RecordingLogSink();
 
-        Assert.Empty(Scanner(dir, notes).Scan(null));
-        Assert.True(notes.Any("is not a Wine prefix"), string.Join("\n", notes.Lines));
+        Assert.Empty(Scanner(dir, notes, log).Scan(null));
+
+        // The LOG, and not the notes. Lutris proposed this path; the user did not, and never
+        // claimed it was a prefix. Reporting it to the notes put one line in front of the user for
+        // every game their launchers happened to mention.
+        Assert.True(log.Logged($"'{notReally}' is not a Wine prefix: no system.reg."),
+                    string.Join("\n", log.Texts));
+        Assert.DoesNotContain(notes.Lines, l => l.Contains("is not a Wine prefix", StringComparison.Ordinal));
     }
 
     /// <summary>
@@ -252,11 +262,12 @@ public class LauncherDiscoveryTests
         Write(Path.Combine(dir.Path, ".local", "share", "lutris", "games", "x.yml"),
               $"name: EA app\nprefix: {prefix}\n");
         var notes = new Notes();
+        var log = new RecordingLogSink();
 
-        var found = Scanner(dir, notes).Scan(null);
+        var found = Scanner(dir, notes, log).Scan(null);
 
         Assert.Single(found);
-        Assert.True(notes.Any("could not be read"), string.Join("\n", notes.Lines));
+        Assert.True(log.Logged("could not be read"), string.Join("\n", log.Texts));
     }
 
     /// <summary>
@@ -276,11 +287,12 @@ public class LauncherDiscoveryTests
         Write(Path.Combine(dir.Path, ".local", "share", "lutris", "games", "x.yml"),
               $"name: EA app\nprefix: {prefix}\n");
         var notes = new Notes();
+        var log = new RecordingLogSink();
 
-        var found = Scanner(dir, notes).Scan(null);
+        var found = Scanner(dir, notes, log).Scan(null);
 
         Assert.Single(found);
-        Assert.True(notes.Any("root is not a JSON object"), string.Join("\n", notes.Lines));
+        Assert.True(log.Logged("root is not a JSON object"), string.Join("\n", log.Texts));
     }
 
     /// <summary>
@@ -299,11 +311,12 @@ public class LauncherDiscoveryTests
         Write(Path.Combine(dir.Path, ".local", "share", "lutris", "games", "x.yml"),
               $"name: EA app\nprefix: {prefix}\n");
         var notes = new Notes();
+        var log = new RecordingLogSink();
 
-        var found = Scanner(dir, notes).Scan(null);
+        var found = Scanner(dir, notes, log).Scan(null);
 
         Assert.Single(found);
-        Assert.True(notes.Any("config.json"), string.Join("\n", notes.Lines));
-        Assert.True(notes.Any("root is not a JSON object"), string.Join("\n", notes.Lines));
+        Assert.True(log.Logged("config.json"), string.Join("\n", log.Texts));
+        Assert.True(log.Logged("root is not a JSON object"), string.Join("\n", log.Texts));
     }
 }

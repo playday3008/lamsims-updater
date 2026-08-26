@@ -821,9 +821,13 @@ public class UnlockerDetectionNotesTests
         var vm = Build(new RecordingUnlockerBackend(Target()), notes: notes);
         await vm.RefreshAsync(CancellationToken.None);
 
-        notes.Report("'/home/y' is 32-bit and the EA app needs a 64-bit prefix.");
+        // One of the three things the notes channel still carries. It is deliberately not a
+        // per-prefix diagnostic: a 32-bit prefix or a prefix with no client registered goes to the
+        // log now, and a test built on one of those would describe a route that no longer exists.
+        notes.Report(
+            "No Wine prefix was found. If your client is installed somewhere Steam, Lutris, Heroic, Bottles or plain Wine would not know about, set its path in the Wine prefix setting.");
 
-        Assert.Contains("'/home/y' is 32-bit and the EA app needs a 64-bit prefix.",
+        Assert.Contains("No Wine prefix was found. If your client is installed somewhere Steam, Lutris, Heroic, Bottles or plain Wine would not know about, set its path in the Wine prefix setting.",
                         vm.DetectionNotes);
         Assert.True(vm.HasDetectionNotes);
     }

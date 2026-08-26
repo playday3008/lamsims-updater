@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using LamSims.Core.Logging;
 
 namespace LamSims.Core.Unlocking.Wine;
 
@@ -12,7 +13,7 @@ namespace LamSims.Core.Unlocking.Wine;
 /// Almost every member's natural implementation is wrong here, and the comments say which and why.
 /// The one that matters most is <see cref="RunningClientProcesses"/>: it is ALWAYS empty.
 /// </summary>
-public sealed class WineUnlockerHost(WinePrefix prefix, IProgress<string>? notes = null)
+public sealed class WineUnlockerHost(WinePrefix prefix, ILogSink? log = null)
     : IUnlockerHost
 {
     private static readonly Dictionary<ClientRegistryKey, string> Keys = new()
@@ -88,8 +89,9 @@ public sealed class WineUnlockerHost(WinePrefix prefix, IProgress<string>? notes
         // value here already implies SawClientValue — an explicit check of it would be redundant.
         if (firstUnresolvable is not null)
         {
-            notes?.Report($"{prefix.Environment.Describe()}: the client is registered at "
-                          + $"'{firstUnresolvable}' but that path does not exist in this prefix.");
+            log?.Write(LogLine.Warning(
+                $"{prefix.Environment.Describe()}: the client is registered at "
+                + $"'{firstUnresolvable}' but that path does not exist in this prefix."));
         }
 
         return null;

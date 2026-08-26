@@ -19,8 +19,10 @@ public class WinePrefixScannerTests
         return path;
     }
 
-    private static WinePrefixScanner Scanner(TempDir dir, Notes notes, string? wine = null) =>
-        new(new LauncherHomes(dir.Path, null, null, wine), "playday", notes);
+    private static WinePrefixScanner Scanner(TempDir dir, Notes notes, string? wine = null,
+                                             RecordingLogSink? log = null) =>
+        new(new LauncherHomes(dir.Path, null, null, wine), "playday", notes,
+            log: log ?? new RecordingLogSink());
 
     [LinuxFact]
     public void The_configured_prefix_is_found_first_and_labelled_with_its_path()
@@ -36,19 +38,28 @@ public class WinePrefixScannerTests
         Assert.Equal(prefix, found[0].Environment.Detail);
     }
 
+    /// <summary>
+    /// Both channels, because whitespace must not be mistaken for a path the user named: a
+    /// rejection here would reach the user through the note, and the log would carry a line about
+    /// a candidate that was never proposed.
+    /// </summary>
     [LinuxFact]
     public void A_blank_configured_prefix_is_ignored_rather_than_rejected()
     {
         using var dir = new TempDir();
         var notes = new Notes();
+        var log = new RecordingLogSink();
 
-        Assert.Empty(Scanner(dir, notes).Scan("   "));
+        Assert.Empty(Scanner(dir, notes, log: log).Scan("   "));
         Assert.DoesNotContain(notes.Lines, l => l.Contains("is not a Wine prefix", StringComparison.Ordinal));
+        Assert.False(log.Logged("is not a Wine prefix"), string.Join("\n", log.Texts));
     }
 
     /// <summary>
-    /// The exact string. A user who typed the wrong path into the setting has to be
-    /// able to tell that from a permissions problem.
+    /// The exact string, and in the NOTES rather than the log. A path the user typed into the
+    /// setting is the one rejection they have to see: every other candidate came from a launcher's
+    /// own configuration and its rejection is enumeration noise, but this one is an answer to
+    /// something they did.
     /// </summary>
     [LinuxFact]
     public void A_configured_path_that_is_not_a_prefix_is_reported()
@@ -57,7 +68,23 @@ public class WinePrefixScannerTests
         var notes = new Notes();
 
         Assert.Empty(Scanner(dir, notes).Scan(dir.Path));
-        Assert.True(notes.Any("is not a Wine prefix: no system.reg."), string.Join("\n", notes.Lines));
+        Assert.Contains($"The Wine prefix setting names '{dir.Path}', which is not a Wine prefix: "
+                        + "no system.reg.", notes.Lines);
+    }
+
+    /// <summary>
+    /// The complement: a prefix the user named that DOES open earns no note. Without this the test
+    /// above is satisfied by reporting every configured prefix, valid ones included.
+    /// </summary>
+    [LinuxFact]
+    public void A_configured_path_that_is_a_prefix_is_not_complained_about()
+    {
+        using var dir = new TempDir();
+        var prefix = Prefix(Path.Combine(dir.Path, "chosen"));
+        var notes = new Notes();
+
+        Assert.Single(Scanner(dir, notes).Scan(prefix));
+        Assert.DoesNotContain(notes.Lines, l => l.Contains("is not a Wine prefix", StringComparison.Ordinal));
     }
 
     [LinuxFact]

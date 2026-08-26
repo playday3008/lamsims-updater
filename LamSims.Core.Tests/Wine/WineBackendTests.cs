@@ -23,6 +23,14 @@ public sealed class WineBackendFixture : IDisposable
     public FakeWineProcesses Processes { get; } = new();
     public FakeDelayProvider Delays { get; } = new();
     public Notes Notes { get; } = new();
+
+    /// <summary>
+    /// Where the backend's own diagnostics go — a prefix with no client registered, a 32-bit
+    /// prefix, a swept override record. None of those ask anything of the user, so none of them
+    /// reach <see cref="Notes"/>, which the window renders as a list. Unused when a caller supplies
+    /// its own sink; those tests assert against theirs.
+    /// </summary>
+    public RecordingLogSink Log { get; } = new();
     public List<UnlockerProgress> Reports { get; } = [];
     public WinePrefixUnlockerBackend Backend { get; }
     public IUnlockerAssetSource Assets { get; }
@@ -78,7 +86,7 @@ public sealed class WineBackendFixture : IDisposable
 
         Backend = new WinePrefixUnlockerBackend(
             new LauncherHomes(home, null, null, null), App, Delays, Processes, "playday",
-            () => Prefix.Root, Notes, log);
+            () => Prefix.Root, Notes, log ?? Log);
     }
 
     public string UserReg => Path.Combine(Prefix.Root, "user.reg");
@@ -135,9 +143,11 @@ public class WineBackendDetectionTests
     }
 
     /// <summary>
-    /// The exact string, and the reason WineUnlockerHost tracks SawClientValue: "no
-    /// client is registered here" and "one is registered and its path is gone" need different
-    /// responses from the user, and the engine only ever returns a list.
+    /// The exact string, and the reason WineUnlockerHost tracks SawClientValue: "no client is
+    /// registered here" and "one is registered and its path is gone" are different facts about the
+    /// prefix, and the engine only ever returns a list. Both go to the log — most prefixes on a
+    /// Linux machine have no EA client in them, so one note per prefix is exactly the flood that
+    /// buried the unlocker's own controls.
     /// </summary>
     [LinuxFact]
     public async Task A_prefix_with_no_client_is_reported_and_yields_nothing()
@@ -146,8 +156,8 @@ public class WineBackendDetectionTests
         f.Prefix.WriteSystemReg("WINE REGISTRY Version 2\n#arch=win64\n");
 
         Assert.Empty(await f.Backend.DetectTargetsAsync(CancellationToken.None));
-        Assert.True(f.Notes.Any("no EA app or Origin is registered"),
-                    string.Join("\n", f.Notes.Lines));
+        Assert.True(f.Log.Logged("no EA app or Origin is registered"),
+                    string.Join("\n", f.Log.Texts));
     }
 
     /// <summary>
@@ -162,7 +172,8 @@ public class WineBackendDetectionTests
         using (var ea = new WineBackendFixture(ClientKind.EaApp, arch: "win32"))
         {
             Assert.Empty(await ea.Backend.DetectTargetsAsync(CancellationToken.None));
-            Assert.True(ea.Notes.Any("is 32-bit and the EA app needs a 64-bit prefix."),
+            Assert.True(ea.Log.Logged("is 32-bit and the EA app needs a 64-bit prefix.",
+                                      LogSeverity.Warning),
                         string.Join("\n", ea.Notes.Lines));
         }
 
@@ -206,7 +217,7 @@ public class WineBackendDetectionTests
         await f.Backend.DetectTargetsAsync(CancellationToken.None);
 
         Assert.Null(store.Read(gone));
-        Assert.True(f.Notes.Any("no longer exists"), string.Join("\n", f.Notes.Lines));
+        Assert.True(f.Log.Logged("no longer exists"), string.Join("\n", f.Log.Texts));
     }
 
     /// <summary>

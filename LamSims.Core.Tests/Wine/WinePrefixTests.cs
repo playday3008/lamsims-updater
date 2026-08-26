@@ -3,6 +3,7 @@ using System.IO;
 using System.Linq;
 using Xunit;
 using LamSims.Core.Unlocking;
+using LamSims.Core.Logging;
 using LamSims.Core.Unlocking.Wine;
 
 namespace LamSims.Core.Tests;
@@ -27,16 +28,20 @@ public class WinePrefixOpenTests
     /// <summary>
     /// The exact string, naming WHICH file is missing. A generic "not a prefix" would
     /// leave a user with a wrong Lutris path unable to tell it apart from a permissions problem.
+    ///
+    /// Both channels are asserted. The scanner probes every path five launchers mention, so this
+    /// line is written about directories nobody claimed were prefixes and belongs in the log; the
+    /// notes channel is rendered in the window, where thirty of these buried the controls.
     /// </summary>
     [LinuxFact]
     public void A_directory_that_is_not_a_prefix_is_rejected_with_the_missing_file_named()
     {
         using var dir = new TempDir();
-        var notes = new Notes();
+        var log = new RecordingLogSink();
 
-        Assert.Null(WinePrefix.TryOpen(dir.Path, Env(), "playday", notes));
+        Assert.Null(WinePrefix.TryOpen(dir.Path, Env(), "playday", log));
 
-        Assert.Contains($"'{dir.Path}' is not a Wine prefix: no system.reg.", notes.Lines);
+        Assert.Contains($"'{dir.Path}' is not a Wine prefix: no system.reg.", log.Texts);
     }
 
     [LinuxFact]
@@ -44,11 +49,31 @@ public class WinePrefixOpenTests
     {
         using var dir = new TempDir();
         File.WriteAllText(Path.Combine(dir.Path, "system.reg"), "#arch=win64\n");
-        var notes = new Notes();
+        var log = new RecordingLogSink();
 
-        Assert.Null(WinePrefix.TryOpen(dir.Path, Env(), "playday", notes));
+        Assert.Null(WinePrefix.TryOpen(dir.Path, Env(), "playday", log));
 
-        Assert.Contains($"'{dir.Path}' is not a Wine prefix: no drive_c.", notes.Lines);
+        Assert.Contains($"'{dir.Path}' is not a Wine prefix: no drive_c.", log.Texts);
+    }
+
+    /// <summary>
+    /// The explainer the configured-prefix note is built from, checked against TryOpen's own
+    /// verdict on the same three shapes. They share one helper precisely so a user cannot be told
+    /// their prefix is fine while the scan rejects it.
+    /// </summary>
+    [LinuxFact]
+    public void The_reason_a_path_is_not_a_prefix_matches_what_opening_it_decides()
+    {
+        using var missingReg = new TempDir();
+        Assert.Equal("no system.reg", WinePrefix.WhyNotAPrefix(missingReg.Path));
+
+        using var missingDriveC = new TempDir();
+        File.WriteAllText(Path.Combine(missingDriveC.Path, "system.reg"), "#arch=win64\n");
+        Assert.Equal("no drive_c", WinePrefix.WhyNotAPrefix(missingDriveC.Path));
+
+        using var real = new PrefixFixture();
+        Assert.Null(WinePrefix.WhyNotAPrefix(real.Root));
+        Assert.NotNull(WinePrefix.TryOpen(real.Root, Env(), "playday"));
     }
 
     /// <summary>
@@ -108,10 +133,10 @@ public class WinePrefixOpenTests
         using var f = new PrefixFixture();
         f.WriteSystemReg("WINE REGISTRY Version 2\n");
         f.WriteUserReg("WINE REGISTRY Version 2\n");
-        var notes = new Notes();
+        var log = new RecordingLogSink();
 
-        Assert.Equal(WineArch.Win64, f.Open(notes).Arch);
-        Assert.True(notes.Any("architecture"), string.Join("\n", notes.Lines));
+        Assert.Equal(WineArch.Win64, f.Open(log).Arch);
+        Assert.True(log.Logged("architecture"), string.Join("\n", log.Texts));
     }
 
     /// <summary>
@@ -161,14 +186,15 @@ public class WinePrefixOpenTests
         Directory.Delete(Path.Combine(f.DriveC, "users", "nobody-here"), recursive: true);
         f.AddUser("steamuser");
         f.AddUser("crossover");
-        var notes = new Notes();
+        var log = new RecordingLogSink();
 
-        var prefix = f.Open(notes);
+        var prefix = f.Open(log);
 
         Assert.Equal(["crossover", "steamuser"],
                      prefix.WindowsUserDirectories.Select(Path.GetFileName).Order());
-        Assert.True(notes.Any("has more than one Windows user; the configuration will be written under each."),
-                    string.Join("\n", notes.Lines));
+        Assert.True(log.Logged("has more than one Windows user; the configuration will be written under each.",
+                               LogSeverity.Warning),
+                    string.Join("\n", log.Texts));
     }
 }
 

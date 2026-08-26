@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using LamSims.Core.Unlocking;
+using LamSims.Core.Logging;
 using LamSims.Core.Unlocking.Wine;
 
 namespace LamSims.Core.Tests;
@@ -98,9 +99,9 @@ public sealed class PrefixFixture : IDisposable
     public void ProtonMarker(string name = "version", string contents = "11.0-100") =>
         File.WriteAllText(Path.Combine(Root, name), contents);
 
-    public WinePrefix Open(IProgress<string>? notes = null, string? userName = null) =>
+    public WinePrefix Open(ILogSink? log = null, string? userName = null) =>
         WinePrefix.TryOpen(Root, new TargetEnvironment(EnvironmentSource.Wine, Root),
-                           userName ?? _user, notes)
+                           userName ?? _user, log)
         ?? throw new InvalidOperationException($"'{Root}' did not open as a prefix.");
 
     public void Dispose() => Dir.Dispose();

@@ -2,6 +2,7 @@ using System;
 using System.IO;
 using Xunit;
 using LamSims.Core.Unlocking;
+using LamSims.Core.Logging;
 using LamSims.Core.Unlocking.Wine;
 
 namespace LamSims.Core.Tests;
@@ -83,8 +84,9 @@ public class WineHostTests
 
     /// <summary>
     /// A registered client whose directory is gone: the value is there, the path is not. Reported
-    /// with the exact string, because "no clients found" and "your EA app moved" need
-    /// different responses from the user.
+    /// with the exact string, because "no clients found" and "your EA app moved" are different
+    /// facts about the prefix. Reported to the LOG: it is a fact about an environment nobody
+    /// claimed was usable, and the window's note list is for what a user must act on.
     /// </summary>
     [LinuxFact]
     public void A_registered_client_whose_path_is_missing_is_reported()
@@ -93,12 +95,13 @@ public class WineHostTests
         f.WriteSystemReg("WINE REGISTRY Version 2\n#arch=win64\n\n"
                          + "[Software\\\\Electronic Arts\\\\EA Desktop] 0\n"
                          + "\"ClientPath\"=\"D:\\\\Gone\\\\EADesktop.exe\"\n");
-        var notes = new Notes();
-        var host = new WineUnlockerHost(f.Open(), notes);
+        var log = new RecordingLogSink();
+        var host = new WineUnlockerHost(f.Open(), log);
 
         Assert.Null(host.ReadClientPath(ClientRegistryKey.EaDesktop));
         Assert.True(host.SawClientValue);
-        Assert.True(notes.Any("does not exist in this prefix"), string.Join("\n", notes.Lines));
+        Assert.True(log.Logged("does not exist in this prefix", LogSeverity.Warning),
+                    string.Join("\n", log.Texts));
     }
 
     [LinuxFact]
@@ -250,7 +253,7 @@ public class WineHostTests
     public void A_stale_path_in_both_hives_reports_once()
     {
         using var f = new PrefixFixture();
-        var notes = new Notes();
+        var log = new RecordingLogSink();
         var staleWindows = @"D:\Gone\EADesktop.exe";
 
         // Both hives have the same stale path
@@ -261,12 +264,12 @@ public class WineHostTests
                        + "[Software\\\\Electronic Arts\\\\EA Desktop] 0\n"
                        + $"\"ClientPath\"=\"{staleWindows.Replace(@"\", @"\\")}\"\n");
 
-        var host = new WineUnlockerHost(f.Open(), notes);
+        var host = new WineUnlockerHost(f.Open(), log);
         var value = host.ReadClientPath(ClientRegistryKey.EaDesktop);
 
         Assert.Null(value);
         Assert.True(host.SawClientValue);
-        Assert.Single(notes.Lines);
-        Assert.True(notes.Any("does not exist in this prefix"));
+        Assert.Single(log.Lines);
+        Assert.True(log.Logged("does not exist in this prefix"));
     }
 }

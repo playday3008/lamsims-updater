@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
+using LamSims.Core.Logging;
 
 namespace LamSims.Core.Unlocking.Wine;
 
@@ -54,41 +55,75 @@ public sealed class WinePrefix
     /// Injected, never read from <see cref="System.Environment"/>, so discovery is testable —
     /// the same rule <see cref="UnlockerPaths"/> and <c>AppPaths</c> follow.
     /// </param>
+    /// <param name="log">
+    /// Everything this method has to say, and it takes no notes channel at all. The scanner probes
+    /// every path five launchers mention, so opening a prefix is speculative work: a rejection, an
+    /// undeclared architecture and an unrecognisable set of Windows users are all facts about a
+    /// directory nobody claimed was a prefix. A user with fifteen Heroic games and a Steam library
+    /// saw thirty such lines in the window, above the controls they had come for. What reaches the
+    /// user is decided one level up, by the caller that knows whether the user named this path.
+    /// </param>
     public static WinePrefix? TryOpen(string candidate, TargetEnvironment environment,
-                                      string userName, IProgress<string>? notes = null)
+                                      string userName, ILogSink? log = null)
     {
-        var root = PathIdentity.Canonical(candidate);
-        if (root is null) return null;
-
-        var missing = MissingPart(root);
-        if (missing is not null)
+        var sink = log ?? NullLogSink.Instance;
+        var (root, missing) = Locate(candidate);
+        if (root is null)
         {
-            // One level, never recursive. GE-Proton and umu create `pfx` as a self-symlink so the
-            // recorded path IS the prefix and this branch is not reached, while Valve Proton uses a
-            // real `pfx/` subdirectory under the path the launcher recorded. Without the retry every
-            // Valve-Proton-shaped Lutris, Heroic or Bottles prefix is rejected. Recursing instead
-            // would make the scanner's deliberate one-level enumeration of Heroic's default
-            // container meaningless and surface prefixes nobody configured.
-            var nested = PathIdentity.Canonical(Path.Combine(root, "pfx"));
-            if (nested is null || MissingPart(nested) is not null)
-            {
-                notes?.Report($"'{candidate}' is not a Wine prefix: no {missing}.");
-                return null;
-            }
+            if (missing is not null)
+                sink.Write(LogLine.Info($"'{candidate}' is not a Wine prefix: {missing}."));
 
-            root = nested;
+            return null;
         }
 
         var driveC = Path.Combine(root, "drive_c");
         var proton = IsProtonManaged(root);
 
-        return new WinePrefix(root, driveC, ReadArch(root, notes), proton, environment,
-                              UserDirectories(root, driveC, proton, userName, notes));
+        return new WinePrefix(root, driveC, ReadArch(root, sink), proton, environment,
+                              UserDirectories(root, driveC, proton, userName, sink));
     }
 
+    /// <summary>
+    /// The directory that actually holds the prefix — <paramref name="candidate"/> itself or the
+    /// <c>pfx</c> beneath it — or, when neither qualifies, the evidence that was missing. Exactly
+    /// one of the two is non-null, except for a path that cannot be read at all, which is neither:
+    /// there is nothing to say about a path the filesystem would not resolve.
+    ///
+    /// One helper rather than two, because <see cref="WhyNotAPrefix"/> has to give the same verdict
+    /// <see cref="TryOpen"/> acts on. Two copies of this rule would let the explanation shown to a
+    /// user disagree with the decision taken about their prefix.
+    /// </summary>
+    private static (string? Root, string? Missing) Locate(string candidate)
+    {
+        var root = PathIdentity.Canonical(candidate);
+        if (root is null) return (null, null);
+
+        var missing = MissingPart(root);
+        if (missing is null) return (root, null);
+
+        // One level, never recursive. GE-Proton and umu create `pfx` as a self-symlink so the
+        // recorded path IS the prefix and this branch is not reached, while Valve Proton uses a
+        // real `pfx/` subdirectory under the path the launcher recorded. Without the retry every
+        // Valve-Proton-shaped Lutris, Heroic or Bottles prefix is rejected. Recursing instead
+        // would make the scanner's deliberate one-level enumeration of Heroic's default
+        // container meaningless and surface prefixes nobody configured.
+        var nested = PathIdentity.Canonical(Path.Combine(root, "pfx"));
+        if (nested is not null && MissingPart(nested) is null) return (nested, null);
+
+        return (null, missing);
+    }
+
+    /// <summary>
+    /// Why <paramref name="candidate"/> cannot be opened as a prefix, or null when it can be.
+    /// For the one caller that must EXPLAIN a rejection rather than log it: the prefix a user
+    /// typed into the setting themselves. Opening it a second time to recover the reason would
+    /// re-report its architecture and its Windows users along the way.
+    /// </summary>
+    public static string? WhyNotAPrefix(string candidate) => Locate(candidate).Missing;
+
     private static string? MissingPart(string root) =>
-        !File.Exists(Path.Combine(root, "system.reg")) ? "system.reg"
-        : !Directory.Exists(Path.Combine(root, "drive_c")) ? "drive_c"
+        !File.Exists(Path.Combine(root, "system.reg")) ? "no system.reg"
+        : !Directory.Exists(Path.Combine(root, "drive_c")) ? "no drive_c"
         : null;
 
     /// <summary>
@@ -118,7 +153,7 @@ public sealed class WinePrefix
     /// </summary>
     private const int HeaderLines = 10;
 
-    private static WineArch ReadArch(string root, IProgress<string>? notes)
+    private static WineArch ReadArch(string root, ILogSink log)
     {
         foreach (var file in new[] { "system.reg", "user.reg" })
         {
@@ -145,12 +180,12 @@ public sealed class WinePrefix
             }
         }
 
-        notes?.Report($"'{root}' does not declare a Wine architecture; it is treated as 64-bit.");
+        log.Write(LogLine.Info($"'{root}' does not declare a Wine architecture; it is treated as 64-bit."));
         return WineArch.Win64;
     }
 
     private static IReadOnlyList<string> UserDirectories(string root, string driveC, bool proton,
-                                                        string userName, IProgress<string>? notes)
+                                                        string userName, ILogSink log)
     {
         var users = Path.Combine(driveC, "users");
         var expected = proton ? "steamuser" : userName;
@@ -184,7 +219,8 @@ public sealed class WinePrefix
         // Genuinely ambiguous: the kind-derived name is not among the users that exist, and more
         // than one does. Writing each is idempotent and removes the guess; guessing wrong puts the
         // configuration where the DLL will not look, which is a silent no-op behind a green UI.
-        notes?.Report($"'{root}' has more than one Windows user; the configuration will be written under each.");
+        log.Write(LogLine.Warning(
+            $"'{root}' has more than one Windows user; the configuration will be written under each."));
         return candidates;
     }
 

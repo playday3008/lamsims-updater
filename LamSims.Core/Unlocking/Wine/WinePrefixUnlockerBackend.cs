@@ -22,6 +22,14 @@ namespace LamSims.Core.Unlocking.Wine;
 /// <param name="configuredPrefix">
 /// Read LIVE, per scan, so changing the setting re-runs detection without rebuilding the graph.
 /// </param>
+/// <param name="notes">
+/// What the USER must act on, and nothing else — it is rendered as a list in the window. Only the
+/// scanner writes to it now, and only for three things: a prefix the user named that is not one,
+/// a Flatpak sandbox that cannot see the host, and finding no prefix at all. Everything this
+/// backend used to report here — a prefix with no client registered, a 32-bit prefix, an
+/// unreachable Windows user, a swept override record — is a fact about an environment nobody
+/// claimed was usable, and goes to <paramref name="log"/>.
+/// </param>
 public sealed class WinePrefixUnlockerBackend(
     LauncherHomes homes, AppPaths appPaths, IDelayProvider delays, IWineProcesses processes,
     string userName, Func<string?> configuredPrefix, IProgress<string>? notes = null,
@@ -55,14 +63,15 @@ public sealed class WinePrefixUnlockerBackend(
         // A record outlives its prefix, and the undo would then write a recorded value into a
         // registry that was regenerated in the meantime. Detection is the only thing that runs
         // often enough to catch it.
+        // Housekeeping about prefixes that are gone, which asks nothing of the user.
         foreach (var orphan in WineDllOverride.SweepOrphans(_overrides, userName))
-            notes?.Report(orphan);
+            _log.Write(LogLine.Info(orphan));
 
         var found = new List<UnlockerTarget>();
 
         foreach (var prefix in Scanner().Scan(configuredPrefix()))
         {
-            var host = new WineUnlockerHost(prefix, notes);
+            var host = new WineUnlockerHost(prefix, _log);
             var inner = Inner(prefix, host);
             if (inner is null) continue;
 
@@ -74,8 +83,8 @@ public sealed class WinePrefixUnlockerBackend(
                 // already reported the more specific "registered but its path does not exist".
                 if (!host.SawClientValue)
                 {
-                    notes?.Report($"{prefix.Environment.Describe()}: no EA app or Origin is "
-                                  + $"registered in '{prefix.Root}'.");
+                    _log.Write(LogLine.Info($"{prefix.Environment.Describe()}: no EA app or Origin "
+                                            + $"is registered in '{prefix.Root}'."));
                 }
 
                 continue;
@@ -88,7 +97,8 @@ public sealed class WinePrefixUnlockerBackend(
                 // prefix would hide it.
                 if (prefix.Arch == WineArch.Win32 && target.Client == ClientKind.EaApp)
                 {
-                    notes?.Report($"'{prefix.Root}' is 32-bit and the EA app needs a 64-bit prefix.");
+                    _log.Write(LogLine.Warning(
+                        $"'{prefix.Root}' is 32-bit and the EA app needs a 64-bit prefix."));
                     continue;
                 }
 
@@ -248,7 +258,7 @@ public sealed class WinePrefixUnlockerBackend(
         return UnlockerResult.Ok(warnings);
     }
 
-    private WinePrefixScanner Scanner() => new(homes, userName, notes);
+    private WinePrefixScanner Scanner() => new(homes, userName, notes, log: _log);
 
     private static string ClientExe(UnlockerTarget target) =>
         target.Client == ClientKind.EaApp ? "EADesktop.exe" : "Origin.exe";
@@ -280,10 +290,10 @@ public sealed class WinePrefixUnlockerBackend(
 
         var environment = target.Environment
                           ?? new TargetEnvironment(EnvironmentSource.Wine, target.PrefixPath);
-        var prefix = WinePrefix.TryOpen(target.PrefixPath, environment, userName, notes);
+        var prefix = WinePrefix.TryOpen(target.PrefixPath, environment, userName, _log);
         if (prefix is null) return null;
 
-        var host = new WineUnlockerHost(prefix, notes);
+        var host = new WineUnlockerHost(prefix, _log);
         var inner = Inner(prefix, host);
 
         return inner is null ? null : (prefix, host, inner);
@@ -295,8 +305,8 @@ public sealed class WinePrefixUnlockerBackend(
 
         if (paths is null)
         {
-            notes?.Report($"'{prefix.Root}' has no reachable Windows user directory, so the "
-                          + "unlocker configuration has nowhere to go.");
+            _log.Write(LogLine.Warning($"'{prefix.Root}' has no reachable Windows user directory, "
+                                       + "so the unlocker configuration has nowhere to go."));
             return null;
         }
 
