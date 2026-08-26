@@ -22,19 +22,6 @@ public class ChunkQueueTests
     }
 
     [Fact]
-    public void Requeued_chunks_are_handed_out_again()
-    {
-        var queue = new ChunkQueue(ChunkPlan.Create(100, 100));
-        queue.TryTake(out var chunk);
-
-        queue.Requeue(chunk!);
-
-        Assert.Equal(1, queue.RemainingCount);
-        Assert.True(queue.TryTake(out var again));
-        Assert.Equal(chunk, again);
-    }
-
-    [Fact]
     public void Concurrent_workers_never_receive_the_same_chunk_twice()
     {
         var queue = new ChunkQueue(ChunkPlan.Create(10_000, 1));

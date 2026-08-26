@@ -87,7 +87,5 @@ public sealed class UnlockerAssetMismatchException(string url, string expected, 
     : Exception($"The DLL at '{url}' does not match the digest this build pins. " +
                 $"Expected {expected}, got {actual}. Upstream may have replaced the release asset.")
 {
-    public string Url { get; } = url;
     public string Expected { get; } = expected;
-    public string Actual { get; } = actual;
 }

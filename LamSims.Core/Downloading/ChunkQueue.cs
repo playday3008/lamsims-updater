@@ -16,6 +16,4 @@ public sealed class ChunkQueue
     public int RemainingCount => _pending.Count;
 
     public bool TryTake(out Chunk? chunk) => _pending.TryDequeue(out chunk);
-
-    public void Requeue(Chunk chunk) => _pending.Enqueue(chunk);
 }
