@@ -40,7 +40,7 @@ public sealed partial class MainViewModel : ObservableObject
         // Built here, not in Composition: MainWindow and the tests replace services.Dispatcher
         // with `services with { Dispatcher = … }` after Build returns, and a LogViewModel built
         // in Composition would have captured the dispatcher that gets thrown away.
-        Log = new LogViewModel(services.Log, services.Dispatcher);
+        Log = new LogViewModel(services.Log, services.Dispatcher, services.Clipboard);
         _ticker = new ProgressTicker(services.Clock, services.Log);
 
         // Seeded without going through the property setters: those queue a save and, for the

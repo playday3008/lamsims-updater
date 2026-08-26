@@ -1,6 +1,7 @@
 using System;
 using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
 using Xunit;
 using LamSims.App.Services;
 using LamSims.App.ViewModels;
@@ -10,10 +11,13 @@ namespace LamSims.App.Tests;
 
 public class LogViewModelTests
 {
-    private static LogViewModel Build(out LogRelay relay)
+    private static LogViewModel Build(out LogRelay relay) => Build(out relay, out _);
+
+    private static LogViewModel Build(out LogRelay relay, out FakeClipboard clipboard)
     {
         relay = new LogRelay(new FakeClock());
-        return new LogViewModel(relay, new ImmediateDispatcher());
+        clipboard = new FakeClipboard();
+        return new LogViewModel(relay, new ImmediateDispatcher(), clipboard);
     }
 
     [Fact]
@@ -219,7 +223,7 @@ public class LogViewModelTests
     {
         var relay = new LogRelay(new FakeClock());
         var dispatcher = new DepthTrackingDispatcher();
-        var vm = new LogViewModel(relay, dispatcher);
+        var vm = new LogViewModel(relay, dispatcher, new FakeClipboard());
 
         var signal = 0;
         var racerWrote = new ManualResetEventSlim(false);
@@ -274,6 +278,42 @@ public class LogViewModelTests
             $"expected same-stack recursion bounded at 2, observed {dispatcher.MaxDepthObserved}");
     }
 
+    /// <summary>
+    /// Spec §8 rules out a file log, so Copy is the only way a user can get the log off their
+    /// machine to report a bug. Asserts both that every line reached the clipboard text AND that
+    /// it did so in order — a command that copied only the last line, or the lines out of order,
+    /// would satisfy a weaker "contains" assertion.
+    /// </summary>
+    [Fact]
+    public async Task Copy_sends_every_line_to_the_clipboard_in_order()
+    {
+        var vm = Build(out var relay, out var clipboard);
+        relay.Write(LogLine.Info("first"));
+        relay.Write(LogLine.Info("second", "EP01"));
+
+        await vm.CopyCommand.ExecuteAsync(null);
+
+        var copied = Assert.Single(clipboard.Copied);
+        var firstIndex = copied.IndexOf("first", StringComparison.Ordinal);
+        var secondIndex = copied.IndexOf("second", StringComparison.Ordinal);
+
+        Assert.True(firstIndex >= 0 && secondIndex >= 0 && firstIndex < secondIndex,
+            $"expected both lines, in order, in the copied text: {copied}");
+    }
+
+    /// <summary>An empty log still copies something (an empty string) rather than doing nothing,
+    /// so a user who clears the log and then copies gets an empty clipboard rather than whatever
+    /// was there before.</summary>
+    [Fact]
+    public async Task Copy_with_no_lines_still_reaches_the_clipboard()
+    {
+        var vm = Build(out _, out var clipboard);
+
+        await vm.CopyCommand.ExecuteAsync(null);
+
+        Assert.Equal([""], clipboard.Copied);
+    }
+
     [Fact]
     public void Clear_empties_the_buffer()
     {
@@ -299,7 +339,7 @@ public class LogViewModelTests
         var relay = new LogRelay(new FakeClock());
         relay.Write(LogLine.Info("already queued"));
 
-        var vm = new LogViewModel(relay, new ImmediateDispatcher());
+        var vm = new LogViewModel(relay, new ImmediateDispatcher(), new FakeClipboard());
 
         Assert.Equal(["already queued"], vm.Lines.Select(l => l.Text));
     }

@@ -296,4 +296,22 @@ public class MainWindowBindingTests
                         e => e.Attribute("Command")?.Value == "{Binding ClearCommand}");
         Assert.NotNull(Member(typeof(LogViewModel), "ClearCommand"));
     }
+
+    /// <summary>
+    /// Spec §8 rules out a file log, which makes Copy the only way a user can get the log off
+    /// their machine to report a bug — pinned the same way ClearCommand is, so a button that
+    /// silently loses its binding (the row context menu's original failure mode) is caught here
+    /// rather than only in a headless render test.
+    /// </summary>
+    [Fact]
+    public void The_log_region_binds_the_copy_command_on_the_log_view_model()
+    {
+        var region = LoadWindow().Descendants()
+            .Single(e => e.Name.LocalName == "Border"
+                         && e.Attribute("DataContext")?.Value == "{Binding Log}");
+
+        Assert.Contains(region.Descendants(),
+                        e => e.Attribute("Command")?.Value == "{Binding CopyCommand}");
+        Assert.NotNull(Member(typeof(LogViewModel), "CopyCommand"));
+    }
 }

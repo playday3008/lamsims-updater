@@ -1,7 +1,9 @@
 using System;
 using System.Collections.ObjectModel;
 using System.Diagnostics;
+using System.Linq;
 using System.Threading;
+using System.Threading.Tasks;
 using CommunityToolkit.Mvvm.ComponentModel;
 using CommunityToolkit.Mvvm.Input;
 using LamSims.App.Services;
@@ -21,6 +23,7 @@ public sealed partial class LogViewModel : ObservableObject
     public const int MaxLines = 2000;
 
     private readonly LogRelay _relay;
+    private readonly IClipboardService _clipboard;
 
     /// <summary>
     /// Every call to <see cref="Drain"/> — the top-level one from the constructor, one reached
@@ -47,9 +50,10 @@ public sealed partial class LogViewModel : ObservableObject
     /// </summary>
     private int _pendingWakes;
 
-    public LogViewModel(LogRelay relay, IUiDispatcher dispatcher)
+    public LogViewModel(LogRelay relay, IUiDispatcher dispatcher, IClipboardService clipboard)
     {
         _relay = relay;
+        _clipboard = clipboard;
         _relay.OnAvailable = () => dispatcher.Post(Drain);
 
         // A line written before this constructor ran is queued but raised no wake (LogRelay only
@@ -97,7 +101,10 @@ public sealed partial class LogViewModel : ObservableObject
                 // rethrowing would either crash the process (a synchronous dispatcher) or vanish
                 // into LogRelay.TryWake's own catch-all (an asynchronous one) — neither tells
                 // anyone anything the write below doesn't already.
-                Debug.WriteLine($"LogViewModel.Drain: DrainOnce threw: {ex}");
+                // Trace, not Debug: Debug.WriteLine is [Conditional("DEBUG")] and compiles away
+                // entirely in a Release build, which would leave a drain failure with no trace
+                // anywhere and the log permanently, silently quiet.
+                Trace.WriteLine($"LogViewModel.Drain: DrainOnce threw: {ex}");
             }
         } while (Interlocked.Decrement(ref _pendingWakes) != 0);
 
@@ -138,4 +145,20 @@ public sealed partial class LogViewModel : ObservableObject
         Lines.Clear();
         OnPropertyChanged(nameof(IsEmpty));
     }
+
+    /// <summary>
+    /// Spec §8 rules out a file log, which makes this the only way a user can get the log off
+    /// their machine to report a bug. Async because Avalonia's clipboard is asynchronous by
+    /// nature (IClipboard.SetTextAsync); the command still surfaces on the view model as
+    /// <c>CopyCommand</c>, the same way every other *Async command in this codebase does.
+    /// </summary>
+    [RelayCommand]
+    private async Task CopyAsync()
+    {
+        var text = string.Join(Environment.NewLine, Lines.Select(FormatLine));
+        await _clipboard.SetTextAsync(text);
+    }
+
+    private static string FormatLine(LogEntry entry) =>
+        entry.Code is null ? $"{entry.Time}  {entry.Text}" : $"{entry.Time}  {entry.Code}  {entry.Text}";
 }
