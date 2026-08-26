@@ -8,6 +8,7 @@
   <Style Selector="Window">
     <Setter Property="Background" Value="{DynamicResource BaseBrush}"/>
     <Setter Property="Foreground" Value="{DynamicResource TextBrush}"/>
+    <Setter Property="FontFamily" Value="fonts:Inter#Inter"/>
   </Style>
 
   <Style Selector="TextBlock.secondary">

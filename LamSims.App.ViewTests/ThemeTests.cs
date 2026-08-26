@@ -1,3 +1,4 @@
+using LamSims.Core.Logging;
 using LamSims.Core.Queueing;
 using Xunit;
 using Avalonia.Controls;
@@ -213,6 +214,43 @@ public class ThemeTests
             // application used to define were all dead: a brush in a border 0px thick.
             Assert.Equal(default, border.BorderThickness);
         }
+    }
+
+    /// <summary>
+    /// Program.BuildAvaloniaApp calls WithInterFont(), which registers the bundled face under the
+    /// key "fonts:Inter" — and nothing named it, so every window ran in whatever face the platform
+    /// defaults to. The bare family name "Inter" does not reach a registered collection: it
+    /// resolves, silently, to the default, which is the same trap the log's "monospace" fell into.
+    /// </summary>
+    [AvaloniaFact]
+    public void The_window_renders_in_the_bundled_face_and_the_log_keeps_its_own()
+    {
+        using var host = ViewHost.Show(out var services);
+        host.ViewModel.BuildRows([Packs.Entry("EP01", "Get to Work")]);
+        services.Log.Write(LogLine.Info("a log line"));
+        host.Pump();
+
+        // The family by value, because "it resolves to Inter" does not discriminate: with the
+        // setter deleted the window falls back to the headless default, which resolves to the only
+        // registered collection — this suite's own Inter — and every other assertion here still
+        // holds. Measured, not assumed: deleting the setter passed this test until this line.
+        Assert.Equal("fonts:Inter#Inter", host.Window.FontFamily.ToString());
+
+        Assert.True(
+            FontManager.Current.TryGetGlyphTypeface(new Typeface(host.Window.FontFamily), out var face),
+            $"the window asks for {host.Window.FontFamily}, which resolves to no typeface at all");
+        Assert.Equal("Inter", face.FamilyName);
+
+        // Inheritance carries it, so no control needs its own setter.
+        var name = ViewHost.Find<TextBlock>(host.RowVisual("EP01"), t => t.Text == "Get to Work");
+
+        Assert.Equal(host.Window.FontFamily, name.FontFamily);
+        Assert.Equal(host.Window.FontFamily, ViewHost.Find<Button>(host.Window).FontFamily);
+
+        // Except the log, whose own family has to survive a font set on the window above it.
+        var line = ViewHost.Find<TextBlock>(host.Window, t => t.Classes.Contains("log-line"));
+
+        Assert.NotEqual(host.Window.FontFamily, line.FontFamily);
     }
 
     private static Border Box(CheckBox check) =>

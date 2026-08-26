@@ -110,6 +110,32 @@ public class ThemeSweepTests
         Assert.True(generic.Count == 0, string.Join(Environment.NewLine, generic));
     }
 
+    /// <summary>
+    /// The bundled Inter face is registered by WithInterFont() under the key "fonts:Inter", and
+    /// only a family carrying that scheme reaches it. A bare "Inter" resolves to the platform
+    /// default instead — no error, no missing glyphs, just a different face than the one shipped —
+    /// which is how the application ran for its whole life before this. The window is where the
+    /// family belongs: every control inherits it, popup content included.
+    /// </summary>
+    [Fact]
+    public void The_window_style_names_the_bundled_face_through_its_collection()
+    {
+        var value = XamlSource.Styles.Descendants()
+            .Where(e => e.Name.LocalName == "Style" && e.Attribute("Selector")?.Value == "Window")
+            .SelectMany(e => e.Descendants().Where(d => d.Name.LocalName == "Setter"))
+            .Where(setter => setter.Attribute("Property")?.Value == "FontFamily")
+            .Select(setter => setter.Attribute("Value")?.Value ?? "")
+            .SingleOrDefault();
+
+        Assert.False(value is null, "the Window style sets no FontFamily, so the window renders in "
+                                   + "the platform's default face and the bundled Inter is unused");
+
+        Assert.True(value!.StartsWith("fonts:", StringComparison.Ordinal)
+                    || value.StartsWith("avares://", StringComparison.Ordinal),
+            $"the Window style asks for '{value}'. Without a fonts: or avares:// scheme this names "
+            + "no registered collection and falls back to the platform default.");
+    }
+
     /// <summary>Class names the window applies, whether literally or through a binding.</summary>
     private static HashSet<string> AppliedClasses()
     {
