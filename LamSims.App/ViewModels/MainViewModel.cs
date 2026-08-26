@@ -548,6 +548,15 @@ public sealed partial class MainViewModel : ObservableObject
         var markers = _services.InstallState.LoadAll(GameDirectory);
         var result = InstallScanner.Scan(GameDirectory, Rows.Select(r => r.Entry), markers);
 
+        // InstalledUnverified belongs to the installed family (InstallScanner's own doc: "every
+        // install this tool did not perform... it is never a warning"), so it counts alongside
+        // Installed rather than alongside NotInstalled.
+        var installedCount = result.Packs.Count(p =>
+            p.State is PackInstallState.Installed or PackInstallState.InstalledUnverified);
+        var partialCount = result.Packs.Count(p => p.State == PackInstallState.Partial);
+
+        _services.Log.Write(LogLine.Info($"Scan found {installedCount} installed, {partialCount} partial"));
+
         GameDirectoryReadable = result.GameDirectoryReadable;
 
         if (result.GameDirectoryReadable)
