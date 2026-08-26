@@ -24,6 +24,16 @@
     <Setter Property="Padding" Value="0"/>
   </Style>
 
+  <!-- Fluent's Expander control theme leaves HorizontalAlignment at Left, so an expander sizes to
+       its content in BOTH states and changes width when it is unfolded: measured here, the Advanced
+       section was 145px closed and 389px open inside an 876px column, and the DLC Unlocker section
+       jumped to whatever the longest client path in it happened to be. Nothing in MainWindow.axaml
+       set that — it is the theme default, which is why it reads as though no width was chosen at
+       all. Stretch anchors both edges to the column, so unfolding changes only the height. -->
+  <Style Selector="Expander">
+    <Setter Property="HorizontalAlignment" Value="Stretch"/>
+  </Style>
+
   <Style Selector="Border.log">
     <Setter Property="Background" Value="{DynamicResource MantleBrush}"/>
     <Setter Property="BorderBrush" Value="{DynamicResource Surface2Brush}"/>
