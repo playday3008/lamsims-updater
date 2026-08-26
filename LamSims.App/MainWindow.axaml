@@ -212,7 +212,12 @@
                    the list column has to be given; stacked, the column narrows to the longest
                    pack name and the log gets the rest of the window. -->
               <Grid ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,Auto">
-                <CheckBox Grid.Row="0" Grid.Column="0" Margin="0,0,8,0"
+                <!-- Negative vertical margin, deliberately. Fluent's CheckBox template pins the
+                     grid holding the box to Height="32" — a literal, not a resource — around a box
+                     that is 20 and centred, so every row carried 12px of dead height it could not
+                     be styled out of. -6 top and bottom gives that 12 back and leaves the box
+                     where it already was. -->
+                <CheckBox Grid.Row="0" Grid.Column="0" Margin="0,-6,8,-6"
                           IsChecked="{Binding IsChecked}" IsEnabled="{Binding IsCheckable}" />
                 <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding Name}" Margin="0,0,8,0"
                            VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />

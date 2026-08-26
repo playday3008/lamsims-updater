@@ -151,9 +151,14 @@ public class ThemeTests
     }
 
     /// <summary>
-    /// The checked mark is GreenBrush #a6e3a1: upstream stroked both the
-    /// tick and the checked border. A GreenBrush defined and referenced by nothing leaves the
-    /// checked box painted in Fluent's accent blue.
+    /// The checked mark is GreenBrush #a6e3a1: upstream stroked both the tick and the checked
+    /// border. Without this the tick is Fluent's own and GreenBrush is a colour the application
+    /// defines and never uses.
+    ///
+    /// Only the tick, deliberately. This test used to assert the green also reached
+    /// PART_Border.BorderBrush, which it does — onto a border whose thickness Fluent's template
+    /// pins to 0. Nothing was ever drawn in it, so the assertion held while the shipped window
+    /// showed no green ring at all. What is checked now is what a user can see.
     /// </summary>
     [AvaloniaFact]
     public void A_checked_box_is_marked_green()
@@ -169,16 +174,47 @@ public class ThemeTests
         Assert.False(blank.IsChecked);
 
         var glyph = ViewHost.Find<Avalonia.Controls.Shapes.Path>(ticked, p => p.Name == "CheckGlyph");
-        var border = ViewHost.Find<Border>(ticked, b => b.Name == "PART_Border");
 
         Assert.Equal(Color.Parse("#a6e3a1"),
             Assert.IsAssignableFrom<ISolidColorBrush>(glyph.Fill!).Color);
-        Assert.Equal(Color.Parse("#a6e3a1"),
-            Assert.IsAssignableFrom<ISolidColorBrush>(border.BorderBrush!).Color);
 
-        // The pair again: a border green in both states marks nothing.
-        Assert.NotEqual(Color.Parse("#a6e3a1"),
-            Assert.IsAssignableFrom<ISolidColorBrush>(
-                ViewHost.Find<Border>(blank, b => b.Name == "PART_Border").BorderBrush!).Color);
+        // The pair: a box filled the same in both states marks nothing.
+        Assert.Equal(Color.Parse("#45475a"),
+            Assert.IsAssignableFrom<ISolidColorBrush>(Box(ticked).Background!).Color);
+        Assert.Equal(Colors.Transparent,
+            Assert.IsAssignableFrom<ISolidColorBrush>(Box(blank).Background!).Color);
     }
+
+    /// <summary>
+    /// PART_Border is the whole control — 20 wide by 32 tall around a 20 by 20 box — so anything
+    /// painted into it overhangs the box by 6px top and bottom. The row's first line is 20px tall
+    /// and the box fills it exactly; a filled PART_Border spilled over both neighbours.
+    /// </summary>
+    [AvaloniaFact]
+    public void A_checkbox_paints_nothing_outside_its_box()
+    {
+        using var host = ViewHost.Show(Packs.Entry("EP01"), Packs.Entry("EP02", "Get Together"));
+
+        host.Row("EP01").IsChecked = true;
+
+        foreach (var check in new[] { ViewHost.Find<CheckBox>(host.RowVisual("EP01")),
+                                      ViewHost.Find<CheckBox>(host.RowVisual("EP02")) })
+        {
+            var border = ViewHost.Find<Border>(check, b => b.Name == "PART_Border");
+            var box = Box(check);
+
+            Assert.Equal(32d, border.Bounds.Height);
+            Assert.Equal(20d, box.Bounds.Height);
+
+            Assert.Equal(Colors.Transparent,
+                Assert.IsAssignableFrom<ISolidColorBrush>(border.Background!).Color);
+
+            // Fluent pins this to 0, which is why the eight CheckBoxBorderBrush* keys this
+            // application used to define were all dead: a brush in a border 0px thick.
+            Assert.Equal(default, border.BorderThickness);
+        }
+    }
+
+    private static Border Box(CheckBox check) =>
+        ViewHost.Find<Border>(check, b => b.Name == "NormalRectangle");
 }

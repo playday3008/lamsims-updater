@@ -4,6 +4,7 @@ using System;
 using System.Collections.Generic;
 using System.Linq;
 using Xunit;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
 using Avalonia.Media;
@@ -122,5 +123,36 @@ public class RowLayoutTests
         Assert.Equal(2d, bar.Bounds.Height);
         Assert.True(bar.Bounds.Width >= line1.Bounds.Width,
             $"the bar is {bar.Bounds.Width} wide in a row {line1.Bounds.Width} wide");
+    }
+
+    /// <summary>
+    /// Fluent's CheckBox template pins the grid holding the box to Height="32" — a literal, not a
+    /// resource, so no setter and no palette key can reach it — around a box that is 20 and
+    /// centred. Left alone it made the first line of every pack row 32px tall to show 17px of
+    /// text, and the box read as floating rather than sitting beside the name.
+    /// </summary>
+    [AvaloniaFact]
+    public void The_checkbox_costs_the_first_line_no_dead_height()
+    {
+        using var host = ViewHost.Show(Packs.Entry("EP01", "The Sims 4 Get to Work"));
+        host.Pump();
+
+        var row = host.RowVisual("EP01");
+        var outer = ViewHost.Find<Grid>(row, g => g.RowDefinitions.Count == 2);
+        var check = ViewHost.Find<CheckBox>(row);
+        var box = ViewHost.Find<Border>(check, b => b.Name == "NormalRectangle");
+        var name = ViewHost.Find<TextBlock>(row, t => t.Text == "The Sims 4 Get to Work");
+
+        // The floor is still there — this is what the negative margin is paying for.
+        Assert.Equal(32d, check.Bounds.Height);
+        Assert.Equal(20d, box.Bounds.Height);
+
+        Assert.Equal(box.Bounds.Height, outer.RowDefinitions[0].ActualHeight);
+
+        double Middle(Visual v) =>
+            v.TranslatePoint(new Point(0, v.Bounds.Height / 2), host.Window)!.Value.Y;
+
+        Assert.True(Math.Abs(Middle(box) - Middle(name)) <= 1,
+            $"the box centres at y={Middle(box)} and the name at y={Middle(name)}");
     }
 }

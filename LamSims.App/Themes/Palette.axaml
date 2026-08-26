@@ -84,17 +84,27 @@
        highlight: accent-derived, so Windows blue until overridden. -->
   <SolidColorBrush x:Key="TextControlSelectionHighlightColor" Color="{StaticResource CatppuccinSurface2}"/>
 
-  <SolidColorBrush x:Key="CheckBoxBackgroundUnchecked" Color="{StaticResource CatppuccinSurface0}"/>
-  <SolidColorBrush x:Key="CheckBoxBackgroundUncheckedPointerOver" Color="{StaticResource CatppuccinSurface1}"/>
-  <SolidColorBrush x:Key="CheckBoxBackgroundChecked" Color="{StaticResource CatppuccinSurface1}"/>
-  <SolidColorBrush x:Key="CheckBoxBackgroundCheckedPointerOver" Color="{StaticResource CatppuccinSurface2}"/>
+  <!-- Transparent, all eight. These paint PART_Border, which is the whole control: 20 wide by 32
+       tall around a box that is 20 by 20. Filled, it read as a tall pill with a small square
+       inside it and overhung the row's first line by 6px top and bottom. The box below is the
+       only checkbox surface this application wants painted. -->
+  <SolidColorBrush x:Key="CheckBoxBackgroundUnchecked" Color="Transparent"/>
+  <SolidColorBrush x:Key="CheckBoxBackgroundUncheckedPointerOver" Color="Transparent"/>
+  <SolidColorBrush x:Key="CheckBoxBackgroundUncheckedPressed" Color="Transparent"/>
+  <SolidColorBrush x:Key="CheckBoxBackgroundUncheckedDisabled" Color="Transparent"/>
+  <SolidColorBrush x:Key="CheckBoxBackgroundChecked" Color="Transparent"/>
+  <SolidColorBrush x:Key="CheckBoxBackgroundCheckedPointerOver" Color="Transparent"/>
+  <SolidColorBrush x:Key="CheckBoxBackgroundCheckedPressed" Color="Transparent"/>
+  <SolidColorBrush x:Key="CheckBoxBackgroundCheckedDisabled" Color="Transparent"/>
 
-  <!-- The checked mark is GreenBrush #a6e3a1: upstream stroked both the tick and the checked
-       border. Without these the tick is Fluent's own and GreenBrush is a colour the application
-       defines and never uses. -->
-  <!-- The box the tick sits in. Fluent fills it from the accent, so without these a green tick
-       lands on a Windows-blue square. There is no CheckBoxCheckBackgroundStrokeChecked in Fluent
-       12.0.4's inventory; the checked stroke follows this fill. -->
+  <!-- The box itself, which with PART_Border transparent is the whole of what a user sees: 20 by
+       20, and the surface the pointer-over state now has to land on. Fluent fills it from the
+       accent, so without these a green tick lands on a Windows-blue square. There is no
+       CheckBoxCheckBackgroundStroke* in Fluent 12.0.4's inventory; the stroke follows this fill,
+       which is also why upstream's green ring around a checked box cannot be reproduced without
+       retemplating the control. The tick carries the green instead. -->
+  <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillUnchecked" Color="Transparent"/>
+  <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillUncheckedPointerOver" Color="{StaticResource CatppuccinSurface1}"/>
   <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillChecked" Color="{StaticResource CatppuccinSurface1}"/>
   <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillCheckedPointerOver" Color="{StaticResource CatppuccinSurface2}"/>
   <SolidColorBrush x:Key="CheckBoxCheckBackgroundFillCheckedPressed" Color="{StaticResource CatppuccinSurface2}"/>
@@ -104,17 +114,6 @@
   <SolidColorBrush x:Key="CheckBoxCheckGlyphForegroundCheckedPointerOver" Color="{StaticResource CatppuccinGreen}"/>
   <SolidColorBrush x:Key="CheckBoxCheckGlyphForegroundCheckedPressed" Color="{StaticResource CatppuccinGreen}"/>
   <SolidColorBrush x:Key="CheckBoxCheckGlyphForegroundCheckedDisabled" Color="{StaticResource CatppuccinOverlay0}"/>
-
-  <!-- The border family: four states, so the checked border does not fall back to Fluent
-       blue on pointer-over or press. -->
-  <SolidColorBrush x:Key="CheckBoxBorderBrushChecked" Color="{StaticResource CatppuccinGreen}"/>
-  <SolidColorBrush x:Key="CheckBoxBorderBrushCheckedPointerOver" Color="{StaticResource CatppuccinGreen}"/>
-  <SolidColorBrush x:Key="CheckBoxBorderBrushCheckedPressed" Color="{StaticResource CatppuccinGreen}"/>
-  <SolidColorBrush x:Key="CheckBoxBorderBrushCheckedDisabled" Color="{StaticResource CatppuccinSurface1}"/>
-  <SolidColorBrush x:Key="CheckBoxBorderBrushUnchecked" Color="{StaticResource CatppuccinSurface2}"/>
-  <SolidColorBrush x:Key="CheckBoxBorderBrushUncheckedPointerOver" Color="{StaticResource CatppuccinOverlay0}"/>
-  <SolidColorBrush x:Key="CheckBoxBorderBrushUncheckedPressed" Color="{StaticResource CatppuccinOverlay0}"/>
-  <SolidColorBrush x:Key="CheckBoxBorderBrushUncheckedDisabled" Color="{StaticResource CatppuccinSurface1}"/>
 
   <SolidColorBrush x:Key="ExpanderChevronBackground" Color="Transparent"/>
   <SolidColorBrush x:Key="ExpanderChevronForeground" Color="{StaticResource CatppuccinText}"/>
