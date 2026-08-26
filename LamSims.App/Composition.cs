@@ -123,6 +123,7 @@ public static class Composition
             new PackQueueController(queue),
             new AvaloniaUiDispatcher(),
             NullPickers.Instance,      // the window replaces this; it owns the TopLevel
+            NullClipboard.Instance,    // same reason: the window replaces this too
             clock,
             commandLineCatalog,
             unlockerService,
@@ -166,4 +167,12 @@ internal sealed class NullPickers : IPickerService
     public Task<string?> PickFolderAsync(string title, string? startAt) => Task.FromResult<string?>(null);
 
     public Task<string?> PickFileAsync(string title, string? startAt) => Task.FromResult<string?>(null);
+}
+
+/// <summary>Stands in until the window exists; a copy attempted before then is a no-op.</summary>
+internal sealed class NullClipboard : IClipboardService
+{
+    public static readonly NullClipboard Instance = new();
+
+    public Task SetTextAsync(string text) => Task.CompletedTask;
 }

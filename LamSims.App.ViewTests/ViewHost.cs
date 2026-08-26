@@ -98,6 +98,7 @@ public sealed class ViewHost : IDisposable
             queue,
             new StubDispatcher(),
             new StubPickers(),
+            new StubClipboard(),
             new StubClock(),
             null,
             // No backend registered by default, so IsSupported is false and the region hides
@@ -278,6 +279,11 @@ public sealed class StubPickers : IPickerService
     public Task<string?> PickFolderAsync(string title, string? startAt) => Task.FromResult<string?>(null);
 
     public Task<string?> PickFileAsync(string title, string? startAt) => Task.FromResult<string?>(null);
+}
+
+public sealed class StubClipboard : IClipboardService
+{
+    public Task SetTextAsync(string text) => Task.CompletedTask;
 }
 
 public sealed class StubClock : IClock

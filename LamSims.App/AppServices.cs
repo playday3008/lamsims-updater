@@ -21,6 +21,7 @@ public sealed record AppServices(
     IQueueController Queue,
     IUiDispatcher Dispatcher,
     IPickerService Pickers,
+    IClipboardService Clipboard,
     IClock Clock,
     string? CommandLineCatalog,
     UnlockerService Unlocker,

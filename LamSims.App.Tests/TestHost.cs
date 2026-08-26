@@ -23,6 +23,7 @@ public sealed class TestHost : IDisposable
     public required AppPaths Paths { get; init; }
     public required IQueueController Controller { get; init; }
     public required FakePickers Pickers { get; init; }
+    public required FakeClipboard Clipboard { get; init; }
     public required FakeClock Clock { get; init; }
 
     /// <summary>The two the view model mutates in place; a test asserts on them, never rebuilds them.</summary>
@@ -66,6 +67,7 @@ public sealed class TestHost : IDisposable
 
         var controller = queue ?? new RecordingQueue();
         var pickers = new FakePickers();
+        var clipboard = new FakeClipboard();
         var clock = new FakeClock();
         var saved = new List<AppSettings>();
 
@@ -84,6 +86,7 @@ public sealed class TestHost : IDisposable
             controller,
             new ImmediateDispatcher(),
             pickers,
+            clipboard,
             clock,
             null,
             // A service with no backends reports IsSupported false, so the region hides itself
@@ -105,6 +108,7 @@ public sealed class TestHost : IDisposable
             Paths = paths,
             Controller = controller,
             Pickers = pickers,
+            Clipboard = clipboard,
             Clock = clock,
             DownloadPaths = downloadPaths,
             DownloadOptions = downloadOptions,
@@ -138,4 +142,16 @@ public sealed class FakePickers : IPickerService
     public Task<string?> PickFolderAsync(string title, string? startAt) => Task.FromResult(NextFolder);
 
     public Task<string?> PickFileAsync(string title, string? startAt) => Task.FromResult(NextFile);
+}
+
+/// <summary>Records every string it was asked to copy, so a test can assert on what Copy sent.</summary>
+public sealed class FakeClipboard : IClipboardService
+{
+    public List<string> Copied { get; } = new();
+
+    public Task SetTextAsync(string text)
+    {
+        Copied.Add(text);
+        return Task.CompletedTask;
+    }
 }

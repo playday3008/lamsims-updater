@@ -16,9 +16,14 @@ public partial class MainWindow : Window
 
     public MainWindow(AppServices services) : this()
     {
-        // The picker is the one service that needs a window handle, which is the whole reason
-        // the view model takes an interface rather than calling a dialog itself.
-        _viewModel = new MainViewModel(services with { Pickers = new StoragePickerService(this) });
+        // The picker and the clipboard are the two services that need a window handle, which is
+        // the whole reason the view models take an interface rather than reaching for either
+        // directly.
+        _viewModel = new MainViewModel(services with
+        {
+            Pickers = new StoragePickerService(this),
+            Clipboard = new AvaloniaClipboardService(this),
+        });
 
         // The unlocker's elevated relaunch has already shut down by the time it calls this, so both
         // guards are set: OnClosing must not run shutdown a second time, it must just close.
