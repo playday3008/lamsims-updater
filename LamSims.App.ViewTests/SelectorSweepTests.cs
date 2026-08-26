@@ -74,9 +74,28 @@ public class SelectorSweepTests
     private static string TargetTypeName(string selector)
     {
         var segment = selector.Split("/template/", StringSplitOptions.TrimEntries).Last();
+        var last = segment.Split(' ', StringSplitOptions.RemoveEmptyEntries).Last();
 
-        return segment.Split(' ', StringSplitOptions.RemoveEmptyEntries).Last().Split('.', ':', '#')[0];
+        // ":is(TextBlock).log-line" names TextBlock, and splitting on ':' would name "". Reading
+        // the type out of the wrapper rather than skipping the form keeps the type half of this
+        // check alive for exactly the selectors that need it: a subclass match is the only way a
+        // style reaches the log's SelectableTextBlock columns, so those four are all written this
+        // way, and a typo inside :is() has to fail here or nothing catches it.
+        if (last.StartsWith(":is(", StringComparison.Ordinal) && IsFunction.Match(last) is { Success: true } m)
+        {
+            return m.Groups["type"].Value;
+        }
+
+        return last.Split('.', ':', '#')[0];
     }
+
+    /// <summary>
+    /// Avalonia's functional subclass selector. Not a pseudo-class: it takes a type argument and
+    /// widens the type match, so the pseudo-class scan below has to strip it before looking for
+    /// ':name' or every one of these selectors reports ':is' as an unknown pseudo-class.
+    /// </summary>
+    private static readonly Regex IsFunction =
+        new(@":is\((?<type>[A-Za-z_][A-Za-z0-9_]*)\)", RegexOptions.Compiled);
 
     /// <summary>
     /// Every complaint one selector earns. The character class is deliberately case-INSENSITIVE
@@ -93,7 +112,8 @@ public class SelectorSweepTests
             yield return $"selector '{selector}': '{typeName}' is not a type this application can see";
         }
 
-        foreach (Match match in Regex.Matches(selector, @":(?<pseudo>[A-Za-z][A-Za-z-]*)"))
+        foreach (Match match in Regex.Matches(IsFunction.Replace(selector, ""),
+                                              @":(?<pseudo>[A-Za-z][A-Za-z-]*)"))
         {
             var pseudo = match.Groups["pseudo"].Value;
 
@@ -132,6 +152,21 @@ public class SelectorSweepTests
         // rendering test would only see a style that quietly did not apply.
         Assert.NotEmpty(ProblemsWith(selector));
     }
+
+    /// <summary>
+    /// The subclass form, both ways round: a real type inside :is() passes and ':is' itself is not
+    /// mistaken for a pseudo-class, while a type that does not exist inside :is() is still caught.
+    /// Without the second case the parser change would excuse the form instead of reading it.
+    /// </summary>
+    [Theory]
+    [InlineData(":is(TextBlock).log-line")]
+    [InlineData(":is(TextBlock).secondary")]
+    public void The_subclass_selector_form_is_understood(string selector) =>
+        Assert.Empty(ProblemsWith(selector));
+
+    [Fact]
+    public void A_type_that_does_not_exist_inside_the_subclass_form_is_still_reported() =>
+        Assert.NotEmpty(ProblemsWith(":is(TextBlok).log-line"));
 
     [Theory]
     [InlineData("ListBoxItem:pointerover")]

@@ -32,22 +32,31 @@
     <Setter Property="Padding" Value="10"/>
   </Style>
 
-  <!-- Real family names, never the generic alias "monospace". Avalonia resolves a family through
+  <!-- ":is(TextBlock)", not "TextBlock", on this and the two severity styles below. Avalonia's bare
+       type selector matches that EXACT type, and the log's message column is a SelectableTextBlock
+       so a line can be selected and copied. The failure a bare selector causes is silent in both
+       directions: the class is still applied in the markup, so ThemeSweepTests' coverage checks stay
+       green while the line renders in the inherited face and colour. Only the three selectors a
+       SelectableTextBlock actually carries are widened — .secondary above is on the time and code
+       columns, which are plain TextBlocks, and a widened selector with no subclass to match would
+       be a claim about this window that is not true.
+
+       Real family names, never the generic alias "monospace". Avalonia resolves a family through
        the platform font manager, which does not know fontconfig's aliases: "monospace" matched
        nothing, fell through to the default UI face, and cost the renderer 363ms a frame against
        24ms for a name that resolves — measured over 20 visible log lines, a 15x difference, and
        the reason the window resized at about 7 FPS. It was not even monospaced: it rendered in
        proportional Noto Sans. First match wins, so this reads Windows, then Linux, then macOS. -->
-  <Style Selector="TextBlock.log-line">
+  <Style Selector=":is(TextBlock).log-line">
     <Setter Property="FontFamily" Value="Cascadia Mono, Consolas, DejaVu Sans Mono, Liberation Mono, Noto Sans Mono, Menlo"/>
     <Setter Property="FontSize" Value="12"/>
   </Style>
 
-  <Style Selector="TextBlock.log-warning">
+  <Style Selector=":is(TextBlock).log-warning">
     <Setter Property="Foreground" Value="{DynamicResource YellowBrush}"/>
   </Style>
 
-  <Style Selector="TextBlock.log-error">
+  <Style Selector=":is(TextBlock).log-error">
     <Setter Property="Foreground" Value="{DynamicResource RedBrush}"/>
   </Style>
 
