@@ -13,6 +13,9 @@ namespace LamSims.App.ViewModels;
 
 public enum RowMessageKind { None, Warning, Error }
 
+/// <summary>Which colour a row's status text earns. Idle carries none and stays secondary.</summary>
+public enum PackStatusKind { Idle, Busy, Ok, Warning, Error }
+
 public sealed partial class PackRowViewModel : ObservableObject
 {
     private readonly IQueueController _queue;
@@ -144,6 +147,38 @@ public sealed partial class PackRowViewModel : ObservableObject
         QueueItemState.Completed => "Installed",
         _ => ScanText,
     };
+
+    /// <summary>
+    /// The colour behind <see cref="StatusText"/>, keyed off the same states in the same order, so
+    /// a status and its colour can never disagree. The <c>_</c> arm is the null queue state, which
+    /// is where a scanned-but-not-queued row lives.
+    /// </summary>
+    public PackStatusKind StatusKind => QueueState switch
+    {
+        QueueItemState.Verifying or QueueItemState.Downloading or QueueItemState.Installing
+            => PackStatusKind.Busy,
+        QueueItemState.Completed => PackStatusKind.Ok,
+        QueueItemState.Failed or QueueItemState.Blocked => PackStatusKind.Error,
+        QueueItemState.Queued or QueueItemState.Cancelled => PackStatusKind.Idle,
+        _ => ScanKind,
+    };
+
+    private PackStatusKind ScanKind => InstallState switch
+    {
+        PackInstallState.Installed => PackStatusKind.Ok,
+        PackInstallState.InstalledUnverified or PackInstallState.Partial => PackStatusKind.Warning,
+        _ => PackStatusKind.Idle,
+    };
+
+    // Four bools rather than the enum: MainWindowBindingTests resolves every binding path as a
+    // single member of its DataContext, and a Classes.x binding has nowhere to put a converter.
+    public bool IsStatusOk => StatusKind is PackStatusKind.Ok;
+
+    public bool IsStatusBusy => StatusKind is PackStatusKind.Busy;
+
+    public bool IsStatusWarning => StatusKind is PackStatusKind.Warning;
+
+    public bool IsStatusError => StatusKind is PackStatusKind.Error;
 
     private string RateText => _bytesPerSecond > 0 ? $"  {FormatBytes((long)_bytesPerSecond)}/s" : "";
 
@@ -285,6 +320,8 @@ public sealed partial class PackRowViewModel : ObservableObject
             nameof(InstallState), nameof(MissingDirs), nameof(QueueState), nameof(IsCheckable),
             nameof(StatusText), nameof(IsBusy), nameof(ProgressPercent), nameof(IsProgressVisible),
             nameof(Message), nameof(MessageKind), nameof(IsWarning), nameof(IsError),
+            nameof(StatusKind), nameof(IsStatusOk), nameof(IsStatusBusy),
+            nameof(IsStatusWarning), nameof(IsStatusError),
             nameof(CurrentEntry), nameof(CanCancel), nameof(CanRemove),
         ])
         {
