@@ -9,11 +9,9 @@ namespace LamSims.Core.Unlocking.Wine;
 public enum WineArch { Win64, Win32 }
 
 /// <summary>
-/// One Wine prefix, opened and validated. Owns the Windows-to-Linux path translation, which is
-/// the piece the rest of the Wine support cannot work without: on Linux
-/// <c>Path.GetDirectoryName(@"C:\Program Files\EA\EADesktop.exe")</c> returns an EMPTY string,
-/// because <c>\</c> is not a separator, so a caller handing a raw registry value to the engine
-/// finds nothing on every prefix with no error at all.
+/// One Wine prefix, opened and validated, and the owner of Windows-to-Linux path translation. On
+/// Linux <c>Path.GetDirectoryName(@"C:\Program Files\EA\EADesktop.exe")</c> returns EMPTY —
+/// <c>\</c> is not a separator — so a raw registry value finds nothing, silently, on every prefix.
 /// </summary>
 public sealed class WinePrefix
 {
@@ -34,21 +32,16 @@ public sealed class WinePrefix
     public bool ProtonManaged { get; }
     public TargetEnvironment Environment { get; }
 
-    /// <summary>
-    /// Every non-<c>Public</c> Windows user directory the unlocker configuration belongs under.
-    /// Usually one; more when the prefix kind cannot say which, in which case writing
-    /// each is idempotent and removes the guess.
-    /// </summary>
+    /// <summary>Every non-<c>Public</c> Windows user directory the configuration belongs under.
+    /// Usually one; more when the prefix kind cannot say, where writing each removes the guess.</summary>
     public IReadOnlyList<string> WindowsUserDirectories { get; }
 
     public string PrimaryUserDirectory => WindowsUserDirectories[0];
 
     public string UserRegFile => Path.Combine(Root, "user.reg");
 
-    /// <summary>
-    /// The three files that are evidence of a Proton or umu prefix, which uses
-    /// <c>steamuser</c> rather than the invoking user's name.
-    /// </summary>
+    /// <summary>Evidence of a Proton or umu prefix, which uses <c>steamuser</c> rather than the
+    /// invoking user's name.</summary>
     private static readonly string[] ProtonMarkers = ["version", "config_info", "tracked_files"];
 
     /// <param name="userName">
@@ -56,12 +49,10 @@ public sealed class WinePrefix
     /// the same rule <see cref="UnlockerPaths"/> and <c>AppPaths</c> follow.
     /// </param>
     /// <param name="log">
-    /// Everything this method has to say, and it takes no notes channel at all. The scanner probes
-    /// every path five launchers mention, so opening a prefix is speculative work: a rejection, an
-    /// undeclared architecture and an unrecognisable set of Windows users are all facts about a
-    /// directory nobody claimed was a prefix. A user with fifteen Heroic games and a Steam library
-    /// saw thirty such lines in the window, above the controls they had come for. What reaches the
-    /// user is decided one level up, by the caller that knows whether the user named this path.
+    /// Everything this method has to say; it takes no notes channel at all. Opening a prefix is
+    /// speculative — the scanner probes every path five launchers mention — so a rejection is a
+    /// fact about a directory nobody claimed was a prefix. What reaches the user is decided one
+    /// level up, by the caller that knows whether the user named this path.
     /// </param>
     public static WinePrefix? TryOpen(string candidate, TargetEnvironment environment,
                                       string userName, ILogSink? log = null)
@@ -84,14 +75,10 @@ public sealed class WinePrefix
     }
 
     /// <summary>
-    /// The directory that actually holds the prefix — <paramref name="candidate"/> itself or the
-    /// <c>pfx</c> beneath it — or, when neither qualifies, the evidence that was missing. Exactly
-    /// one of the two is non-null, except for a path that cannot be read at all, which is neither:
-    /// there is nothing to say about a path the filesystem would not resolve.
-    ///
-    /// One helper rather than two, because <see cref="WhyNotAPrefix"/> has to give the same verdict
-    /// <see cref="TryOpen"/> acts on. Two copies of this rule would let the explanation shown to a
-    /// user disagree with the decision taken about their prefix.
+    /// The directory holding the prefix — <paramref name="candidate"/> or the <c>pfx</c> beneath
+    /// it — or the evidence that was missing. Exactly one is non-null, except for an unreadable
+    /// path, which is neither. One helper, not two, so <see cref="WhyNotAPrefix"/> cannot drift
+    /// from the verdict <see cref="TryOpen"/> acts on.
     /// </summary>
     private static (string? Root, string? Missing) Locate(string candidate)
     {
@@ -101,24 +88,19 @@ public sealed class WinePrefix
         var missing = MissingPart(root);
         if (missing is null) return (root, null);
 
-        // One level, never recursive. GE-Proton and umu create `pfx` as a self-symlink so the
-        // recorded path IS the prefix and this branch is not reached, while Valve Proton uses a
-        // real `pfx/` subdirectory under the path the launcher recorded. Without the retry every
-        // Valve-Proton-shaped Lutris, Heroic or Bottles prefix is rejected. Recursing instead
-        // would make the scanner's deliberate one-level enumeration of Heroic's default
-        // container meaningless and surface prefixes nobody configured.
+        // One level, never recursive. GE-Proton and umu make `pfx` a self-symlink so this is not
+        // reached; Valve Proton uses a real subdirectory, and without the retry every
+        // Valve-shaped Lutris, Heroic or Bottles prefix is rejected. Recursing would surface
+        // prefixes nobody configured.
         var nested = PathIdentity.Canonical(Path.Combine(root, "pfx"));
         if (nested is not null && MissingPart(nested) is null) return (nested, null);
 
         return (null, missing);
     }
 
-    /// <summary>
-    /// Why <paramref name="candidate"/> cannot be opened as a prefix, or null when it can be.
-    /// For the one caller that must EXPLAIN a rejection rather than log it: the prefix a user
-    /// typed into the setting themselves. Opening it a second time to recover the reason would
-    /// re-report its architecture and its Windows users along the way.
-    /// </summary>
+    /// <summary>Why <paramref name="candidate"/> is not a prefix, or null. For the one caller that
+    /// must EXPLAIN a rejection: the prefix the user typed themselves. Reopening to recover the
+    /// reason would re-report its architecture and users.</summary>
     public static string? WhyNotAPrefix(string candidate) => Locate(candidate).Missing;
 
     private static string? MissingPart(string root) =>
@@ -126,13 +108,10 @@ public sealed class WinePrefix
         : !Directory.Exists(Path.Combine(root, "drive_c")) ? "no drive_c"
         : null;
 
-    /// <summary>
-    /// The markers sit at the prefix root for GE-Proton and umu, and one level UP for Valve
-    /// Proton, whose prefix is <c>compatdata/&lt;id&gt;/pfx</c> while <c>version</c>,
-    /// <c>config_info</c> and <c>tracked_files</c> live in <c>compatdata/&lt;id&gt;</c>. Checking
-    /// only the root misses every Valve Proton prefix and then picks the wrong Windows user for
-    /// the one population that always uses <c>steamuser</c>.
-    /// </summary>
+    /// <summary>The markers sit at the root for GE-Proton and umu, one level UP for Valve Proton,
+    /// whose prefix is <c>compatdata/&lt;id&gt;/pfx</c>. Checking only the root misses every Valve
+    /// prefix and then picks the wrong user for the population that always uses
+    /// <c>steamuser</c>.</summary>
     private static bool IsProtonManaged(string root)
     {
         var parent = Path.GetDirectoryName(root);
@@ -146,11 +125,8 @@ public sealed class WinePrefix
         return false;
     }
 
-    /// <summary>
-    /// Capped at the header. <c>#arch=</c> is on the fourth line of a real prefix and
-    /// <c>system.reg</c> runs to 38 000 lines, so an uncapped scan of a header-less file would read
-    /// the whole registry to learn nothing.
-    /// </summary>
+    /// <summary>Capped at the header: <c>#arch=</c> is on line four, and <c>system.reg</c> runs to
+    /// 38 000 lines, so an uncapped scan reads the whole registry to learn nothing.</summary>
     private const int HeaderLines = 10;
 
     private static WineArch ReadArch(string root, ILogSink log)
@@ -247,10 +223,8 @@ public sealed class WinePrefix
         return target is null ? null : ResolveUnder(target, windowsPath[2..]);
     }
 
-    /// <summary>
-    /// The segment walk on its own, so a caller that already holds a Linux directory (a Windows
-    /// user directory, say) can continue from it without re-deriving a drive.
-    /// </summary>
+    /// <summary>The segment walk alone, so a caller already holding a Linux directory can continue
+    /// from it without re-deriving a drive.</summary>
     public string? ResolveUnder(string linuxBase, string windowsRelative)
     {
         var segments = windowsRelative.Split('\\', StringSplitOptions.RemoveEmptyEntries);
@@ -278,10 +252,7 @@ public sealed class WinePrefix
         return current;
     }
 
-    /// <summary>
-    /// The two roots the unlocker writes under, resolved rather than joined. Null when
-    /// the user directory itself cannot be reached.
-    /// </summary>
+    /// <summary>The two roots the unlocker writes under, resolved rather than joined.</summary>
     public UnlockerPaths? PathsFor(string windowsUserDirectory)
     {
         var roaming = ResolveUnder(windowsUserDirectory, @"AppData\Roaming");
@@ -290,12 +261,9 @@ public sealed class WinePrefix
         return roaming is null || programData is null ? null : new UnlockerPaths(roaming, programData);
     }
 
-    /// <summary>
-    /// Only entries named exactly <c>&lt;letter&gt;:</c> — two characters — are drives. The
-    /// <c>&lt;letter&gt;::</c> entries are block devices and the <c>comN</c>/<c>lptN</c> entries are
-    /// character devices; neither is excluded by an active filter, both are simply never probed,
-    /// because only the exact two-character key is looked up.
-    /// </summary>
+    /// <summary>Only exactly <c>&lt;letter&gt;:</c> is a drive. The <c>::</c> and
+    /// <c>comN</c>/<c>lptN</c> entries are devices, never probed because only the two-character
+    /// key is looked up.</summary>
     private string? DriveTarget(char letter)
     {
         var entry = Path.Combine(Root, "dosdevices", $"{letter}:");
@@ -326,11 +294,8 @@ public sealed class WinePrefix
         return letter == 'c' ? DriveC : null;
     }
 
-    /// <summary>
-    /// One case-insensitive match, or nothing. Two entries differing only in case can both exist on
-    /// a case-sensitive filesystem, and picking either would be a guess about which one the client
-    /// reads.
-    /// </summary>
+    /// <summary>One case-insensitive match, or nothing: two entries differing only in case can
+    /// both exist here, and picking either guesses which one the client reads.</summary>
     private static string? SingleMatch(string directory, string segment)
     {
         try

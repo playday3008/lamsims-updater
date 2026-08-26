@@ -10,21 +10,16 @@ namespace LamSims.Core.Unlocking.Wine;
 
 /// <param name="PrefixPath">In full, so a hashed-key collision cannot make a record vouch for
 /// another prefix.</param>
-/// <param name="WroteRegistry">
-/// Whether this application wrote the entry. Removal branches on THIS, never on what a launcher
-/// config now says: a user who adds a Lutris override after installing must not be left with our
-/// registry write in place for ever.
-/// </param>
+/// <param name="WroteRegistry">Whether this application wrote the entry. Removal branches on THIS,
+/// never on what a launcher config now says.</param>
 /// <param name="PriorValue">Written back verbatim on removal, or null to remove the line.</param>
 /// <param name="CreatedBlock">Whether the key block itself was appended, and so may be removed.</param>
 /// <param name="SkippedBecause">Why nothing was written, when nothing was.</param>
 public sealed record WineOverrideRecord(string PrefixPath, bool WroteRegistry, string? PriorValue,
                                         bool CreatedBlock, string? SkippedBecause);
 
-/// <summary>
-/// One record per PREFIX, not per client: a single <c>"*version"</c> entry in a single user.reg
-/// serves every client in that prefix, exactly as one configuration directory does.
-/// </summary>
+/// <summary>One record per PREFIX, not per client: one <c>"*version"</c> entry in one user.reg
+/// serves every client in that prefix.</summary>
 public sealed class WineOverrideStore(AppPaths paths)
 {
     private string FileFor(string prefixPath) =>
@@ -42,12 +37,9 @@ public sealed class WineOverrideStore(AppPaths paths)
             : null;
     }
 
-    /// <summary>
-    /// Reports rather than throws, matching <see cref="Delete"/> and the rest of this file's
-    /// contract. A record that cannot be saved after the registry has been written is the one loss
-    /// nothing else can recover from — the override is in place with nothing on disk that records
-    /// what it replaced — so the caller has to be able to say so.
-    /// </summary>
+    /// <summary>Reports rather than throws. A record that cannot be saved after the registry was
+    /// written is the one unrecoverable loss: the override is in place with nothing recording what
+    /// it replaced.</summary>
     /// <returns>Null on success; the reason otherwise.</returns>
     public async Task<string?> WriteAsync(WineOverrideRecord record, CancellationToken ct)
     {
@@ -118,13 +110,10 @@ public sealed class WineOverrideStore(AppPaths paths)
 /// <summary>
 /// The one registry value this application writes, and the record that lets it be undone.
 ///
-/// It must be <c>"*version"</c> and not <c>"version"</c>: the <c>*</c> prefix marks the entry
-/// path-independent, and the lookup tries the resolved module path first and then
-/// <c>*&lt;basename&gt;</c>. A bare entry matches only the system-directory reduction, which is why
-/// a real prefix carries starless <c>api-ms-win-crt-*</c> entries — those DLLs live in system32 —
-/// beside starred ones. Verified against the real EADesktop.exe: with the starred entry Wine logs
-/// <c>got standard key n,b</c> and loads the app-directory DLL; without it, <c>got hardcoded
-/// default</c> and the app-directory file is never loaded at all.
+/// It must be <c>"*version"</c>, not <c>"version"</c>: the star marks the entry path-independent,
+/// and a bare entry matches only the system-directory reduction. Verified against the real
+/// EADesktop.exe — starred, Wine logs <c>got standard key n,b</c> and loads the app-directory DLL;
+/// unstarred, <c>got hardcoded default</c> and it is never loaded at all.
 /// </summary>
 public static class WineDllOverride
 {
@@ -132,11 +121,8 @@ public static class WineDllOverride
     public const string ValueName = "*version";
     public const string Native = "native,builtin";
 
-    /// <summary>
-    /// Whether the prefix's own registry already prefers the native DLL path-independently. A bare
-    /// <c>"version"</c> entry does NOT satisfy this: per the load order it does not cover an
-    /// app-directory DLL.
-    /// </summary>
+    /// <summary>Whether the registry already prefers the native DLL path-independently. A bare
+    /// <c>"version"</c> entry does NOT satisfy this — it misses an app-directory DLL.</summary>
     public static bool IsSatisfied(WinePrefix prefix)
     {
         var value = WineRegistryFile.ReadValue(prefix.UserRegFile, Key, ValueName)?.Text;
@@ -145,11 +131,8 @@ public static class WineDllOverride
                && LauncherOverrides.Classify($"*version={value}") == OverrideVerdict.SuppliesNative;
     }
 
-    /// <param name="afterWrite">
-    /// Test seam for the flush: wineserver saves on a timer and lingers
-    /// after its last client, so a write can be discarded AFTER it succeeded. Production passes
-    /// none.
-    /// </param>
+    /// <param name="afterWrite">Test seam: wineserver saves on a timer and lingers after its last
+    /// client, so a write can be discarded AFTER it succeeded. Production passes none.</param>
     /// <returns>Null on success; the user-facing failure otherwise.</returns>
     public static async Task<string?> ApplyAsync(WinePrefix prefix, WineOverrideStore store,
                                                  OverrideVerdict verdict, CancellationToken ct,
@@ -159,11 +142,8 @@ public static class WineDllOverride
 
         if (verdict == OverrideVerdict.SuppliesNative || IsSatisfied(prefix))
         {
-            // A record's PriorValue/CreatedBlock are never overwritten by a later call: doing so
-            // would let an ordinary reinstall record our own "native,builtin" as PriorValue, and
-            // removal would then restore the override we just set — the unlocker keeps loading
-            // after the user was told it was gone. Nothing to repair here either way, since the
-            // requirement is already met.
+            // PriorValue/CreatedBlock are never overwritten: a reinstall would record our own
+            // "native,builtin" as PriorValue, and removal would restore the override it just set.
             if (existing is null)
             {
                 // The only record whose loss carries no consequence: nothing was written, so it
@@ -176,25 +156,19 @@ public static class WineDllOverride
             return null;
         }
 
-        // A prefix validates on system.reg and drive_c alone, so user.reg can be absent — a
-        // Proton prefix mid-recreate, a partial restore, a user who deleted it to reset HKCU.
-        // WineRegistryFile treats a missing file as an empty one, so writing here would create a
-        // user.reg holding nothing but our own block, with no "WINE REGISTRY Version 2" header
-        // and no #arch. Wine rejects such a hive, so the override would never load while the
-        // confirming re-read parsed our own file and reported success. UndoAsync refuses the same
-        // shape for the same reason.
+        // A prefix validates on system.reg and drive_c alone, so user.reg can be absent. A missing
+        // file reads as empty, so writing would create one holding only our block, with no header
+        // and no #arch — a hive Wine rejects, while the confirming re-read parses it and reports
+        // success. UndoAsync refuses the same shape.
         if (!File.Exists(prefix.UserRegFile))
         {
             return $"'{prefix.Root}' does not have a valid user.reg file; the prefix may be "
                    + "damaged. The Wine DLL override was not written.";
         }
 
-        // Reached with an existing record when the "*version" entry the record describes is no
-        // longer satisfied and nothing external supplies it — a launcher override the record
-        // recorded as "already in place" was removed, or the entry itself was deleted from
-        // user.reg. The value is repaired below, but the record keeps ITS OWN original PriorValue
-        // and CreatedBlock rather than whatever this write reports: removal must still restore the
-        // user's ORIGINAL value, not a value fabricated by this repair.
+        // A repair: the recorded entry is no longer satisfied and nothing external supplies it.
+        // The record keeps its OWN PriorValue, not this write's report, so removal restores the
+        // user's original value rather than one this repair fabricated.
         WineRegistryWrite write;
         try
         {
@@ -208,19 +182,14 @@ public static class WineDllOverride
 
         afterWrite?.Invoke();
 
-        // The value a removal must restore, and whether the key block was ours to remove. Taken
-        // from the EXISTING record when there is one — a repair — never from this write's own
-        // report, which on a repair reflects the state left after the entry vanished rather than
-        // the user's original value.
+        // From the EXISTING record on a repair: this write's report reflects the state after the
+        // entry vanished, not the user's original value.
         var priorValue = existing?.PriorValue ?? write.PriorValue;
         var createdBlock = existing?.CreatedBlock ?? write.CreatedBlock;
 
-        // Re-read and confirm. Detection cannot see a wineserver lingering with no clients, and that
-        // server owns the registry and rewrites user.reg when it saves. Read the file directly to
-        // distinguish a transient read failure (which could be I/O noise but the write landed) from
-        // a genuine flush that discarded the write. They require opposite handling: a lost write
-        // leaves no record (so re-running rewrites), but a misread landing leaves a record (so
-        // removal can undo).
+        // Re-read and confirm: a lingering wineserver owns the registry and rewrites user.reg when
+        // it saves. Read the file directly, because a transient read failure and a discarded write
+        // need opposite handling — a lost write leaves no record, a misread landing leaves one.
         string? fileText;
         try
         {
@@ -249,10 +218,9 @@ public static class WineDllOverride
 
         if (found)
         {
-            // Value is present and correct: the write succeeded and survived. The record is what
-            // makes it reversible, so a record that cannot be saved has to be reported — otherwise
-            // removal reads nothing, does nothing and reports success, and the value the override
-            // replaced is gone with no trace of what it was.
+            // The record is what makes the write reversible, so a record that cannot be saved must
+            // be reported: otherwise removal does nothing, reports success, and the replaced value
+            // is gone with no trace.
             if (await store.WriteAsync(new WineOverrideRecord(prefix.Root, true, priorValue,
                                                              createdBlock, null), ct) is { } save)
             {
@@ -321,13 +289,9 @@ public static class WineDllOverride
         return null;
     }
 
-    /// <summary>
-    /// Deletes every record whose prefix root directory no longer exists, reporting each — the
-    /// same shape as the existing orphaned-partials sweep. Without it a record outlives its prefix
-    /// and the next removal writes a recorded value into a registry that was regenerated in the
-    /// meantime. If the root exists but validation fails (permission, I/O, format), reports and
-    /// keeps the record rather than silently deleting it.
-    /// </summary>
+    /// <summary>Deletes every record whose prefix root is gone, reporting each. Without it a
+    /// record outlives its prefix and the next removal writes a recorded value into a registry
+    /// regenerated since. A root that exists but fails validation is reported and kept.</summary>
     public static IReadOnlyList<string> SweepOrphans(WineOverrideStore store, string userName)
     {
         var reported = new List<string>();
@@ -338,12 +302,9 @@ public static class WineDllOverride
             // reported but kept, so the undo can try to repair it or the user can investigate.
             if (!Directory.Exists(record.PrefixPath))
             {
-                // "Does not exist" is also the answer for a prefix on an unmounted volume, and a
-                // Proton prefix under a second Steam library is an ordinary place to keep one.
-                // Deleting the record on that answer alone loses the undo for a prefix that is
-                // coming back, and the override then stays in the user's registry with nothing
-                // left on disk that could remove it. The parent separates the two: a deleted
-                // prefix leaves its parent behind, an absent mount takes the whole chain with it.
+                // "Does not exist" is also the answer for an unmounted volume, where a Proton
+                // prefix ordinarily lives. The parent separates the two: a deleted prefix leaves
+                // its parent, an absent mount takes the whole chain.
                 var parent = Path.GetDirectoryName(record.PrefixPath);
                 if (parent is null || !Directory.Exists(parent))
                 {
@@ -357,12 +318,10 @@ public static class WineDllOverride
                 continue;
             }
 
-            // Root exists but may not be a valid prefix. Try to open it.
             if (WinePrefix.TryOpen(record.PrefixPath,
                                    new TargetEnvironment(EnvironmentSource.Wine, record.PrefixPath),
                                    userName) is null)
             {
-                // Validation failed but the root exists. Keep the record and report the issue.
                 reported.Add($"'{record.PrefixPath}' is not a valid Wine prefix.");
             }
         }

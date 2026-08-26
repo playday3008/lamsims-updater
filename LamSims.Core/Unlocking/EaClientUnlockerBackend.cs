@@ -12,12 +12,9 @@ using LamSims.Core.Settings;
 namespace LamSims.Core.Unlocking;
 
 /// <summary>
-/// Upstream's EA DLC Unlocker, ported.
-///
-/// Carries NO platform attribute on purpose: every operating-system facility is behind
-/// <see cref="IUnlockerHost"/> and both special-folder roots are injected, so this class touches
-/// only the filesystem and the seam and runs under a temp directory on any platform. The Windows
-/// surface is <see cref="WindowsUnlockerHost"/> alone.
+/// Upstream's EA DLC Unlocker, ported. Carries NO platform attribute on purpose: every OS facility
+/// is behind <see cref="IUnlockerHost"/> and both roots are injected, so this runs under a temp
+/// directory anywhere. The Windows surface is <see cref="WindowsUnlockerHost"/> alone.
 /// </summary>
 public sealed partial class EaClientUnlockerBackend(
     IUnlockerHost host,
@@ -32,11 +29,8 @@ public sealed partial class EaClientUnlockerBackend(
 
     private readonly ILogSink _log = log ?? NullLogSink.Instance;
 
-    /// <summary>
-    /// What "one install of the unlocker" means. The configuration directory is shared by every
-    /// client that reads it, so it is the natural identity: one value on Windows, one per Wine
-    /// prefix elsewhere.
-    /// </summary>
+    /// <summary>What "one install" means. The configuration directory is shared by every client
+    /// that reads it: one value on Windows, one per Wine prefix elsewhere.</summary>
     private string Scope => paths.ConfigDirectory;
 
     internal const string DllName = "version.dll";
@@ -48,11 +42,9 @@ public sealed partial class EaClientUnlockerBackend(
 
     public bool IsSupported => host.IsAvailable;
 
-    /// <summary>
-    /// Exact names rather than a case-insensitive prefix. Matching anything starting with "EA"
-    /// reaches unrelated software such as EarTrumpet. This table lives here rather than in the
-    /// host so a test can assert it; the updater's own process name must never appear in it.
-    /// </summary>
+    /// <summary>Exact names, not a prefix: matching anything starting with "EA" reaches
+    /// EarTrumpet. Here rather than in the host so a test can assert it; this application's own
+    /// process name must never appear.</summary>
     internal static readonly Dictionary<ClientKind, string[]> ProcessNames = new()
     {
         [ClientKind.EaApp] =
@@ -86,10 +78,8 @@ public sealed partial class EaClientUnlockerBackend(
             var directory = ClientDirectoryOf(value);
             if (directory is null) continue;
 
-            // Two registry views routinely name one directory, and the first-hit return this
-            // replaced collapsed them by accident. Canonical form under OrdinalIgnoreCase, the
-            // rule PathIdentity documents for every catalog-to-filesystem comparison; a
-            // ToLowerInvariant plus Ordinal pair disagrees with it on some characters.
+            // Two registry views routinely name one directory. Canonical under OrdinalIgnoreCase,
+            // per PathIdentity; ToLowerInvariant plus Ordinal disagrees on some characters.
             var identity = PathIdentity.Canonical(directory);
             if (identity is null || !seen.Add(identity)) continue;
 
@@ -101,10 +91,8 @@ public sealed partial class EaClientUnlockerBackend(
         return Task.FromResult<IReadOnlyList<UnlockerTarget>>(found);
     }
 
-    /// <summary>
-    /// The registry value names the client executable, so the target is its containing directory.
-    /// A value that is already a directory is accepted as-is.
-    /// </summary>
+    /// <summary>The registry value names the executable, so the target is its directory. A value
+    /// already naming a directory is taken as-is.</summary>
     private static string? ClientDirectoryOf(string value)
     {
         if (Directory.Exists(value)) return Path.TrimEndingDirectorySeparator(value);
@@ -134,11 +122,8 @@ public sealed partial class EaClientUnlockerBackend(
     private static readonly TimeSpan KillTimeout = TimeSpan.FromSeconds(5);
     private static readonly TimeSpan SettleDelay = TimeSpan.FromSeconds(1);
 
-    /// <summary>
-    /// Issues one report per step, naming the step about to run and counting those finished, plus a
-    /// final report at Total/Total. Without that trailing report a completed install would display
-    /// Total-1/Total and the bar would never fill.
-    /// </summary>
+    /// <summary>One report per step, naming the step about to run and counting those finished,
+    /// plus a final Total/Total — without which a completed install shows Total-1 forever.</summary>
     private sealed class Steps(IProgress<UnlockerProgress> progress, int total, ILogSink log, string? code)
     {
         private int _done;
@@ -156,11 +141,8 @@ public sealed partial class EaClientUnlockerBackend(
 
     private static string CodeFor(UnlockerTarget target) => target.Client.ToString().ToLowerInvariant();
 
-    /// <summary>
-    /// The one place a terminal failure is built, so every one of them is logged at Error rather
-    /// than the log simply stopping mid-run with no reason. The message logged is exactly the one
-    /// the result carries.
-    /// </summary>
+    /// <summary>The one place a terminal failure is built, so every one is logged at Error rather
+    /// than the log stopping mid-run with no reason.</summary>
     private UnlockerResult Failed(string message, string? code, IReadOnlyList<string>? warnings = null)
     {
         _log.Write(LogLine.Error(message, code));
@@ -338,24 +320,19 @@ public sealed partial class EaClientUnlockerBackend(
         var ownsBackup = false;
         try
         {
-            // Seeded from this client's existing record, never recomputed from nothing. A repair
-            // install finds the value already removed, so a freshly computed flag would be false
-            // and would overwrite the owning record with a disowning one, after which nothing ever
-            // restores the user's autostart entry. Inside the try because this step is documented
-            // non-fatal and the store only swallows I/O and JSON faults, so anything else escaping
-            // here would fail the install after version.dll is already on disk.
+            // Seeded from the existing record, never recomputed: a repair install finds the value
+            // already removed, so a fresh flag would be false and would overwrite the owning
+            // record with a disowning one, losing the autostart entry for good. Inside the try
+            // because this step is non-fatal and the store swallows only I/O and JSON faults.
             ownsBackup = _records.Read(Scope, target.Client,
                                       expectedClientPath: target.ClientPath)?.OwnsAutostartBackup == true;
 
             var existing = host.ReadAutostartValue(AutostartValueName);
 
-            // Written when no backup exists yet, and refreshed when this client already owns the
-            // one on disk. The value is one machine-wide entry, so the first client to install
-            // owns it and a second client must never overwrite that backup: doing so would record
-            // the already-removed state and removal would restore nothing. But an owner has to
-            // re-capture, because the client can re-create its Run entry between two installs and
-            // a repair install that kept the older backup would delete the newer value and put
-            // the stale command line back.
+            // The value is one machine-wide entry, so the first client to install owns it: a
+            // second overwriting that backup would record the already-removed state and restore
+            // nothing. An owner must still re-capture, since the client can re-create its Run
+            // entry between installs.
             if (existing is not null
                 && (ownsBackup || !File.Exists(appPaths.UnlockerAutostartBackupFile)))
             {
@@ -366,10 +343,8 @@ public sealed partial class EaClientUnlockerBackend(
                 ownsBackup = true;
             }
 
-            // Never delete a value nothing has a backup of. Reaching the else means a live value
-            // and a backup file this install does not own, so another install already owns the
-            // saved entry and this one leaves the value alone rather than deleting something only
-            // that other install's removal could put back.
+            // Never delete a value nothing has a backup of: the else means another install owns
+            // the saved entry, and only its removal can put this back.
             if (existing is not null && ownsBackup)
             {
                 host.RemoveAutostartValue(AutostartValueName);
@@ -383,10 +358,8 @@ public sealed partial class EaClientUnlockerBackend(
                 _log.Write(LogLine.Warning(message, code));
             }
         }
-        // SecurityException is here on purpose: the host guards its registry READS but not its
-        // writes, because it holds no policy, and a group-policy-restricted Run key throws exactly
-        // this. Without it this non-fatal step would abort the install after the DLL is already in
-        // place.
+        // SecurityException on purpose: the host guards registry reads but not writes, and a
+        // group-policy-restricted Run key throws this — aborting after the DLL is already down.
         catch (Exception e) when (e is IOException or UnauthorizedAccessException
                                       or System.Security.SecurityException)
         {
@@ -443,23 +416,18 @@ public sealed partial class EaClientUnlockerBackend(
         var steps = new Steps(progress, ea ? RemoveStepsEaApp : RemoveStepsOrigin, _log, code);
         var warnings = new List<string>();
 
-        // Step 1, before the elevation check on purpose: a machine with nothing installed must not
-        // raise a UAC prompt to tell the user there is nothing to do. "Nothing installed" is not
-        // just an absent DLL, because an EA app self-update can delete it on its own (which is why
-        // the StagedEADesktop copy exists) and install also flipped the autostart value and wrote a
-        // backup.
+        // Before the elevation check: a machine with nothing installed must not raise a UAC prompt
+        // to say so. "Nothing installed" is more than an absent DLL — an EA app self-update can
+        // delete it, while the flipped autostart value and its backup survive.
         steps.Begin("Checking what is installed");
         var installed = Path.Combine(target.ClientPath, DllName);
 
-        // This client's own artefacts, plus one narrow fallback. The configuration directory and
-        // the autostart backup are shared, so testing those answered "something to remove" for a
-        // client with nothing installed as soon as any other client was.
+        // This client's own artefacts only: the configuration directory and the autostart backup
+        // are shared, so testing those answers "something to remove" for a client with nothing.
         //
-        // The fallback covers a machine installed by a build that had no records at all: an EA app
-        // self-update can delete version.dll on its own, so such a machine can have a live
-        // autostart backup and no DLL and no record, and without this it reports "nothing to
-        // remove" and the user's Run value stays deleted for good. `legacy` is only true when the
-        // store can prove there are no records in this scope at all.
+        // The fallback covers a machine installed by a build with no records: it can have a live
+        // autostart backup, no DLL and no record, and would otherwise lose the Run value for good.
+        // `legacy` is true only when the store proves this scope has no records at all.
         var record = _records.Read(Scope, target.Client, expectedClientPath: target.ClientPath);
         var others = _records.Others(Scope, target.Client);
         var legacy = record is null && others.Complete && others.Records.Count == 0;
@@ -514,11 +482,9 @@ public sealed partial class EaClientUnlockerBackend(
         steps.Begin($"Removing {DllName}");
         try
         {
-            // Guarded rather than bare: the probe above also proceeds when only the autostart backup
-            // survives, and in that case the client directory may be gone entirely. Windows'
-            // File.Delete raises DirectoryNotFoundException, an IOException, for a missing
-            // DIRECTORY though not for a missing file, which would fail this fatal step and leave
-            // the autostart unrestored.
+            // Guarded: the probe proceeds when only the backup survives, so the client directory
+            // may be gone, and File.Delete throws for a missing DIRECTORY though not a missing
+            // file — failing this fatal step and leaving the autostart unrestored.
             if (File.Exists(installed)) File.Delete(installed);
         }
         catch (Exception e) when (e is IOException or UnauthorizedAccessException)
@@ -578,21 +544,16 @@ public sealed partial class EaClientUnlockerBackend(
         {
             var backupFile = appPaths.UnlockerAutostartBackupFile;
 
-            // Only the install that captured the value restores it. Another client's removal
-            // putting it back would re-enable the user's login entry while that client's unlocker
-            // is still installed.
+            // Only the install that captured the value restores it; another client's removal
+            // would re-enable the login entry while that client's unlocker is still installed.
             //
-            // No record covers three cases, not one: an install made before this version, which
-            // cannot have a record and is therefore the only possible claimant; a record that
-            // could not be read; and a record naming a different client path. All three are
-            // treated as "may restore" on purpose. The bias is deliberate: restoring early puts
-            // a login entry back sooner than the user expects and they can turn it off again,
-            // whereas never restoring loses the value for good with nothing left to recover it
-            // from.
+            // "No record" covers three cases — a pre-record install, an unreadable record, and a
+            // record naming another path — and all three may restore. The bias is deliberate:
+            // restoring early puts a login entry back that the user can turn off again, while
+            // never restoring loses the value with nothing left to recover it from.
             //
-            // The last removal in the scope may also claim it, which is what covers a pre-record
-            // owner: it left a backup and no record, so once every recorded client is gone the
-            // backup would otherwise sit there for ever with nobody entitled to restore it.
+            // The last removal in the scope may also claim it, which is what frees a pre-record
+            // owner's backup once every recorded client is gone.
             var mayRestore = record is null || record.OwnsAutostartBackup
                              || (others.Complete && others.Records.Count == 0);
             if (mayRestore && File.Exists(backupFile))
@@ -662,23 +623,16 @@ public sealed partial class EaClientUnlockerBackend(
         steps.Begin("Removing the unlocker configuration");
         try
         {
-            // Shared by every client in this scope, and it is the unlocker DLL's own path rather
-            // than ours, so it cannot be split per client. Deleting it while another client's
-            // unlocker is installed leaves that DLL loading and finding no configuration.
-            // `others` was read once at step 1; nothing between there and here writes a record.
-            // Not deleted unless the store could actually prove nobody else needs it. An
-            // unreadable store or one corrupt sibling record answers "cannot tell", and treating
-            // that as "nobody" destroys the other client's configuration exactly as an
-            // unconditional delete of the shared directory would.
+            // Shared by every client in this scope and fixed by the unlocker DLL, so it cannot be
+            // split per client: deleting it while another unlocker is installed leaves that DLL
+            // finding no configuration. Deleted only when the store PROVES nobody else needs it —
+            // an unreadable store answers "cannot tell", and treating that as "nobody" destroys
+            // the other client's configuration.
             //
-            // The records are not the whole answer, and for one shape they are no answer at all.
-            // No install made by the shipped build wrote a record, so on the entire existing
-            // two-client population the store answers "nobody else" with complete confidence
-            // while the other client's DLL is on disk. And the store keys a record by ClientKind,
-            // so it cannot see a sibling of the SAME kind at another path at all: two EA app
-            // directories share one record file, and Others() excludes the caller's own kind by
-            // construction. In both shapes the DLL on disk is the only ground truth, so the
-            // sibling test is by PATH rather than by kind.
+            // The records are not the whole answer. Installs from the shipped build wrote none,
+            // and a record is keyed by ClientKind so it cannot see a sibling of the same kind at
+            // another path. The DLL on disk is the only ground truth, so the sibling test is by
+            // PATH rather than by kind.
             var self = PathIdentity.Canonical(target.ClientPath) ?? target.ClientPath;
             var siblingInstalled = (await DetectTargetsAsync(ct)).Any(t =>
                 !string.Equals(PathIdentity.Canonical(t.ClientPath) ?? t.ClientPath, self,

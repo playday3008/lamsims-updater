@@ -8,21 +8,17 @@ namespace LamSims.Core.Unlocking.Wine;
 
 public enum OverrideVerdict { Absent, SuppliesNative, ForcesBuiltin }
 
-/// <param name="Warnings">
-/// Ready-to-display text for each hostile config, naming the file and the game. That launch path
-/// will not load the unlocker whatever this application writes, because the environment outranks
-/// the registry, so the only useful response is to tell the user where it is.
-/// </param>
+/// <param name="Warnings">Text for each hostile config, naming the file and the game. The
+/// environment outranks the registry, so that launch path will not load the unlocker whatever we
+/// write — the only useful response is to say where it is.</param>
 /// <param name="Unread">Sources that exist but cannot be read, so a clean verdict is not oversold.</param>
 public sealed record OverrideFinding(OverrideVerdict Verdict, IReadOnlyList<string> Warnings,
                                      IReadOnlyList<string> Unread);
 
 /// <summary>
-/// What each launcher would put in <c>WINEDLLOVERRIDES</c> for a prefix. Read-only throughout:
-/// this application never writes another application's configuration.
-///
-/// Aggregated across EVERY config naming the prefix, because one prefix routinely has several and
-/// they disagree — the measured EA app prefix has n,b in two Lutris configs and b,n in a third.
+/// What each launcher would put in <c>WINEDLLOVERRIDES</c> for a prefix. Read-only throughout.
+/// Aggregated across EVERY config naming the prefix, because one prefix routinely has several that
+/// disagree — the measured EA app prefix has n,b in two Lutris configs and b,n in a third.
 /// </summary>
 public sealed class LauncherOverrides(LauncherHomes homes)
 {
@@ -58,20 +54,14 @@ public sealed class LauncherOverrides(LauncherHomes homes)
         return new OverrideFinding(overall, warnings, unread);
     }
 
-    /// <summary>
-    /// Every config that names this prefix, as (file, game, override specification). The
-    /// specification is whatever that launcher would put in WINEDLLOVERRIDES, in either the mapping
-    /// or the string form.
-    /// </summary>
+    /// <summary>Every config naming this prefix, as (file, game, spec) — whatever that launcher
+    /// would put in WINEDLLOVERRIDES, in mapping or string form.</summary>
     private IEnumerable<(string File, string Game, string? Spec)> Sources(
         string prefixRoot, List<string> unread)
     {
-        // Resolved, not merely canonicalised: prefixRoot was itself produced by
-        // WinePrefixScanner.Resolve (which follows every symlinked component, unlike
-        // PathIdentity.Canonical) and may then have descended one level into "pfx" via
-        // WinePrefix.TryOpen's Valve-Proton retry. Comparing a config's own path under anything
-        // weaker leaves the config side unmatched, so verdicts stay empty and the prefix reads as
-        // plain Absent while a hostile override goes unreported.
+        // Resolved, not canonicalised: prefixRoot came from WinePrefixScanner.Resolve and may have
+        // descended into "pfx". Anything weaker leaves the config side unmatched, so the prefix
+        // reads Absent while a hostile override goes unreported.
         var wanted = WinePrefixScanner.Resolve(prefixRoot) ?? prefixRoot;
 
         foreach (var home in homes.For(EnvironmentSource.Lutris))
@@ -110,11 +100,9 @@ public sealed class LauncherOverrides(LauncherHomes homes)
 
         foreach (var home in homes.For(EnvironmentSource.Bottles))
         {
-            // A bottle IS the prefix, so the only bottle that can name it is itself — and only when
-            // this prefix really sits directly under that bottles root. Without the parent check a
-            // stray bottle.yml inside any prefix would be read as that prefix's Bottles config.
-            // Resolved on both sides for the same reason as `wanted` above: a symlinked bottles
-            // root must still match.
+            // A bottle IS the prefix, so the only bottle naming it is itself, and only under that
+            // bottles root — without the parent check a stray bottle.yml in any prefix would read
+            // as its Bottles config. Resolved on both sides, as for `wanted`.
             var parentDir = Path.GetDirectoryName(wanted);
             var parent = parentDir is null ? null : WinePrefixScanner.Resolve(parentDir);
             if (parent is null || parent != (WinePrefixScanner.Resolve(home.Root) ?? home.Root))
@@ -238,11 +226,8 @@ public sealed class LauncherOverrides(LauncherHomes homes)
         }
     }
 
-    /// <summary>
-    /// The LaunchOptions value inside the app's own block. Scanned rather than parsed as a tree: the
-    /// only question is what this one app's launch options say, and a VDF tree parser would be a lot
-    /// of surface for one string. Extracts and unescapes the WINEDLLOVERRIDES value if present.
-    /// </summary>
+    /// <summary>The LaunchOptions value in the app's own block, unescaped. Scanned rather than
+    /// parsed as a tree: a VDF parser is a lot of surface for one string.</summary>
     private static string? LaunchOptions(string file, string appId, List<string> unread)
     {
         string[] lines;
@@ -266,10 +251,8 @@ public sealed class LauncherOverrides(LauncherHomes homes)
             if (line == $"\"{appId}\"") { inApp = true; braceDepth = 0; continue; }
             if (!inApp) continue;
 
-            // Track brace depth to know when the app block ends. Nested objects (like other
-            // siblings beside LaunchOptions) open and close at depths > 0; the app block's own
-            // closing brace brings depth back to zero. Without depth tracking, a nested object's
-            // closing brace stops the scan early, leaving LaunchOptions unread.
+            // Depth tracking, because a nested object's closing brace would otherwise stop the
+            // scan early and leave LaunchOptions unread.
             foreach (var ch in line)
             {
                 if (ch == '{') braceDepth++;
@@ -293,7 +276,7 @@ public sealed class LauncherOverrides(LauncherHomes homes)
 
             var launchOptions = builder.ToString();
 
-            // Extract WINEDLLOVERRIDES value if present. Format: WINEDLLOVERRIDES=<value> [more options]
+            // Format: WINEDLLOVERRIDES=<value> [more options]
             foreach (var part in launchOptions.Split(' ', StringSplitOptions.RemoveEmptyEntries))
             {
                 if (!part.StartsWith("WINEDLLOVERRIDES=", StringComparison.OrdinalIgnoreCase)) continue;
@@ -318,11 +301,8 @@ public sealed class LauncherOverrides(LauncherHomes homes)
         return null;
     }
 
-    /// <summary>
-    /// Read a DLL override from a Bottles bottle.yml, but only from within the DLL_Overrides section.
-    /// This avoids colliding with other keys like `version:` (schema version) that may appear at the
-    /// file's top level and are not DLL overrides.
-    /// </summary>
+    /// <summary>A DLL override from a bottle.yml, read only inside DLL_Overrides — the top level
+    /// has its own `version:` key, which is a schema version.</summary>
     private static string? ReadBottlesDllOverride(string file, string key)
     {
         string[] lines;
@@ -346,7 +326,6 @@ public sealed class LauncherOverrides(LauncherHomes homes)
             var trimmed = line.TrimStart();
             var indent = line.Length - trimmed.Length;
 
-            // Find the DLL_Overrides header
             if (!inDllOverrides)
             {
                 if (trimmed.StartsWith("DLL_Overrides:", StringComparison.OrdinalIgnoreCase))
@@ -358,11 +337,9 @@ public sealed class LauncherOverrides(LauncherHomes homes)
                 continue;
             }
 
-            // If we're in DLL_Overrides and hit a line at header level or less, we're done
             if (indent <= headerIndent && !trimmed.StartsWith("DLL_Overrides:", StringComparison.OrdinalIgnoreCase))
                 break;
 
-            // Look for the key at a level deeper than the header
             if (indent > headerIndent && trimmed.StartsWith($"{key}:", StringComparison.OrdinalIgnoreCase))
             {
                 var valueStart = key.Length + 1;
@@ -380,13 +357,10 @@ public sealed class LauncherOverrides(LauncherHomes homes)
     private static bool Names(string file, string key, string wanted) =>
         WinePrefixScanner.ReadLineValues(file, key).Any(value => MatchesPrefix(value, wanted));
 
-    /// <summary>
-    /// Whether a launcher-declared path names this prefix. Compared through
-    /// <see cref="WinePrefixScanner.Resolve"/> on both sides, never <see cref="PathIdentity.Canonical"/>
-    /// alone (lexical, never follows a symlink), and additionally accepts a config that names the
-    /// CONTAINER of a Valve-Proton-shaped prefix by also trying <c>&lt;value&gt;/pfx</c>, which is
-    /// exactly the one-level descent <see cref="WinePrefix.TryOpen"/> itself performs.
-    /// </summary>
+    /// <summary>Whether a launcher-declared path names this prefix. Through
+    /// <see cref="WinePrefixScanner.Resolve"/> on both sides, never Canonical alone, and also
+    /// trying <c>&lt;value&gt;/pfx</c> — the same descent <see cref="WinePrefix.TryOpen"/>
+    /// performs.</summary>
     private static bool MatchesPrefix(string? value, string wanted)
     {
         if (string.IsNullOrWhiteSpace(value)) return false;
@@ -420,14 +394,10 @@ public sealed class LauncherOverrides(LauncherHomes homes)
     }
 
     /// <summary>
-    /// Three-valued: a two-valued verdict cannot separate "no override" from "an override that
-    /// forces Wine's own DLL", so <c>b,n</c> reads as absent, the registry write goes ahead and the
-    /// run reports plain success while the unlocker never loads.
-    ///
-    /// Matches the module <c>version</c> with or without the <c>.dll</c> suffix and with or without
-    /// the <c>*</c> prefix, case-insensitively, and is NOT satisfied by a substring:
-    /// <c>versioncheck</c> must not match, or an unrelated module's override skips the write that
-    /// makes the unlocker load.
+    /// Three-valued: two values cannot separate "no override" from "an override forcing Wine's own
+    /// DLL", so <c>b,n</c> would read as absent and the run would report success while the unlocker
+    /// never loads. Matches <c>version</c> with or without <c>.dll</c> and <c>*</c>,
+    /// case-insensitively, and never as a substring — <c>versioncheck</c> must not match.
     /// </summary>
     public static OverrideVerdict Classify(string? overrides)
     {
@@ -443,19 +413,15 @@ public sealed class LauncherOverrides(LauncherHomes homes)
                 if (at < 0) continue;
             }
 
-            // One entry can name several modules sharing a value: Wine documents
-            // `comdlg32,version=n,b`, and a launcher's env line is the usual way one arrives.
-            // Reading the whole left side as a single name matches none of them, so an entry that
-            // does govern version.dll would fall through to Absent.
+            // One entry can name several modules sharing a value (`comdlg32,version=n,b`), and
+            // reading the left side whole matches none of them.
             if (!NamesVersion(entry[..at])) continue;
 
             var value = entry[(at + 1)..].Trim().Trim('"');
 
-            // Wine takes the fields in priority order, so only the first decides what loads. An
-            // absent first field is Wine's "disabled": the DLL is not loaded at all, so the
-            // unlocker cannot work on that launch path, and reading it as "absent" would report
-            // success. A value of separators alone ("," or ",,") means the same and leaves no
-            // field to read.
+            // Only the first field decides what loads. An absent first field is Wine's "disabled" —
+            // the DLL never loads, so reading it as "absent" would report success. A value of
+            // separators alone means the same.
             var fields = value.Split(',');
             var first = fields.Length == 0 ? "" : fields[0].Trim();
             if (first.Length == 0) return OverrideVerdict.ForcesBuiltin;
@@ -468,11 +434,8 @@ public sealed class LauncherOverrides(LauncherHomes homes)
         return OverrideVerdict.Absent;
     }
 
-    /// <summary>
-    /// Whether a module list — one name or a comma-separated group — names <c>version</c>. The
-    /// leading <c>*</c> of a path-independent registry entry and the <c>.dll</c> a launcher
-    /// config often spells out are both stripped, since neither changes which module is meant.
-    /// </summary>
+    /// <summary>Whether a module list names <c>version</c>. The <c>*</c> of a path-independent
+    /// entry and a spelled-out <c>.dll</c> are both stripped.</summary>
     private static bool NamesVersion(string modules)
     {
         foreach (var candidate in modules.Split(',', StringSplitOptions.RemoveEmptyEntries))
@@ -487,11 +450,9 @@ public sealed class LauncherOverrides(LauncherHomes homes)
         return false;
     }
 
-    /// <summary>
-    /// A per-application entry under <c>AppDefaults\&lt;exe&gt;\DllOverrides</c> silently outranks
-    /// the global block, and winecfg's per-application tab is how a user acquires one. Read and
-    /// reported, never written.
-    /// </summary>
+    /// <summary>A per-application entry under <c>AppDefaults\&lt;exe&gt;\DllOverrides</c> silently
+    /// outranks the global block, and winecfg's per-application tab is how one is acquired. Read
+    /// and reported, never written.</summary>
     public static string? AppDefaultsConflict(WinePrefix prefix, string clientExe)
     {
         var key = $@"Software\Wine\AppDefaults\{clientExe}\DllOverrides";

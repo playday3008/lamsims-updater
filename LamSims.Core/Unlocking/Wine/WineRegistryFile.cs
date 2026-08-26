@@ -8,11 +8,9 @@ using System.Threading.Tasks;
 
 namespace LamSims.Core.Unlocking.Wine;
 
-/// <param name="Text">
-/// The decoded string, or null for a value that is not text at all. Non-null for str(2) and
-/// str(7) as well as a plain quoted string: both hold quoted strings, and a ClientPath stored as
-/// REG_EXPAND_SZ read as "not a string" makes detection find nothing with no error.
-/// </param>
+/// <param name="Text">The decoded string, or null for a value that is not text. Non-null for
+/// str(2) and str(7) too — a ClientPath stored as REG_EXPAND_SZ read as "not a string" makes
+/// detection find nothing, silently.</param>
 /// <param name="Expandable">REG_EXPAND_SZ, whose %VAR% references the caller must expand.</param>
 public sealed record WineRegistryValue(string? Text, bool Expandable);
 
@@ -21,22 +19,17 @@ public sealed record WineRegistryValue(string? Text, bool Expandable);
 /// </param>
 public sealed record WineRegistryWrite(bool CreatedBlock, string? PriorValue);
 
-/// <summary>
-/// Wine's .reg text format, read fully and written surgically. Writing is line-oriented and never
-/// parse-and-regenerate: this application owns exactly one value in one key, and rewriting a
-/// 38 000-line registry to change it would put every other value at risk of a round-trip bug.
-/// </summary>
+/// <summary>Wine's .reg format, read fully and written surgically. Line-oriented, never
+/// parse-and-regenerate: this owns one value in one key, and rewriting 38 000 lines to change it
+/// would put every other value at risk of a round-trip bug.</summary>
 public static class WineRegistryFile
 {
     public static WineRegistryValue? ReadValue(string path, string key, string name) =>
         ReadKey(path, key) is { } values && values.TryGetValue(name, out var value) ? value : null;
 
-    /// <summary>
-    /// Every value in the key, or null when the key is absent. Values from EVERY block with that
-    /// name are merged, because duplicate blocks merge in Wine too (measured): stopping at the
-    /// first would miss a value written exactly the way <see cref="SetValueAsync"/> writes one
-    /// into a file that had no block.
-    /// </summary>
+    /// <summary>Every value in the key, or null when it is absent. EVERY block with that name is
+    /// merged, because duplicate blocks merge in Wine too (measured) — stopping at the first
+    /// misses a value written the way <see cref="SetValueAsync"/> writes one.</summary>
     public static IReadOnlyDictionary<string, WineRegistryValue>? ReadKey(string path, string key)
     {
         try
@@ -49,12 +42,7 @@ public static class WineRegistryFile
         }
     }
 
-    /// <summary>
-    /// Every value in the key, parsed from enumerable lines, or null when the key is absent.
-    /// Values from EVERY block with that name are merged, because duplicate blocks merge in Wine
-    /// too (measured): stopping at the first would miss a value written exactly the way
-    /// <see cref="SetValueAsync"/> writes one into a file that had no block.
-    /// </summary>
+    /// <summary>As <see cref="ReadKey"/>, from enumerable lines.</summary>
     public static IReadOnlyDictionary<string, WineRegistryValue>? ReadKeyFromLines(
         IEnumerable<string> lines, string key)
     {
@@ -88,10 +76,8 @@ public static class WineRegistryFile
                 continue;
             }
 
-            // Skip lines that are not named values in the current key. `@=` is the key's
-            // DEFAULT value, and there are 29 773 of them. Read as a named value it becomes an
-            // entry called "", which satisfies any "is there an entry" test and reports overrides
-            // nobody set.
+            // `@=` is the key's DEFAULT value, and there are 29 773 of them. Read as a named
+            // value it becomes an entry called "", which reports overrides nobody set.
             if (!inKey || line.Length == 0 || line[0] != '"')
             {
                 continue;
@@ -132,10 +118,8 @@ public static class WineRegistryFile
         return new WineRegistryValue(null, false);
     }
 
-    /// <summary>
-    /// The index of the closing quote, skipping escaped ones. A value whose text contains \" would
-    /// otherwise be truncated at the escape.
-    /// </summary>
+    /// <summary>The closing quote, skipping escaped ones: a value containing \" would otherwise
+    /// truncate at the escape.</summary>
     private static int ClosingQuote(string line, int start)
     {
         for (var i = start; i < line.Length; i++)
@@ -187,12 +171,9 @@ public static class WineRegistryFile
     private static string EscapeKey(string key) =>
         key.Replace("\\", "\\\\", StringComparison.Ordinal);
 
-    /// <summary>
-    /// The Windows-side variables a ClientPath stored as REG_EXPAND_SZ can carry. The result is
-    /// still a WINDOWS path, for the prefix's own resolver to translate; nothing here touches the
-    /// Linux filesystem. An unknown variable is left as it stands rather than blanked, so the
-    /// resolver reports a path that does not exist instead of one that resolves somewhere wrong.
-    /// </summary>
+    /// <summary>The Windows-side variables a REG_EXPAND_SZ ClientPath can carry. The result is
+    /// still a WINDOWS path. An unknown variable is left standing rather than blanked, so the
+    /// resolver reports a path that does not exist rather than one resolving somewhere wrong.</summary>
     public static string Expand(string value, string windowsUserName)
     {
         if (!value.Contains('%')) return value;
@@ -220,12 +201,10 @@ public static class WineRegistryFile
         return value;
     }
 
-    /// <summary>
-    /// Sets one value in one key, leaving every other byte of the file as it was. Block present is
-    /// the NORMAL case: a prefix created by wineboot -i already carries an empty
-    /// <c>[Software\\Wine\\DllOverrides]</c> block, measured, so an implementation that handled
-    /// only the append path would work on no real prefix at all.
-    /// </summary>
+    /// <summary>Sets one value in one key, leaving every other byte as it was. Block present is
+    /// the NORMAL case — a prefix from wineboot -i already carries an empty
+    /// <c>[Software\\Wine\\DllOverrides]</c> block, so an append-only implementation works on no
+    /// real prefix.</summary>
     public static async Task<WineRegistryWrite> SetValueAsync(string path, string key, string name,
                                                               string value, CancellationToken ct)
     {
@@ -257,7 +236,6 @@ public static class WineRegistryFile
             var endsWithBackslash = trimmed.EndsWith('\\');
             lines[i] = line;
 
-            // Consume continuation lines that follow the replaced value.
             if (endsWithBackslash)
             {
                 var j = i + 1;
@@ -311,7 +289,6 @@ public static class WineRegistryFile
             blockEnd--;
             removed = true;
 
-            // Consume continuation lines that follow the removed value.
             if (endsWithBackslash)
             {
                 bool continueRemoving = true;
@@ -350,11 +327,8 @@ public static class WineRegistryFile
         return false;
     }
 
-    /// <summary>
-    /// The first block with this key name and where it ends. The FIRST, because duplicate blocks
-    /// merge in Wine and it rewrites them into one: writing into the first is what makes our line
-    /// land where the canonical form keeps it.
-    /// </summary>
+    /// <summary>The first block with this name, and where it ends. The FIRST, because Wine merges
+    /// duplicates into one and that is where the canonical form keeps our line.</summary>
     private static (int KeyIndex, int BlockEnd) FindBlock(List<string> lines, string wanted)
     {
         var keyIndex = -1;
@@ -376,10 +350,8 @@ public static class WineRegistryFile
         return (keyIndex, lines.Count);
     }
 
-    /// <summary>
-    /// Lines plus the exact run of trailing newlines, so a file this application only inserts into
-    /// comes back byte-identical when the insertion is undone.
-    /// </summary>
+    /// <summary>Lines plus the exact trailing newlines, so a file we only inserted into comes back
+    /// byte-identical when the insertion is undone.</summary>
     private static (List<string> Lines, string Tail) Load(string path)
     {
         var text = File.Exists(path) ? File.ReadAllText(path) : "";

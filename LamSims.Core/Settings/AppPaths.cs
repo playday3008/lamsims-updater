@@ -4,15 +4,12 @@ using System.IO;
 namespace LamSims.Core.Settings;
 
 /// <summary>
-/// Where the application keeps state that is not a download: settings and the cached
-/// catalog. <see cref="Environment.SpecialFolder.ApplicationData"/> resolves to
-/// <c>%APPDATA%</c> on Windows and to the XDG configuration directory on Linux, and each
-/// other platform has its own answer, so one call covers all of them.
+/// State that is not a download: settings and the cached catalog.
+/// <see cref="Environment.SpecialFolder.ApplicationData"/> answers correctly on every platform.
 ///
-/// <see cref="Environment.SpecialFolderOption.DoNotVerify"/> because the default option answers
-/// with an empty string for a directory that does not exist yet, which is what a Linux account
-/// with no ~/.config has. <see cref="Path.Combine(string, string)"/> turns that empty string into
-/// a relative path, and every file below would land in the process's working directory.
+/// <see cref="Environment.SpecialFolderOption.DoNotVerify"/>, because the default returns an EMPTY
+/// string for a directory that does not exist yet — a Linux account with no ~/.config — and
+/// Path.Combine turns that into a relative path under the working directory.
 /// </summary>
 public sealed class AppPaths
 {
@@ -30,20 +27,14 @@ public sealed class AppPaths
     public string SettingsFile => Path.Combine(Root, "settings.json");
     public string CatalogCacheFile => Path.Combine(Root, "catalog.cache.json");
 
-    /// <summary>
-    /// Where per-pack install markers live, grouped by game directory. Under the app's own
-    /// root rather than inside the game directory: the game directory belongs to EA's
-    /// installer, repair tools, mod managers and the user, all of which routinely remove
-    /// entries they do not recognise.
-    /// </summary>
+    /// <summary>Per-pack install markers, grouped by game directory. Under our own root, because
+    /// the game directory belongs to EA's installer, repair tools and mod managers, all of which
+    /// remove entries they do not recognise.</summary>
     public string InstallStateDirectory => Path.Combine(Root, "installs");
 
-    /// <summary>
-    /// Where the EADM autostart value removed at install time is recorded, so removal can put it
-    /// back. Under the app's own root and not in the unlocker's config directory, because removal
-    /// deletes that directory wholesale and a backup stored there could not survive the operation
-    /// that needs to read it.
-    /// </summary>
+    /// <summary>The autostart value removed at install time, so removal can restore it. Not in the
+    /// unlocker's config directory, which removal deletes wholesale — a backup there could not
+    /// survive the operation that reads it.</summary>
     public string UnlockerAutostartBackupFile => Path.Combine(Root, "unlocker-autostart.json");
 
     /// <summary>
@@ -53,13 +44,10 @@ public sealed class AppPaths
     /// </summary>
     public string UnlockerInstallDirectory => Path.Combine(Root, "unlocker-installs");
 
-    /// <summary>
-    /// Where the Wine DLL-override records live, one per prefix. A separate store from
-    /// <see cref="UnlockerInstallDirectory"/> rather than extra fields on the per-client record,
-    /// because the install engine rewrites that record on every install and would wipe them; and
-    /// keyed by prefix rather than by client, because one "*version" entry in one user.reg serves
-    /// every client in that prefix.
-    /// </summary>
+    /// <summary>Wine DLL-override records, one per prefix. Separate from
+    /// <see cref="UnlockerInstallDirectory"/> because the install engine rewrites that record every
+    /// install and would wipe them; keyed by prefix because one "*version" entry serves every
+    /// client in it.</summary>
     public string WineOverrideDirectory => Path.Combine(Root, "wine-overrides");
 
     public void EnsureCreated() => Directory.CreateDirectory(Root);

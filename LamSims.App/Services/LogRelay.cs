@@ -14,27 +14,20 @@ namespace LamSims.App.Services;
 public sealed record LogEntry(string Time, string? Code, string Text, bool IsWarning, bool IsError);
 
 /// <summary>
-/// The App's ILogSink. It does the two things Core cannot: stamps the line, and gets it off
-/// whatever thread produced it.
-///
-/// Split from LogViewModel deliberately. Composition.Build assembles the Core services, but both
-/// the tests and MainWindow then replace members with `services with { Dispatcher = … }` — so a
-/// sink that captured the dispatcher at Build time would hold the one that was thrown away. This
-/// half is built early with no dispatcher; the view model attaches to it later with the real one.
+/// The App's ILogSink: it stamps the line and gets it off whatever thread produced it — the two
+/// things Core cannot do. Split from LogViewModel because callers replace the dispatcher after
+/// Build returns, so a sink that captured one at Build time would hold the discarded one. This
+/// half is built early with none; the view model attaches later with the real one.
 /// </summary>
 public sealed class LogRelay(IClock clock) : ILogSink
 {
     private readonly ConcurrentQueue<LogEntry> _pending = new();
     private int _wakePosted;
 
-    /// <summary>
-    /// Raised when lines become available and no wake is outstanding. May be attached after lines
-    /// have already been written — see the class doc, which builds this relay before a dispatcher
-    /// exists to attach one — so <see cref="Write"/> only takes the wake flag once a handler is
-    /// present, and never leaves the flag stuck: a handler that throws (a shut-down dispatcher
-    /// during exit, say) has its exception swallowed here and the flag released, because an
-    /// <see cref="ILogSink"/> must never break the caller that logged through it.
-    /// </summary>
+    /// <summary>Raised when lines become available and no wake is outstanding. May be attached
+    /// after lines were written, so <see cref="Write"/> takes the flag only once a handler is
+    /// present. A throwing handler is swallowed and the flag released: an
+    /// <see cref="ILogSink"/> must never break the caller that logged through it.</summary>
     public Action? OnAvailable { get; set; }
 
     public void Write(LogLine line)
@@ -53,25 +46,18 @@ public sealed class LogRelay(IClock clock) : ILogSink
 
     public bool TryDequeue([MaybeNullWhen(false)] out LogEntry entry) => _pending.TryDequeue(out entry);
 
-    /// <summary>
-    /// Called by the consumer after it has drained. Correct without relying on the consumer
-    /// draining again afterwards: a write can arrive while the flag is still held (it lost the
-    /// race in <see cref="TryWake"/> and left its line queued with nobody watching), so this
-    /// clears the flag and then re-checks the queue, re-waking if something is still there rather
-    /// than depending on a later, unrelated write to surface it.
-    /// </summary>
+    /// <summary>Called by the consumer after draining. A write can arrive while the flag is still
+    /// held, leaving its line queued with nobody watching, so this clears the flag and re-checks
+    /// rather than depending on a later, unrelated write to surface it.</summary>
     public void ReleaseWake()
     {
         Interlocked.Exchange(ref _wakePosted, 0);
         if (!_pending.IsEmpty) TryWake();
     }
 
-    /// <summary>
-    /// Takes the wake flag and raises <see cref="OnAvailable"/>, at most once per outstanding
-    /// wake. Reads the handler into a local first and does nothing when it is null, so a write
-    /// that lands before a consumer attaches never takes the flag — leaving it clear for whichever
-    /// write follows attachment, instead of taking it once and stalling forever.
-    /// </summary>
+    /// <summary>Takes the wake flag and raises <see cref="OnAvailable"/>, at most once per
+    /// outstanding wake. Reads the handler into a local first and does nothing when null, so a
+    /// write landing before a consumer attaches never takes the flag and stalls forever.</summary>
     private void TryWake()
     {
         var handler = OnAvailable;

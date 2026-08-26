@@ -23,12 +23,10 @@ namespace LamSims.Core.Unlocking.Wine;
 /// Read LIVE, per scan, so changing the setting re-runs detection without rebuilding the graph.
 /// </param>
 /// <param name="notes">
-/// What the USER must act on, and nothing else — it is rendered as a list in the window. Only the
-/// scanner writes to it now, and only for three things: a prefix the user named that is not one,
-/// a Flatpak sandbox that cannot see the host, and finding no prefix at all. Everything this
-/// backend used to report here — a prefix with no client registered, a 32-bit prefix, an
-/// unreachable Windows user, a swept override record — is a fact about an environment nobody
-/// claimed was usable, and goes to <paramref name="log"/>.
+/// What the USER must act on, and nothing else — the window renders it as a list. Only the scanner
+/// writes here, for three things: a named path that is not a prefix, a Flatpak sandbox that cannot
+/// see the host, and finding nothing at all. Facts about environments nobody claimed were usable
+/// go to <paramref name="log"/>.
 /// </param>
 public sealed class WinePrefixUnlockerBackend(
     LauncherHomes homes, AppPaths appPaths, IDelayProvider delays, IWineProcesses processes,
@@ -40,15 +38,10 @@ public sealed class WinePrefixUnlockerBackend(
 
     public string Id => "wine-prefix";
 
-    /// <summary>
-    /// Linux only, not "not Windows". macOS is out of scope: it has no <c>/proc</c>, so
-    /// <see cref="IWineProcesses.IsPrefixLive"/> always answers idle there and the check protecting
-    /// a registry write from a wineserver flush never fires, and <see cref="LauncherHomes"/>'s XDG
-    /// table is wrong for macOS too. Windows gets the EA-client backend
-    /// (<c>EaClientUnlockerBackend.IsSupported => host.IsAvailable</c>) and Linux gets this one; on
-    /// any other platform, including macOS, NEITHER reports supported, and the DLC Unlocker section
-    /// hides itself there rather than offering a backend that cannot work.
-    /// </summary>
+    /// <summary>Linux only, not "not Windows". macOS has no <c>/proc</c>, so
+    /// <see cref="IWineProcesses.IsPrefixLive"/> always answers idle and the check protecting a
+    /// registry write never fires; its XDG table is wrong too. There neither backend reports
+    /// supported and the section hides itself.</summary>
     public bool IsSupported => OperatingSystem.IsLinux();
 
     private readonly WineOverrideStore _overrides = new(appPaths);
@@ -60,10 +53,9 @@ public sealed class WinePrefixUnlockerBackend(
     {
         if (!IsSupported) return [];
 
-        // A record outlives its prefix, and the undo would then write a recorded value into a
-        // registry that was regenerated in the meantime. Detection is the only thing that runs
-        // often enough to catch it.
-        // Housekeeping about prefixes that are gone, which asks nothing of the user.
+        // A record outliving its prefix would make the undo write into a registry regenerated
+        // since. Detection is the only thing that runs often enough to catch it, and this asks
+        // nothing of the user.
         foreach (var orphan in WineDllOverride.SweepOrphans(_overrides, userName))
             _log.Write(LogLine.Info(orphan));
 
@@ -136,7 +128,6 @@ public sealed class WinePrefixUnlockerBackend(
                             : EaClientUnlockerBackend.InstallStepsOrigin;
         var total = innerTotal + ExtraInstallSteps;
 
-        // Step 1.
         progress.Report(new UnlockerProgress("Checking the Wine prefix", 0, total));
 
         var opened = Reopen(target);
@@ -263,23 +254,16 @@ public sealed class WinePrefixUnlockerBackend(
     private static string ClientExe(UnlockerTarget target) =>
         target.Client == ClientKind.EaApp ? "EADesktop.exe" : "Origin.exe";
 
-    /// <summary>
-    /// The client, as named in a sentence telling the user to close it. "EA app" reads as a common
-    /// noun and needs the article; "Origin" is a proper noun and does not, so this is not a bare
-    /// DisplayName interpolation — it is what makes the Origin refusal say "Close Origin" rather
-    /// than sending an Origin user to close a client that has nothing to do with what they are
-    /// unlocking.
-    /// </summary>
+    /// <summary>The client as named in a sentence telling the user to close it. "EA app" is a
+    /// common noun and takes the article; "Origin" does not — hence not a bare DisplayName
+    /// interpolation.</summary>
     private static string ClientSubject(UnlockerTarget target) =>
         target.Client == ClientKind.EaApp ? "the EA app" : target.DisplayName;
 
-    /// <summary>
-    /// Exactly the condition under which <see cref="WineDllOverride.ApplyAsync"/> writes, because
-    /// this is what gates the liveness refusals that protect the write. Any term here that Apply
-    /// does not have describes a write that happens with no gate in front of it — a repair, where
-    /// a record exists but the entry it describes has gone, would then read-modify-replace the
-    /// whole of user.reg while wineserver was free to flush over it.
-    /// </summary>
+    /// <summary>Exactly the condition under which <see cref="WineDllOverride.ApplyAsync"/> writes,
+    /// because this gates the liveness refusals that protect it. Any term Apply lacks describes an
+    /// ungated write — a repair would read-modify-replace user.reg while wineserver could flush
+    /// over it.</summary>
     private static bool NeedsWrite(WinePrefix prefix, OverrideVerdict verdict) =>
         verdict != OverrideVerdict.SuppliesNative && !WineDllOverride.IsSatisfied(prefix);
 
@@ -314,12 +298,10 @@ public sealed class WinePrefixUnlockerBackend(
     }
 
     /// <summary>
-    /// Copies the configuration the engine wrote into every OTHER Windows user directory. The engine
-    /// takes one UnlockerPaths and its step count is fixed, so this is how the configuration reaches
-    /// every user without running the engine more than once. Idempotent.
-    ///
-    /// Copies files only, never subdirectories: correct today because the engine's own configuration
-    /// directory is flat, and it would silently stop being correct the day something nests inside it.
+    /// Copies the written configuration into every OTHER Windows user directory. The engine takes
+    /// one UnlockerPaths with a fixed step count, so this is how it reaches every user without a
+    /// second run. Idempotent. Files only, never subdirectories — correct while the configuration
+    /// directory stays flat.
     /// </summary>
     private static IEnumerable<string> Mirror(WinePrefix prefix)
     {
@@ -333,11 +315,9 @@ public sealed class WinePrefixUnlockerBackend(
             var destination = prefix.PathsFor(user)?.ConfigDirectory;
             if (destination is null)
             {
-                // The ambiguous case where it matters most: PathsFor fails only when the user
-                // directory itself cannot be reached, which is exactly the shape a broken secondary
-                // Windows user profile has. Silently skipping it would leave that user's launch path
-                // without the configuration the client reads and no record that anything went
-                // wrong.
+                // PathsFor fails only when the user directory cannot be reached — the shape of a
+                // broken secondary profile. Skipping silently leaves that user's launch path
+                // without the configuration and no record of it.
                 yield return $"'{user}' could not be reached, so the unlocker configuration was "
                              + "not copied there.";
                 continue;
@@ -363,10 +343,8 @@ public sealed class WinePrefixUnlockerBackend(
         }
     }
 
-    /// <summary>
-    /// Deletes the mirrored configuration directories, and ONLY when the engine deleted the primary
-    /// one. The engine's own conditional delete is the decision; this follows it.
-    /// </summary>
+    /// <summary>Deletes the mirrors, and only when the engine deleted the primary. The engine's
+    /// conditional delete is the decision; this follows it.</summary>
     private static IEnumerable<string> Unmirror(WinePrefix prefix)
     {
         if (prefix.WindowsUserDirectories.Count < 2) yield break;
@@ -394,10 +372,8 @@ public sealed class WinePrefixUnlockerBackend(
         }
     }
 
-    /// <summary>
-    /// Whether another client directory in this prefix still holds the unlocker DLL. By PATH, not by
-    /// kind: two same-kind clients at different directories defeat a kind-keyed check.
-    /// </summary>
+    /// <summary>Whether another client directory in this prefix still holds the DLL. By PATH, not
+    /// kind: two same-kind clients at different directories defeat a kind-keyed check.</summary>
     private static async Task<bool> SiblingInstalled(EaClientUnlockerBackend inner,
                                                      UnlockerTarget target, CancellationToken ct)
     {
@@ -411,18 +387,13 @@ public sealed class WinePrefixUnlockerBackend(
     }
 
     /// <summary>
-    /// Offsets the inner engine's reports and drops its trailing Total/Total one. The operation is
-    /// not done when the engine is, and passing that report through would put two reports at the
-    /// same count and leave the run one short of Total + 1. Begin never reports at the inner total —
-    /// the last Begin is at total - 1 — so the comparison is unambiguous.
+    /// Offsets the inner engine's reports and drops its trailing Total/Total: the operation is not
+    /// done when the engine is, and passing it through would put two reports at one count. Begin
+    /// never reports at the inner total, so the comparison is unambiguous.
     /// </summary>
-    /// <remarks>
-    /// On the engine's early "Nothing to remove" path the inner run reports only twice and well
-    /// below its total, so the wrapped sequence has a gap before this type's own final two reports.
-    /// That is deliberate: the alternative is inventing reports for steps that did not run. The
-    /// contiguity contract applies to a run that reaches the end, which is what the progress tests
-    /// drive.
-    /// </remarks>
+    /// <remarks>The early "Nothing to remove" path reports twice, well below its total, so the
+    /// wrapped sequence has a gap. Deliberate: the alternative is inventing reports for steps that
+    /// did not run.</remarks>
     private sealed class Wrapped(IProgress<UnlockerProgress> outer, int innerTotal, int total,
                                 int offset) : IProgress<UnlockerProgress>
     {

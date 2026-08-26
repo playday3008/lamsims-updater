@@ -10,13 +10,9 @@ using Microsoft.Win32;
 namespace LamSims.Core.Unlocking;
 
 /// <summary>
-/// The only Windows-specific class here. Every member is straight-line: a registry read, a process
-/// call, a delete.
-///
-/// CA1416 enforces the platform annotation during ordinary Linux builds, because the analyzer is
-/// platform-independent. It does NOT cover <see cref="DeleteScheduledTask"/>: that shells out to
-/// schtasks.exe, which carries no platform annotation, so that member is guarded by
-/// <see cref="IsAvailable"/> instead.
+/// The only Windows-specific class here. CA1416 enforces the platform annotation even on Linux
+/// builds, but does NOT cover <see cref="DeleteScheduledTask"/>, which shells out to schtasks.exe
+/// — that member is guarded by <see cref="IsAvailable"/> instead.
 /// </summary>
 public sealed class WindowsUnlockerHost : IUnlockerHost
 {
@@ -111,11 +107,9 @@ public sealed class WindowsUnlockerHost : IUnlockerHost
     {
         if (!OperatingSystem.IsWindows()) return;
 
-        // CreateSubKey, not OpenSubKey: the Run key is absent on an account that has never had an
-        // autostart entry, and OpenSubKey answers null for a missing key, which the null-conditional
-        // below would turn into a silent no-op — the unlocker would report the autostart step done
-        // with nothing written. Reading and removing keep OpenSubKey, where a missing key genuinely
-        // means there is nothing to read or remove.
+        // CreateSubKey, not OpenSubKey: the Run key is absent on an account that never had an
+        // autostart entry, and the null the latter returns becomes a silent no-op below. Read and
+        // remove keep OpenSubKey, where a missing key really does mean nothing to do.
         using var key = Registry.CurrentUser.CreateSubKey(RunKey, writable: true);
         key?.SetValue(name, value.Value,
             value.Kind == AutostartValueKind.ExpandString
@@ -167,10 +161,9 @@ public sealed class WindowsUnlockerHost : IUnlockerHost
                 catch (Exception e) when (e is InvalidOperationException or SystemException
                                               or AggregateException)
                 {
-                    // Already gone between enumeration and kill, or not ours to kill. The probe needs
-                    // a guard of its own: it reads the process handle and can throw in turn, and an
-                    // exception raised inside a catch body is not filtered by that catch, so it
-                    // would leave the host entirely, past a caller chain that catches nothing.
+                    // Gone between enumeration and kill, or not ours. The probe needs its own guard:
+                    // it reads the handle and can throw, and a throw inside a catch body is not
+                    // filtered by that catch.
                     if (!HasExited(process)) survivors.Add(name);
                 }
             }

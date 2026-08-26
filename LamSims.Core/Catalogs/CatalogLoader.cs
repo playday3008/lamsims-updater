@@ -28,13 +28,10 @@ public sealed class CatalogTooLargeException : IOException
     public CatalogTooLargeException(string message) : base(message) { }
 }
 
-/// <summary>
-/// The outcome of resolution. <see cref="CatalogStatus.Empty"/> is not an error: it means
-/// the user has not chosen a catalog yet, and the pack list shows an empty state.
-/// <see cref="CachedCopy"/> is the cached catalog offered as an explicit choice, never
-/// substituted automatically. It is the source rather than a flag because the caller needs
-/// it to load the copy.
-/// </summary>
+/// <summary>The outcome of resolution. <see cref="CatalogStatus.Empty"/> is not an error — the
+/// user has not chosen a catalog yet. <see cref="CachedCopy"/> is offered as an explicit choice,
+/// never substituted automatically, and is the source rather than a flag so the caller can load
+/// it.</summary>
 public sealed record CatalogResolution(
     CatalogStatus Status,
     CatalogLoadResult? Load,
@@ -44,11 +41,8 @@ public sealed record CatalogResolution(
 
 public sealed class CatalogLoader
 {
-    /// <summary>
-    /// A genuine catalog is bounded by this many bytes, wherever it comes from. A local path is
-    /// no more trustworthy than a URL, since both are values the user typed, so the same cap
-    /// applies to each; see <see cref="ReadBoundedAsync"/> and <see cref="ReadLocalBoundedAsync"/>.
-    /// </summary>
+    /// <summary>The cap, wherever the catalog comes from: a local path is a value the user typed,
+    /// no more trustworthy than a URL.</summary>
     private const long MaxCatalogBytes = 1024 * 1024;
 
     private static readonly TimeSpan DefaultRemoteTimeout = TimeSpan.FromSeconds(30);
@@ -60,12 +54,9 @@ public sealed class CatalogLoader
     private readonly ILogSink _log;
 
     /// <param name="remoteTimeout">
-    /// Bounds a remote fetch end to end (headers and body). <see cref="HttpFactory"/> hands out
-    /// an <see cref="HttpClient"/> with an infinite <see cref="HttpClient.Timeout"/> by design,
-    /// because the download engine carries its own per-read deadlines. A client built for
-    /// downloads and reused here for the catalog would otherwise hang forever against a mirror
-    /// that accepts the connection and says nothing. A catalog is capped at 1 MB, so the
-    /// 30-second default is generous.
+    /// Bounds a remote fetch end to end. <see cref="HttpFactory"/> hands out a client with an
+    /// infinite timeout by design, since the download engine carries its own per-read deadlines —
+    /// reused here that would hang forever against a mirror that says nothing.
     /// </param>
     public CatalogLoader(
         HttpClient client, AppPaths paths, string? executableDirectory = null,
@@ -78,11 +69,8 @@ public sealed class CatalogLoader
         _log = log ?? NullLogSink.Instance;
     }
 
-    /// <summary>
-    /// The sources to try, in order. A command-line or settings value counts as present
-    /// whenever it is non-blank, even when nothing is there: the user named it, and a
-    /// silent fall-through would hide a typo.
-    /// </summary>
+    /// <summary>The sources to try, in order. A command-line or settings value counts as present
+    /// whenever it is non-blank, even if nothing is there: a silent fall-through hides a typo.</summary>
     public IReadOnlyList<CatalogSource> Candidates(string? commandLine, string? fromSettings)
     {
         var candidates = new List<CatalogSource>();
@@ -123,16 +111,12 @@ public sealed class CatalogLoader
             }
             catch (Exception e) when (IsSourceFailure(e, ct))
             {
-                // Logged here, once per candidate that fails, regardless of whether it is
-                // reported below or passed over: a fallback source stepped over silently in the
-                // returned CatalogResolution must still say so in the log, or a corrupt cache
-                // or beside-executable catalog would fail invisibly forever.
+                // Once per failing candidate, reported or not: a source stepped over silently in
+                // the resolution must still say so here, or a corrupt cache fails invisibly.
                 _log.Write(LogLine.Error($"Catalog load failed: {FailureMessage(candidate, e)}"));
 
-                // A cache that just failed to load during this same resolution is known broken,
-                // so it must not be offered as the copy to fall back on. Nothing else failing
-                // tells us anything about the cache, so cachedCopy otherwise stays as computed
-                // above: a file that exists but was never tried.
+                // A cache that just failed is known broken and must not be offered as the fallback.
+                // Nothing else failing says anything about it.
                 if (candidate.Kind == CatalogSourceKind.Cache)
                     cachedCopy = null;
 
@@ -150,14 +134,9 @@ public sealed class CatalogLoader
         return new CatalogResolution(CatalogStatus.Empty, null, null, null, cachedCopy);
     }
 
-    /// <summary>
-    /// Loads exactly the source named by <paramref name="source"/>, whether that is the cached
-    /// copy the user chose or a retry of a source that just failed. Never throws for a failure
-    /// to load the source; it comes back as <see cref="CatalogStatus.Failed"/> naming
-    /// <paramref name="source"/>, the same shape <see cref="ResolveAsync"/> returns. A
-    /// caller-requested cancellation through <paramref name="ct"/> still propagates as
-    /// <see cref="OperationCanceledException"/>.
-    /// </summary>
+    /// <summary>Loads exactly <paramref name="source"/> — the cached copy the user chose, or a
+    /// retry. A load failure comes back as <see cref="CatalogStatus.Failed"/> rather than throwing;
+    /// the caller's own cancellation still propagates.</summary>
     public async Task<CatalogResolution> LoadAsync(CatalogSource source, CancellationToken ct)
     {
         try
@@ -172,14 +151,10 @@ public sealed class CatalogLoader
         }
     }
 
-    /// <summary>
-    /// True for a source failure: a format, I/O, network or path problem, or this loader's own
-    /// deadline expiring. HttpClient's own Timeout, and the linked deadline in
-    /// <see cref="LoadCoreAsync"/>, surface as <see cref="OperationCanceledException"/>, which
-    /// does not wrap into <see cref="HttpRequestException"/>. False when the caller's own token
-    /// is the one that fired, so that still propagates rather than being reported as this
-    /// source's problem.
-    /// </summary>
+    /// <summary>True for a source failure: format, I/O, network, path, or this loader's deadline —
+    /// which surfaces as <see cref="OperationCanceledException"/> and does not wrap into
+    /// <see cref="HttpRequestException"/>. False when the CALLER's token fired, so that still
+    /// propagates.</summary>
     private static bool IsSourceFailure(Exception e, CancellationToken ct) =>
         e is CatalogFormatException or IOException or HttpRequestException
             or UnauthorizedAccessException or ArgumentException or NotSupportedException
@@ -188,15 +163,9 @@ public sealed class CatalogLoader
     private static string FailureMessage(CatalogSource source, Exception e) =>
         $"The catalog at '{source.Location}' could not be loaded: {e.Message}";
 
-    /// <summary>
-    /// Shared by <see cref="ResolveAsync"/> and <see cref="LoadAsync"/>, so the source and count
-    /// lines below fire on every path that actually attempts a load, including the candidates
-    /// <see cref="ResolveAsync"/> tries and steps over before it reaches one that works. A
-    /// failure is logged by the caller instead of here: <see cref="ResolveAsync"/> and
-    /// <see cref="LoadAsync"/> each wrap exactly one call to this method in their own try/catch,
-    /// so logging the failure in the catch rather than here guarantees it fires exactly once per
-    /// attempt, on whichever path made it.
-    /// </summary>
+    /// <summary>Shared by <see cref="ResolveAsync"/> and <see cref="LoadAsync"/>, so the source
+    /// and count lines fire on every path that attempts a load. Failures are logged by the caller,
+    /// each of which wraps exactly one call here, so a failure fires exactly once per attempt.</summary>
     private async Task<CatalogLoadResult> LoadCoreAsync(CatalogSource source, CancellationToken ct)
     {
         _log.Write(LogLine.Info($"Loading a catalog from {source.Kind}: {source.Location}"));
@@ -239,14 +208,9 @@ public sealed class CatalogLoader
         return result;
     }
 
-    /// <summary>
-    /// The local counterpart of <see cref="ReadBoundedAsync"/>. Reading a path with
-    /// File.ReadAllTextAsync would allocate whatever it was pointed at in full, and
-    /// OutOfMemoryException is not something <see cref="IsSourceFailure"/> can report; the
-    /// process dies. The length is known up front here, so the file is refused before any of it
-    /// is read. detectEncodingFromByteOrderMarks matches the remote path so a BOM-prefixed
-    /// catalog loads identically from disk and over HTTP.
-    /// </summary>
+    /// <summary>The local counterpart of <see cref="ReadBoundedAsync"/>. File.ReadAllTextAsync
+    /// would allocate whatever it was pointed at, and OutOfMemoryException kills the process rather
+    /// than reporting. The length is known up front, so the file is refused before any is read.</summary>
     private static async Task<string> ReadLocalBoundedAsync(CatalogSource source, CancellationToken ct)
     {
         await using var stream = new FileStream(
@@ -262,13 +226,9 @@ public sealed class CatalogLoader
         return await reader.ReadToEndAsync(ct);
     }
 
-    /// <summary>
-    /// Streams the response body into memory up to <see cref="MaxCatalogBytes"/>, past which a
-    /// hostile or misconfigured URL is refused before more of it is read. This only bounds
-    /// memory because <see cref="LoadCoreAsync"/> requests the response with
-    /// <see cref="HttpCompletionOption.ResponseHeadersRead"/>; otherwise HttpClient would
-    /// already hold the whole body before this method ever saw it.
-    /// </summary>
+    /// <summary>Streams the body up to <see cref="MaxCatalogBytes"/>, past which the URL is
+    /// refused. This bounds memory only because <see cref="LoadCoreAsync"/> asks for
+    /// <see cref="HttpCompletionOption.ResponseHeadersRead"/>.</summary>
     private static async Task<string> ReadBoundedAsync(
         HttpResponseMessage response, CatalogSource source, CancellationToken ct)
     {
@@ -290,10 +250,8 @@ public sealed class CatalogLoader
 
         buffered.Position = 0;
 
-        // detectEncodingFromByteOrderMarks mirrors File.ReadAllTextAsync's own handling of a
-        // leading BOM, so a catalog authored with one (Notepad, PowerShell's Out-File default)
-        // loads the same way over HTTP as it does from disk, instead of reaching
-        // JsonDocument.Parse as a U+FEFF it rejects.
+        // Mirrors File.ReadAllTextAsync's BOM handling, so a catalog authored with one loads the
+        // same over HTTP as from disk instead of reaching the parser as a U+FEFF it rejects.
         using var reader = new StreamReader(buffered, Encoding.UTF8, detectEncodingFromByteOrderMarks: true);
         return await reader.ReadToEndAsync(ct);
     }

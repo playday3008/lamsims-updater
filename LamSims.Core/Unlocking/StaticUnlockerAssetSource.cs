@@ -16,12 +16,10 @@ namespace LamSims.Core.Unlocking;
 public sealed record AssetPin(string Url, long Size, string Sha256, string FileName);
 
 /// <summary>
-/// The two unlocker DLLs, pinned by digest.
-///
-/// The URLs point at a mutable release tag, so if upstream re-uploads either asset this build
-/// stops installing the unlocker until the pins are updated. The DLL is loaded into EA Desktop's
-/// process, so an unnoticed substitution is worth failing on. The error names the cause so an
-/// operator can tell a rotation from corruption.
+/// The two unlocker DLLs, pinned by digest. The URLs point at a MUTABLE release tag, so an upstream
+/// re-upload stops this build installing until the pins are updated. The DLL is loaded into EA
+/// Desktop's process, so an unnoticed substitution is worth failing on, and the error names the
+/// cause so an operator can tell a rotation from corruption.
 /// </summary>
 public sealed class StaticUnlockerAssetSource(
     HttpClient http,
@@ -34,10 +32,8 @@ public sealed class StaticUnlockerAssetSource(
 
     private readonly ILogSink _log = log ?? NullLogSink.Instance;
 
-    /// <summary>
-    /// The shipped pin table. Injected rather than hardcoded so the tests can point at the local
-    /// test server instead of the public internet; production passes nothing and gets this.
-    /// </summary>
+    /// <summary>The shipped pin table, injected so tests can point at the local server instead of
+    /// the public internet.</summary>
     public static IReadOnlyDictionary<ClientKind, AssetPin> ShippedPins { get; } =
         new Dictionary<ClientKind, AssetPin>
         {
@@ -55,11 +51,8 @@ public sealed class StaticUnlockerAssetSource(
     private readonly IReadOnlyDictionary<ClientKind, AssetPin> _pins = pins ?? ShippedPins;
     private readonly RetryOptions _retry = retry ?? RetryOptions.Default;
 
-    /// <summary>
-    /// Removes a temp file, reporting nothing. Used on both exits so a delete that is itself
-    /// refused cannot replace the diagnosis the caller is owed, or invent one where the call
-    /// succeeded.
-    /// </summary>
+    /// <summary>Removes a temp file, reporting nothing, so a refused delete cannot replace the
+    /// diagnosis the caller is owed or invent one where the call succeeded.</summary>
     private static void TryDelete(string path)
     {
         try

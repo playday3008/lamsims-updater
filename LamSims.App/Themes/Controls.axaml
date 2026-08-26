@@ -24,12 +24,9 @@
     <Setter Property="Padding" Value="0"/>
   </Style>
 
-  <!-- Fluent's Expander control theme leaves HorizontalAlignment at Left, so an expander sizes to
-       its content in BOTH states and changes width when it is unfolded: measured here, the Advanced
-       section was 145px closed and 389px open inside an 876px column, and the DLC Unlocker section
-       jumped to whatever the longest client path in it happened to be. Nothing in MainWindow.axaml
-       set that — it is the theme default, which is why it reads as though no width was chosen at
-       all. Stretch anchors both edges to the column, so unfolding changes only the height. -->
+  <!-- Fluent leaves an Expander's HorizontalAlignment at Left, so it sizes to content in BOTH
+       states: measured, Advanced was 145px closed and 389px open inside an 876px column. Nothing
+       in MainWindow.axaml set that, which is why it reads as though no width was chosen at all. -->
   <Style Selector="Expander">
     <Setter Property="HorizontalAlignment" Value="Stretch"/>
   </Style>
@@ -42,21 +39,15 @@
     <Setter Property="Padding" Value="10"/>
   </Style>
 
-  <!-- ":is(TextBlock)", not "TextBlock", on this and the two severity styles below. Avalonia's bare
-       type selector matches that EXACT type, and the log's message column is a SelectableTextBlock
-       so a line can be selected and copied. The failure a bare selector causes is silent in both
-       directions: the class is still applied in the markup, so ThemeSweepTests' coverage checks stay
-       green while the line renders in the inherited face and colour. Only the three selectors a
-       SelectableTextBlock actually carries are widened — .secondary above is on the time and code
-       columns, which are plain TextBlocks, and a widened selector with no subclass to match would
-       be a claim about this window that is not true.
+  <!-- ":is(TextBlock)", not "TextBlock", here and on the two severity styles: Avalonia's bare type
+       selector is an EXACT match, and the log's message column is a SelectableTextBlock. It fails
+       silently both ways — the class stays applied, so the coverage sweeps stay green while the
+       line renders in the inherited face. Only the three selectors a SelectableTextBlock carries
+       are widened; .secondary is on plain TextBlocks.
 
-       Real family names, never the generic alias "monospace". Avalonia resolves a family through
-       the platform font manager, which does not know fontconfig's aliases: "monospace" matched
-       nothing, fell through to the default UI face, and cost the renderer 363ms a frame against
-       24ms for a name that resolves — measured over 20 visible log lines, a 15x difference, and
-       the reason the window resized at about 7 FPS. It was not even monospaced: it rendered in
-       proportional Noto Sans. First match wins, so this reads Windows, then Linux, then macOS. -->
+       Real family names, never the alias "monospace": the platform font manager does not know
+       fontconfig's aliases, so it matched nothing, fell through to proportional Noto Sans, and
+       cost 363ms a frame against 24ms for a name that resolves. First match wins. -->
   <Style Selector=":is(TextBlock).log-line">
     <Setter Property="FontFamily" Value="Cascadia Mono, Consolas, DejaVu Sans Mono, Liberation Mono, Noto Sans Mono, Menlo"/>
     <Setter Property="FontSize" Value="12"/>
@@ -125,13 +116,11 @@
     <Setter Property="Background" Value="Transparent"/>
   </Style>
 
-  <!-- /template/, not the item itself. Fluent's ListBoxItem control theme paints its state
-       backgrounds onto the template's PART_ContentPresenter through its own pseudo-class styles,
-       and those win at style-trigger priority over the TemplateBinding that would otherwise carry
-       the item's own Background down. Setting Background on ListBoxItem:selected therefore sets a
-       property nothing reads: the item reported Surface1 while the presenter painted Fluent's
-       #0078d7. The plain ListBoxItem style above is a different case and stays: the unselected
-       item has no competing trigger, so its Transparent does reach the presenter. -->
+  <!-- /template/, not the item. Fluent paints its state backgrounds onto PART_ContentPresenter
+       through pseudo-class styles that outrank the TemplateBinding carrying the item's own
+       Background down, so setting it on ListBoxItem:selected sets a property nothing reads — the
+       item reported Surface1 while the presenter painted #0078d7. The unselected style above has
+       no competing trigger and stays. -->
   <Style Selector="ListBoxItem:pointerover /template/ ContentPresenter#PART_ContentPresenter">
     <Setter Property="Background" Value="{DynamicResource Surface0Brush}"/>
   </Style>

@@ -11,16 +11,9 @@ namespace LamSims.Core.Downloading;
 /// </summary>
 public sealed class DownloadPaths
 {
-    /// <summary>
-    /// Where downloads go when nothing is configured. <see cref="Retarget"/> returns here when it
-    /// is given nothing, so clearing the setting cannot leave the engine on the directory that
-    /// was just cleared.
-    ///
-    /// <see cref="Environment.SpecialFolderOption.DoNotVerify"/> for the reason
-    /// <see cref="LamSims.Core.Settings.AppPaths"/> uses it: the default option answers with an
-    /// empty string for a directory that does not exist yet, and archives, part files and the
-    /// pack lock would then land under the process's working directory.
-    /// </summary>
+    /// <summary>Where downloads go when nothing is configured. <see cref="Retarget"/> returns here
+    /// when given nothing, so clearing the setting cannot leave the engine on the cleared
+    /// directory. DoNotVerify for the reason <see cref="LamSims.Core.Settings.AppPaths"/> gives.</summary>
     public string DefaultRoot { get; }
 
     public string Root { get; private set; }
@@ -36,18 +29,14 @@ public sealed class DownloadPaths
     }
 
     /// <summary>
-    /// Moves every path this instance hands out to <paramref name="directory"/>, or back to
-    /// <see cref="DefaultRoot"/> when it is null or blank, and creates it. Every consumer holds
-    /// this one instance and asks it for paths per call, so one call moves them all and the
-    /// setting can be applied without rebuilding the object graph.
+    /// Moves every path this instance hands out, or back to <see cref="DefaultRoot"/> when given
+    /// nothing, and creates it. Every consumer asks this one instance per call, so one call moves
+    /// them all without rebuilding the object graph.
     ///
-    /// <para><b>Only while nothing is running.</b> A retarget under a live download orphans the
-    /// <c>.part</c> file and the lock the run is still holding, and the next pass would see
-    /// neither. The application gates the call on an empty queue.</para>
-    ///
-    /// <para>Existing archives are not moved. <see cref="Root"/> is assigned only once the
-    /// directory exists, so a directory that cannot be created throws and leaves the engine
-    /// pointed where it already was.</para>
+    /// <para><b>Only while nothing is running:</b> a retarget under a live download orphans the
+    /// <c>.part</c> file and the lock the run still holds. Existing archives are not moved, and
+    /// <see cref="Root"/> is assigned only once the directory exists, so a failure leaves the
+    /// engine where it was.</para>
     /// </summary>
     public void Retarget(string? directory)
     {
@@ -61,19 +50,14 @@ public sealed class DownloadPaths
     public string ArchiveFile(string code) => Path.Combine(Root, Validate(code) + ".zip");
     public string QuarantineFile(string code) => Path.Combine(Root, Validate(code) + ".zip.bad");
 
-    /// <summary>
-    /// The verified-identity record for an archive, beside the archive itself. It lives here
-    /// rather than in a central store so it follows the archive when the download directory
-    /// setting changes or the directory is copied wholesale, and so <see cref="OrphanCleaner"/>
-    /// sweeps it with everything else.
-    /// </summary>
+    /// <summary>The verified-identity record, beside the archive itself so it follows the archive
+    /// when the directory is moved or copied, and so <see cref="OrphanCleaner"/> sweeps it with
+    /// everything else.</summary>
     public string ArchiveDigestFile(string code) => Path.Combine(Root, Validate(code) + ".zip.json");
 
-    /// <summary>
-    /// The cache entry for one unlocker DLL. Through the same <c>Validate</c> guard as every other
-    /// member, because <see cref="OrphanCleaner"/> sweeps everything under <see cref="Root"/> and
-    /// a path that escaped Root would turn that sweep into a delete somewhere else.
-    /// </summary>
+    /// <summary>The cache entry for one unlocker DLL, through the same <c>Validate</c> guard as
+    /// everything else: <see cref="OrphanCleaner"/> sweeps all of <see cref="Root"/>, and an
+    /// escaping path would turn that sweep into a delete somewhere else.</summary>
     public string UnlockerAssetFile(string fileName) => Path.Combine(Root, Validate(fileName));
 
     /// <summary>

@@ -10,12 +10,9 @@ namespace LamSims.Core.Installing;
 
 public enum InstallMarkerStatus { Installing, Installed }
 
-/// <summary>
-/// One pack's install journal entry. <see cref="InstallMarkerStatus.Installing"/> is written
-/// durably before the first game-directory mutation and rewritten only after the last entry
-/// lands, so a marker still reading <c>Installing</c> is positive evidence that an extraction
-/// was interrupted rather than an inference from what is missing.
-/// </summary>
+/// <summary>One pack's journal entry. <c>Installing</c> is written durably before the first
+/// mutation and rewritten only after the last entry lands, so a marker still reading it is
+/// positive evidence of an interruption, not an inference from what is missing.</summary>
 public sealed record InstallMarker(
     int SchemaVersion,
     string Code,
@@ -28,17 +25,13 @@ public sealed record InstallMarker(
 }
 
 /// <summary>
-/// Persists install markers, one JSON file per pack code, grouped by game directory. Writes
-/// are atomic and durable. Reads are total: an absent, torn, unparseable, wrong-code or
-/// future-versioned marker is null rather than an exception, so a corrupt marker degrades a
-/// pack to "installed, unverified" and can never accuse a healthy install of being
-/// interrupted.
+/// One JSON file per pack code, grouped by game directory. Writes are atomic and durable; reads
+/// are total — an absent, torn, unparseable or wrong-code marker is null, so a corrupt one degrades
+/// a pack to "installed, unverified" and can never accuse a healthy install of being interrupted.
 ///
-/// Markers are grouped by game directory rather than by code alone so that pointing the
-/// GameDirectory setting at a second drive does not demote the first drive's library. Nothing
-/// reaps a group. The only rules available, "not the directory in settings" and "the directory
-/// is not on disk", would delete the state of a second drive or an unmounted share, and a
-/// group costs a few hundred bytes per pack.
+/// Grouped by game directory so pointing the setting at a second drive does not demote the first.
+/// Nothing reaps a group: the only available rules would delete the state of a second drive or an
+/// unmounted share, and a group costs a few hundred bytes.
 /// </summary>
 public sealed class InstallStateStore
 {
@@ -50,12 +43,9 @@ public sealed class InstallStateStore
         Converters = { new JsonStringEnumConverter(JsonNamingPolicy.CamelCase) },
     };
 
-    /// <summary>
-    /// Every field nullable, so an absent one is distinguishable from a present one holding
-    /// the default. Deserializing straight into <see cref="InstallMarker"/> would read a
-    /// missing <c>status</c> as <see cref="InstallMarkerStatus.Installing"/>, and a truncated
-    /// write would then report a complete install as interrupted.
-    /// </summary>
+    /// <summary>Every field nullable, so an absent one is distinguishable from a defaulted one:
+    /// deserializing straight into <see cref="InstallMarker"/> reads a missing <c>status</c> as
+    /// Installing, and a truncated write would report a complete install as interrupted.</summary>
     private sealed record MarkerDocument(
         int? SchemaVersion,
         string? Code,
@@ -83,13 +73,9 @@ public sealed class InstallStateStore
         }
     }
 
-    /// <summary>
-    /// Every marker recorded for one game directory, keyed by the marker's own
-    /// <see cref="InstallMarker.Code"/> and compared <see cref="StringComparer.OrdinalIgnoreCase"/>,
-    /// the same way <see cref="Catalogs.CatalogParser"/> de-duplicates codes. Duplicate codes
-    /// resolve to the greater <see cref="InstallMarker.UpdatedUtc"/> so the winner does not
-    /// depend on directory listing order.
-    /// </summary>
+    /// <summary>Every marker for one game directory, keyed case-insensitively by its own
+    /// <see cref="InstallMarker.Code"/> as <see cref="Catalogs.CatalogParser"/> does. Duplicates
+    /// resolve to the greater UpdatedUtc, so the winner does not depend on listing order.</summary>
     public IReadOnlyDictionary<string, InstallMarker> LoadAll(string gameDirectory)
     {
         var markers = new Dictionary<string, InstallMarker>(StringComparer.OrdinalIgnoreCase);
@@ -131,12 +117,9 @@ public sealed class InstallStateStore
         return markers;
     }
 
-    /// <summary>
-    /// Writes the marker for <see cref="InstallMarker.GameDirectory"/> and
-    /// <see cref="InstallMarker.Code"/>. Throws on an I/O failure, because the two callers want
-    /// opposite things: a failed intent write must fail the install, a failed completion write
-    /// must not.
-    /// </summary>
+    /// <summary>Writes one marker. Throws on I/O failure, because the two callers want opposite
+    /// things: a failed intent write must fail the install, a failed completion write must
+    /// not.</summary>
     public async Task SaveAsync(InstallMarker marker, CancellationToken ct)
     {
         var path = MarkerFile(marker.GameDirectory, marker.Code);

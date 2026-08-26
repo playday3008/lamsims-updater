@@ -17,23 +17,17 @@ public sealed class ProgressTracker
     private readonly Stopwatch _clock = Stopwatch.StartNew();
     private readonly Lock _gate = new();
 
-    /// <summary>
-    /// How long a window must be before the speed is resampled. Per-read reporting takes
-    /// Snapshot() from once per 16 MB chunk to once per megabyte per worker, and a 0.3 smoothing
-    /// factor over sub-millisecond windows is not a readout anybody can use.
-    /// </summary>
+    /// <summary>How long a window must be before the speed is resampled: per-read reporting takes
+    /// Snapshot() to once per megabyte per worker, and 0.3 smoothing over sub-millisecond windows
+    /// is not a readout anybody can use.</summary>
     private static readonly TimeSpan SpeedWindow = TimeSpan.FromMilliseconds(200);
 
-    /// <summary>
-    /// Bytes read by attempts still in flight, per worker. Not pre-sized: the worker count is
-    /// only known after the tracker is built, so slots appear on first use.
-    /// </summary>
+    /// <summary>Bytes read by attempts still in flight, per worker. Not pre-sized: the worker
+    /// count is known only after the tracker is built.</summary>
     private readonly Dictionary<int, long> _provisional = new();
 
-    /// <summary>
-    /// Test seam for elapsed time. Real elapsed time in a unit test never reaches the 200ms
-    /// speed window, so the window and the clamp are only reachable through a supplied clock.
-    /// </summary>
+    /// <summary>Test seam: real elapsed time in a unit test never reaches the 200ms window, so the
+    /// window and the clamp are reachable only through a supplied clock.</summary>
     internal Func<TimeSpan> Clock { get; init; } = null!;
 
     private long _bytesCompleted;
@@ -44,15 +38,9 @@ public sealed class ProgressTracker
     private DownloadProgress? _pending;
     private bool _reporting;
 
-    /// <summary>
-    /// Test seam. Invoked inside Deliver's loop between taking a pending snapshot and reporting
-    /// it, so a test can deposit a newer snapshot in the window where the reporter must pick it
-    /// up rather than stand down.
-    ///
-    /// It runs inside the try/catch that swallows a throwing progress consumer, so an
-    /// assertion thrown from the hook is swallowed with it. Record what happened and assert
-    /// after Deliver returns.
-    /// </summary>
+    /// <summary>Test seam, called between taking a pending snapshot and reporting it, so a test
+    /// can deposit a newer one in the window where the reporter must pick it up. It runs inside the
+    /// catch that swallows a throwing consumer, so assert after Deliver returns, not here.</summary>
     internal Action? BeforeReport;
 
     public ProgressTracker(string code, long totalBytes, long alreadyCompletedBytes = 0)
@@ -93,13 +81,10 @@ public sealed class ProgressTracker
         lock (_gate) _provisional[worker] = 0;
     }
 
-    /// <summary>
-    /// A chunk finished. The commit and the clearing of that worker's provisional bytes happen
-    /// under one lock acquisition: split them and a snapshot taken between the two counts the
-    /// chunk twice, which on the final chunks pushes BytesCompleted above the total. Deliver
-    /// latches _lastAccepted monotonically, so the true final snapshot would then be dropped and
-    /// the caller's last observed value would stay above 100% for good.
-    /// </summary>
+    /// <summary>A chunk finished. The commit and the clearing of that worker's provisional bytes
+    /// take ONE lock acquisition: split, a snapshot between them counts the chunk twice and pushes
+    /// BytesCompleted past the total — and since Deliver latches monotonically, the true final
+    /// snapshot is then dropped and the caller stays above 100% for good.</summary>
     public void CommitChunk(int worker, long bytes)
     {
         lock (_gate)
@@ -144,21 +129,17 @@ public sealed class ProgressTracker
     }
 
     /// <summary>
-    /// Hands a snapshot to the caller. Several workers deliver concurrently, so at most one of
-    /// them reports at a time and always the newest snapshot it can see: a worker that arrives
-    /// while another is reporting leaves its snapshot behind and returns immediately rather
-    /// than waiting. The values the caller observes stay non-decreasing, and only the reporting
-    /// worker is blocked, so a slow handler cannot stall the transfer.
+    /// Hands a snapshot to the caller. At most one worker reports at a time, always the newest
+    /// snapshot it can see; a worker arriving mid-report leaves its own behind and returns. Values
+    /// stay non-decreasing and only the reporter blocks, so a slow handler cannot stall the
+    /// transfer.
     ///
-    /// Progress is a latest-value signal rather than a stream, so a snapshot overtaken while
-    /// another is being reported is dropped rather than queued. Delivering the final one
-    /// depends on the reporting worker checking for a newer snapshot and clearing
-    /// <c>_reporting</c> in a *single* lock acquisition. Split them and a worker depositing
-    /// between the two is neither picked up nor allowed to take over, and the last snapshot of
-    /// a download has nothing behind it to re-drive delivery.
+    /// Progress is a latest-value signal, so an overtaken snapshot is dropped rather than queued.
+    /// Delivering the FINAL one depends on checking for a newer snapshot and clearing
+    /// <c>_reporting</c> in ONE lock acquisition: split, a worker depositing between the two is
+    /// neither picked up nor allowed to take over, and nothing re-drives delivery.
     ///
-    /// A handler that throws is ignored, because reporting progress must not fail a transfer
-    /// that is otherwise healthy.
+    /// A throwing handler is ignored: reporting must not fail a healthy transfer.
     /// </summary>
     public void Deliver(IProgress<DownloadProgress>? progress, DownloadProgress snapshot)
     {

@@ -69,21 +69,17 @@ public sealed class SegmentedDownloader
 
             _paths.EnsureCreated();
 
-            // Only the bytes not already on disk need room. Charging for the whole archive
-            // would refuse a resume that is nearly finished on a disk with little left, even
-            // though those bytes are already written. Checked before any request goes out, so
-            // a hopeless download costs nothing.
+            // Only the bytes not already on disk. Charging for the whole archive would refuse a
+            // nearly-finished resume. Before any request, so a hopeless download costs nothing.
             var partFile = _paths.PartFile(request.Code);
             var alreadyOnDisk = File.Exists(partFile) ? new FileInfo(partFile).Length : 0;
             DiskSpace.EnsureAvailable(_paths.Root, request.Size - Math.Min(alreadyOnDisk, request.Size));
 
             var (mirrors, rangeLess) = await ProbeMirrorsAsync(request, ct);
 
-            // A ranged mirror is always preferred; the fallback runs only when no mirror
-            // honours ranges at all. This path never spins up workers, so there is no
-            // connection count to report — a user on a range-less mirror would otherwise see
-            // nothing between the queue starting and the digest line, minutes of apparently
-            // dead log on a big pack.
+            // The fallback runs only when no mirror honours ranges. It spins up no workers, so
+            // there is no connection count — without a line here a range-less mirror shows
+            // minutes of apparently dead log.
             if (mirrors.Count == 0)
             {
                 LogFetchStart(request, connections: null);
@@ -101,11 +97,9 @@ public sealed class SegmentedDownloader
             var pending = chunks.Where(c => !resumable.Contains(c.Index)).ToList();
             var completedBytes = chunks.Where(c => resumable.Contains(c.Index)).Sum(c => c.Length);
 
-            // The actual worker count RunWorkersAsync will spin up, not chunks.Count: a resume
-            // can leave fewer chunks pending than the plan has, and either way the connection
-            // budget caps at _options.Connections. Computed once, here, and threaded through to
-            // RunWorkersAsync rather than recomputed there, so the logged number and the number
-            // of workers that actually run can never drift apart.
+            // The worker count, not chunks.Count: a resume leaves fewer pending, and the budget
+            // caps at Connections. Computed once and threaded through, so the logged number and
+            // the running count cannot drift.
             var workerCount = Math.Min(_options.Connections, Math.Max(pending.Count, 1));
 
             LogFetchStart(request, workerCount);
@@ -162,11 +156,9 @@ public sealed class SegmentedDownloader
                                        or UnauthorizedAccessException or ArgumentException
                                        or SizeMismatchException or ValidatorMismatchException)
         {
-            // UnauthorizedAccessException does not derive from IOException, and every
-            // filesystem call here can raise it: a read-only download root, an SELinux denial,
-            // a file held by a scanner. ArgumentException covers the path APIs, which reject a
-            // name rather than failing to use it, so a UNC root on Windows and a pack code that
-            // is not a file name both land here. This method always returns a DownloadResult.
+            // UnauthorizedAccessException does not derive from IOException, and every call here can
+            // raise it. ArgumentException covers the path APIs, which reject a name rather than
+            // failing to use it. This method always returns a DownloadResult.
             return DownloadResult.Failed(e.Message);
         }
     }
@@ -208,31 +200,25 @@ public sealed class SegmentedDownloader
         return (ranged, rangeLess);
     }
 
-    /// <summary>
-    /// Which chunks may be trusted from a previous run, with the mirror each was attributed
-    /// to. A sidecar that is absent, unreadable, structurally inconsistent, or describes a
-    /// different download yields none. Otherwise each completed chunk survives only when the
-    /// mirror that served it is still present and still reports the same validator, so a
-    /// changed entity invalidates that mirror's work and nobody else's.
-    /// </summary>
+    /// <summary>Which chunks may be trusted from a previous run, with the mirror each came from.
+    /// An absent, unreadable or inconsistent sidecar yields none. A chunk survives only while its
+    /// mirror is still present with the same validator, so a changed entity invalidates that
+    /// mirror's work and nobody else's.</summary>
     private IReadOnlyList<CompletedChunk> ResumableChunks(
         PartStateStore store, DownloadRequest request, IReadOnlyList<MirrorSource> mirrors,
         int chunkCount)
     {
-        // A sidecar whose partial file is absent, or the wrong length, describes chunks that
-        // are not on disk. Preallocation would then zero-fill the gap and those chunks would
-        // be skipped as complete. Checked before Preallocate runs, which is what makes the
-        // length comparison meaningful.
+        // A sidecar whose partial file is absent or the wrong length describes chunks that are not
+        // on disk, and preallocation would zero-fill them. Before Preallocate, which is what makes
+        // the length comparison meaningful.
         var partFile = _paths.PartFile(request.Code);
         if (!File.Exists(partFile) || new FileInfo(partFile).Length != request.Size)
             return Array.Empty<CompletedChunk>();
 
         var saved = store.TryLoad();
 
-        // PartState is a positional record, so a document that omits either collection, or
-        // spells it null, deserializes with that property left null. A null *element* inside
-        // one is the same hazard a step further in: no serializer writes it, but the file is
-        // untrusted, and the projections below would dereference it.
+        // A positional record leaves an omitted collection null, and a null ELEMENT is the same
+        // hazard a step further in: no serializer writes one, but this file is untrusted.
         if (saved is null
             || saved.CompletedChunks is null
             || saved.Mirrors is null
@@ -246,10 +232,9 @@ public sealed class SegmentedDownloader
             return Array.Empty<CompletedChunk>();
         }
 
-        // The sidecar is untrusted input: it is a file on disk that anything may have
-        // written. An index outside the plan or repeated twice makes the completed set
-        // incoherent, and reading it as a dictionary would throw rather than resume. Any such
-        // sidecar is treated as absent, which costs a restart and never a wrong result.
+        // Untrusted input. An index outside the plan or repeated twice makes the set incoherent
+        // and would throw rather than resume; treating it as absent costs a restart, never a
+        // wrong result.
         var indices = saved.CompletedChunks.Select(c => c.Index).ToArray();
         if (indices.Any(i => i < 0 || i >= chunkCount) || indices.Distinct().Count() != indices.Length)
             return Array.Empty<CompletedChunk>();
@@ -265,12 +250,9 @@ public sealed class SegmentedDownloader
         return saved.CompletedChunks.Where(c => trustedMirrors.Contains(c.MirrorUrl)).ToArray();
     }
 
-    /// <summary>
-    /// The "Fetching" and size/connections lines every path emits before transferring a byte.
-    /// <paramref name="connections"/> is null on the range-less path, where no workers ever run
-    /// and a connection count would be meaningless — so the suffix is left off entirely rather
-    /// than printing a number that describes nothing real.
-    /// </summary>
+    /// <summary>The lines every path emits before transferring a byte.
+    /// <paramref name="connections"/> is null on the range-less path, where no workers run, so the
+    /// suffix is left off rather than printing a number describing nothing.</summary>
     private void LogFetchStart(DownloadRequest request, int? connections)
     {
         _log.Write(LogLine.Info($"Fetching {request.Urls[0]}", request.Code));
@@ -303,10 +285,8 @@ public sealed class SegmentedDownloader
         var errors = new ConcurrentQueue<Exception>();
         var sink = new TrackerSink(tracker, progress);
 
-        // Held across the done-set mutation AND the sidecar write, so snapshots persist in
-        // the order they were built. Building under a lock and saving outside it would let
-        // two workers' saves land out of order, so a stale snapshot overwrites a newer one
-        // and a completed chunk disappears from the record.
+        // Held across the mutation AND the sidecar write, so snapshots persist in build order:
+        // saving outside the lock lets a stale snapshot overwrite a newer one.
         using var bookkeeping = new SemaphoreSlim(1, 1);
 
         // A failing worker cancels its siblings. Without this the remaining workers keep
@@ -351,10 +331,8 @@ public sealed class SegmentedDownloader
                         bookkeeping.Release();
                     }
 
-                    // Delivered after the release: a caller-supplied handler that blocks would
-                    // otherwise hold the lock every other worker needs, and no token can
-                    // interrupt code running inside it. ProgressTracker.Deliver drops a
-                    // snapshot that a faster worker has already overtaken.
+                    // After the release: a blocking handler would otherwise hold the lock every
+                    // other worker needs, and no token can interrupt it.
                     tracker.Deliver(progress, snapshot);
                 }
             }
@@ -390,15 +368,10 @@ public sealed class SegmentedDownloader
     }
 
     /// <summary>
-    /// Routes a fetch's per-read reports into the tracker and out to the caller, so a one-chunk
-    /// pack shows movement instead of nothing until it finishes.
-    ///
-    /// This fires once per ReadAsync *return*, which over HTTP is typically tens of kilobytes
-    /// rather than the full 1 MB buffer. ProgressTracker.Deliver coalesces (one reporter at a
-    /// time, overtaken snapshots dropped) and holds no shared lock while the handler runs, so it
-    /// cannot stall the other workers. It does block the reporting worker's own read loop for as
-    /// long as it keeps draining, and a sibling depositing a newer snapshot re-arms that loop, so
-    /// the queue rate-limits on top of this.
+    /// Routes per-read reports into the tracker and out to the caller, so a one-chunk pack shows
+    /// movement. Fires once per ReadAsync RETURN — tens of kilobytes, not the full buffer.
+    /// Deliver coalesces and holds no shared lock, so it cannot stall the other workers, though it
+    /// does block the reporting worker's own read loop while it drains.
     /// </summary>
     private sealed class TrackerSink(ProgressTracker tracker, IProgress<DownloadProgress>? progress)
         : IChunkProgress

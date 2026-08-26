@@ -17,11 +17,8 @@ public sealed partial class UnlockerTargetViewModel(UnlockerTarget target) : Obs
     public UnlockerTarget Target { get; } = target;
     public string ClientPath => Target.ClientPath;
 
-    /// <summary>
-    /// One flat property, not a dotted binding path. MainWindowBindingTests resolves a binding
-    /// path as a single member of its data context and fails loudly on anything else, so
-    /// {Binding Environment.Describe()} would be reported as unresolved.
-    /// </summary>
+    /// <summary>Flat, not a dotted binding path: MainWindowBindingTests resolves a path as a
+    /// single member, so {Binding Environment.Describe()} reads as unresolved.</summary>
     public string Title => Target.Environment is { } environment
         ? $"{Target.DisplayName} ({environment.Describe()})"
         : Target.DisplayName;
@@ -35,22 +32,16 @@ public sealed partial class UnlockerTargetViewModel(UnlockerTarget target) : Obs
     [ObservableProperty]
     private bool _isSelected;
 
-    /// <summary>
-    /// This row's own warnings. Per row rather than a banner: banners key by id so a repeated
-    /// cause replaces its predecessor, and in a batch that left only the last target's warning
-    /// visible.
-    /// </summary>
+    /// <summary>Per row, not a banner: banners key by id, so in a batch only the last target's
+    /// warning would survive.</summary>
     [ObservableProperty]
     private string? _warning;
 }
 
 /// <summary>
-/// The unlocker region.
-///
-/// RelaunchElevatedCommand lives here rather than on MainViewModel because the button sits inside a
-/// region with its own DataContext, so a command declared on MainViewModel would bind by bare name
-/// against this type and be silently dead. MainViewModel owns shutdown, so it supplies the
-/// behaviour as a Func&lt;Task&gt;.
+/// The unlocker region. RelaunchElevatedCommand lives here, not on MainViewModel: the button sits
+/// in a region with its own DataContext, so a command declared there would bind by bare name
+/// against this type and be silently dead. MainViewModel supplies the behaviour as a Func.
 /// </summary>
 public sealed partial class UnlockerViewModel : ObservableObject
 {
@@ -80,10 +71,9 @@ public sealed partial class UnlockerViewModel : ObservableObject
         this.exit = exit;
         this.banner = banner;
 
-        // Connected here rather than injected into the relay, because the relay is created before
-        // this type exists: the backend reports through it from the first detection, which runs
-        // during startup. Dispatched because a note can arrive from the pool thread RunBatchAsync
-        // uses, and ObservableCollection raises its change notifications on the calling thread.
+        // Connected, not injected: the relay is created before this type exists. Dispatched
+        // because a note can arrive from RunBatchAsync's pool thread, and ObservableCollection
+        // raises change notifications on the calling thread.
         notes?.Connect(message => dispatcher.Post(() =>
         {
             DetectionNotes.Add(message);
@@ -95,25 +85,17 @@ public sealed partial class UnlockerViewModel : ObservableObject
 
     public ObservableCollection<UnlockerTargetViewModel> Targets { get; } = [];
 
-    /// <summary>
-    /// Why detection found nothing, or found less than the user expected. Not banners: there can be
-    /// one per prefix and banners key by id, so a repeated cause would replace its predecessor and
-    /// the list would collapse to whichever prefix was scanned last.
-    /// </summary>
+    /// <summary>Why detection found nothing, or less than expected. Not banners: there is one per
+    /// prefix and banners key by id, so the list would collapse to the last one scanned.</summary>
     public ObservableCollection<string> DetectionNotes { get; } = [];
 
-    /// <summary>
-    /// One flat property, not a dotted binding path. MainWindowBindingTests resolves a binding path
-    /// as a single member of its data context, so {Binding DetectionNotes.Count} would be reported
-    /// as unresolved and the block would silently never appear.
-    /// </summary>
+    /// <summary>Flat, not dotted: {Binding DetectionNotes.Count} reads as unresolved and the
+    /// block would silently never appear.</summary>
     [ObservableProperty]
     private bool _hasDetectionNotes;
 
-    /// <summary>
-    /// True while detection is running. A batch started then would act on rows that are about to be
-    /// replaced, so the commands are disabled for its duration.
-    /// </summary>
+    /// <summary>True while detection runs: a batch started then would act on rows about to be
+    /// replaced.</summary>
     [ObservableProperty]
     private bool _isDetecting;
 
@@ -139,16 +121,14 @@ public sealed partial class UnlockerViewModel : ObservableObject
     private string? _batchPosition;
 
     /// <summary>
-    /// Refused, visibly, exactly like <see cref="Start"/> refuses a re-entrant batch. Mirrors that
-    /// method's shape for the same reason: the guard and the field assignment cannot be one
-    /// statement, because a refusal must not overwrite <see cref="_detection"/> with an
-    /// already-completed task while a real detection from an earlier call is still in flight — that
-    /// would make <see cref="DrainAsync"/> stop waiting for it, the same hazard <see cref="Start"/>'s
-    /// own comment describes for <see cref="_operation"/>. Two overlapping detections are not merely
-    /// wasteful: the second call's own synchronous Clear() runs while the first is still awaiting
-    /// DetectAllAsync, so the first resumes and repopulates the just-cleared list, and the second
-    /// then appends its own scan on top without ever re-clearing — every detected target listed
-    /// twice, and worse, both loops mutate the same non-thread-safe ObservableCollection at once.
+    /// Refused visibly, like <see cref="Start"/> refuses a re-entrant batch, and shaped the same
+    /// way: the guard and the assignment cannot be one statement, or a refusal would overwrite
+    /// <see cref="_detection"/> with a completed task and <see cref="DrainAsync"/> would stop
+    /// waiting for the real one.
+    ///
+    /// Two overlapping detections are worse than wasteful: the second's Clear() runs while the
+    /// first still awaits, so the first repopulates the cleared list and the second appends on top
+    /// — every target listed twice, both loops mutating one ObservableCollection at once.
     /// </summary>
     public Task RefreshAsync(CancellationToken ct)
     {
@@ -174,14 +154,9 @@ public sealed partial class UnlockerViewModel : ObservableObject
             HasDetectionNotes = false;
             if (!IsSupported) return;
 
-            // Task.Run, matching ObserveQueueAsync's idiom in MainViewModel: RefreshAsync is called
-            // from MainWindow.OnOpened (via StartAsync) and from a property setter, both on the UI
-            // thread, and DetectAllAsync's Wine backend runs a synchronous filesystem walk — the
-            // home directory, both XDG roots and up to eight full .reg parses per prefix — with no
-            // yield of its own. Without the hop that walk runs on the thread that draws. The token
-            // is not passed to Task.Run itself, for the same reason ObserveQueueAsync's comment
-            // gives: an already-cancelled token would fault this task rather than let the call
-            // return normally.
+            // Task.Run: both callers are on the UI thread and the Wine backend's walk — two XDG
+            // roots and up to eight .reg parses per prefix — never yields. The token is
+            // deliberately not passed, or an already-cancelled one would fault this task.
             foreach (var target in await Task.Run(() => service.DetectAllAsync(ct)))
             {
                 var row = new UnlockerTargetViewModel(target);
@@ -197,36 +172,21 @@ public sealed partial class UnlockerViewModel : ObservableObject
         }
     }
 
-    /// <summary>
-    /// The operation in flight, so shutdown can wait for it. It is not cancellable, and exiting the
-    /// process midway through step 7 leaves the client a half-written version.dll it cannot load,
-    /// which detection then reports as "Installed".
-    /// </summary>
+    /// <summary>The operation in flight, so shutdown can wait. It is not cancellable, and exiting
+    /// mid-step leaves a half-written version.dll that detection reports as "Installed".</summary>
     private Task _operation = Task.CompletedTask;
 
-    /// <summary>
-    /// The detection in flight, so shutdown can wait for it too. OnWinePrefixChanged re-detects
-    /// fire-and-forget, so a scan can be running with nobody awaiting it, and left unwaited a
-    /// dispatcher.Post callback it queued — a note, a row update — can land after teardown has
-    /// begun.
-    /// </summary>
+    /// <summary>The detection in flight. OnWinePrefixChanged re-detects fire-and-forget, so a
+    /// scan can run unwaited and land a dispatcher.Post callback after teardown began.</summary>
     private Task _detection = Task.CompletedTask;
 
-    /// <summary>
-    /// Completes when no unlocker operation or detection is in flight. Returns <c>_operation</c>
-    /// itself, unwrapped, whenever detection is already done, rather than always wrapping it in
-    /// Task.WhenAll: a wrapper is a fresh Task whose own completion is one more scheduled
-    /// continuation away from _operation's own, so a caller that holds the drain task can watch the
-    /// batch finish while the drain still reports itself incomplete. Only the rarer case — a
-    /// detection genuinely still running — pays for the wrapper.
-    /// </summary>
+    /// <summary>Completes when no operation or detection is in flight. Returns <c>_operation</c>
+    /// unwrapped when detection is done: a WhenAll wrapper completes one scheduled continuation
+    /// later, so a caller could watch the batch finish while the drain still reports incomplete.</summary>
     public Task DrainAsync() => _detection.IsCompleted ? _operation : Task.WhenAll(_detection, _operation);
 
-    /// <summary>
-    /// Host first, shutdown second. MainViewModel.ShutdownAsync is one-way and the window greys
-    /// itself on IsShuttingDown, so shutting down before the prompt would leave a declined prompt
-    /// with a live window, a disposed queue and no controls.
-    /// </summary>
+    /// <summary>Host first, shutdown second: ShutdownAsync is one-way, so a declined prompt would
+    /// leave a live window with a disposed queue and no controls.</summary>
     [RelayCommand(CanExecute = nameof(RequiresElevation))]
     private async Task RelaunchElevated()
     {
@@ -245,10 +205,8 @@ public sealed partial class UnlockerViewModel : ObservableObject
         exit();
     }
 
-    /// <summary>
-    /// The rows own the selection and this type owns the commands, so their CanExecute has to be
-    /// re-evaluated when a row is ticked. Without this the buttons stay disabled for ever.
-    /// </summary>
+    /// <summary>The rows own the selection and this type owns the commands, so CanExecute has to
+    /// be re-evaluated when a row is ticked.</summary>
     private void OnRowChanged(object? sender, System.ComponentModel.PropertyChangedEventArgs e)
     {
         if (e.PropertyName == nameof(UnlockerTargetViewModel.IsSelected)) NotifyBatchCommands();
@@ -262,13 +220,9 @@ public sealed partial class UnlockerViewModel : ObservableObject
 
     private bool CanRunBatch() => !IsBusy && !IsDetecting && Targets.Any(t => t.IsSelected);
 
-    /// <summary>
-    /// The only route to a re-scan once the window is open: detection otherwise runs only at
-    /// startup and on a Wine-prefix change, so a user who plugs in a launcher afterwards, or fixes
-    /// a permission problem <see cref="DetectionNotes"/> named, would have no way to ask again
-    /// short of restarting. RefreshAsync already refuses re-entrantly and banners, so this needs no
-    /// CanExecute of its own.
-    /// </summary>
+    /// <summary>The only route to a re-scan once the window is open; detection otherwise runs at
+    /// startup and on a prefix change only. RefreshAsync already refuses re-entrantly, so this
+    /// needs no CanExecute.</summary>
     [RelayCommand]
     private Task Refresh() => RefreshAsync(CancellationToken.None);
 
@@ -292,26 +246,20 @@ public sealed partial class UnlockerViewModel : ObservableObject
     private Task RemoveSelected() => Start(
         (target, progress, ct) => service.RemoveAsync(target, progress, ct));
 
-    /// <summary>
-    /// Leaves <c>_operation</c> alone when a batch is already in flight. Assigning it the
-    /// already-completed task a re-entrant call returns would make DrainAsync, and therefore
-    /// shutdown, stop waiting for the batch that is still running.
-    /// </summary>
+    /// <summary>Leaves <c>_operation</c> alone when a batch is in flight: assigning the completed
+    /// task a re-entrant call returns would make shutdown stop waiting for the real one.</summary>
     private Task Start(
         Func<UnlockerTarget, IProgress<UnlockerProgress>, CancellationToken, Task<UnlockerResult>> operation) =>
         IsBusy ? _operation : _operation = RunBatchAsync(operation);
 
-    /// <summary>
-    /// Sequential, never parallel: two targets share the unlocker's configuration directory and
-    /// the asset cache, and the engine was written for one operation at a time.
-    /// </summary>
+    /// <summary>Sequential, never parallel: two targets share the configuration directory and the
+    /// asset cache.</summary>
     private async Task RunBatchAsync(
         Func<UnlockerTarget, IProgress<UnlockerProgress>, CancellationToken, Task<UnlockerResult>> operation)
     {
-        // Start is this method's only caller, and its own IsBusy ternary already refuses a
-        // re-entrant call before RunBatchAsync is ever reached, so IsBusy can never be true here.
-        // Only IsDetecting needs checking: a detection that started after Start's check passed but
-        // before this line runs. A second call site would have to preserve that guarantee itself.
+        // Start's IsBusy ternary already refused a re-entrant call, so only IsDetecting can have
+        // changed since — a detection begun after that check passed. A second call site would have
+        // to preserve that guarantee itself.
         if (IsDetecting)
         {
             banner(new Banner("unlocker-busy",
@@ -379,10 +327,9 @@ public sealed partial class UnlockerViewModel : ObservableObject
                 }
                 catch (Exception e) when (e is IOException or UnauthorizedAccessException)
                 {
-                    // Scoped to the row it happened on, the way a returned failure already is: a
-                    // prefix that became unreadable mid-batch must not skip the targets queued
-                    // behind it, and the summary below must still report what finished. The narrow
-                    // catch matches DetectUnlockerAsync, so a bug elsewhere still crashes loudly.
+                    // Scoped to its row, like a returned failure: a prefix that becomes unreadable
+                    // mid-batch must not skip the targets behind it. Narrow, so a bug elsewhere
+                    // still crashes loudly.
                     row.StatusText = $"The unlocker operation failed: {e.Message}";
                 }
             }

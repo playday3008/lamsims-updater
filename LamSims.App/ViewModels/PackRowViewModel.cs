@@ -57,12 +57,8 @@ public sealed partial class PackRowViewModel : ObservableObject
     private string? _keptMessage;
     private RowMessageKind _keptKind = RowMessageKind.None;
 
-    /// <summary>
-    /// The terminal state a scan most recently retired. It latches: while it is set, every
-    /// arriving snapshot carrying that same state is ignored. It clears when a different state
-    /// arrives, which a genuine re-enqueue always produces because Reset publishes Queued first.
-    /// See ApplyQueue.
-    /// </summary>
+    /// <summary>The terminal state a scan most recently retired. Latches: every snapshot carrying
+    /// it is ignored until a different state arrives, which a real re-enqueue always produces.</summary>
     private QueueItemState? _retiredState;
 
     /// <summary>The queue's own verdict that it will not run this item again by itself.</summary>
@@ -71,11 +67,8 @@ public sealed partial class PackRowViewModel : ObservableObject
     /// <summary>Null when the pack is not in the queue, or when a scan cleared a terminal overlay.</summary>
     public QueueItemState? QueueState { get; private set; }
 
-    /// <summary>
-    /// Blocked is offered as well as absent: <c>PackQueue.Enqueue</c> accepts a re-enqueue of a
-    /// blocked item, and MarkBlocked's text tells the user to do exactly that on both the first
-    /// block and the second. The checkbox is the only way to take it.
-    /// </summary>
+    /// <summary>Blocked as well as absent: Enqueue accepts a re-enqueue of a blocked item, which
+    /// is what MarkBlocked's text tells the user to do, and the checkbox is the only way.</summary>
     public bool IsCheckable =>
         (QueueState is null || QueueState is QueueItemState.Blocked)
         && (ForceCheckable || InstallState != PackInstallState.Installed);
@@ -99,12 +92,9 @@ public sealed partial class PackRowViewModel : ObservableObject
     // escape core honours, and IsCheckable is where it is offered.
     public bool CanRemove => QueueState is QueueItemState.Queued;
 
-    // Failed is tested before the warnings arm, and that order matters. PackWorkflow adds the
-    // quarantine warning inside ClassifyAsync and returns it alongside a failed download, and
-    // PackQueue.Settle writes Warnings, Failed and Error together. With the arms the other way
-    // round a quarantined archive whose re-download 404s reads as a warning carrying the
-    // quarantine text, and the reason it failed is never shown. The warnings still follow the
-    // error rather than being dropped.
+    // Failed before the warnings arm: a failed download carries the quarantine warning alongside
+    // it, and reversed, a quarantined archive whose re-download 404s would read as a warning and
+    // never show why it failed.
     public string? Message => QueueState switch
     {
         QueueItemState.Blocked => null,
@@ -148,11 +138,8 @@ public sealed partial class PackRowViewModel : ObservableObject
         _ => ScanText,
     };
 
-    /// <summary>
-    /// The colour behind <see cref="StatusText"/>, keyed off the same states in the same order, so
-    /// a status and its colour can never disagree. The <c>_</c> arm is the null queue state, which
-    /// is where a scanned-but-not-queued row lives.
-    /// </summary>
+    /// <summary>The colour behind <see cref="StatusText"/>, keyed off the same states in the same
+    /// order so the two cannot disagree. The <c>_</c> arm is a scanned-but-not-queued row.</summary>
     public PackStatusKind StatusKind => QueueState switch
     {
         QueueItemState.Verifying or QueueItemState.Downloading or QueueItemState.Installing
@@ -186,16 +173,10 @@ public sealed partial class PackRowViewModel : ObservableObject
 
     public void ApplyQueue(QueueItemSnapshot snapshot)
     {
-        // The queue re-publishes every item wholesale whenever its own state moves (Running to
-        // Idle once nothing is left to run, in PackQueue's LoopAsync/TakeNext), not only when an
-        // item's own state changes, so a terminal item's snapshot echoes at least once after the
-        // publish that carried its ending. A scan reads that ending and retires the overlay
-        // (ApplyScan, below); without this guard the echo reapplies the state the scan cleared.
-        //
-        // The guard latches: it suppresses every snapshot carrying the retired state, because
-        // the queue keeps republishing that terminal item for the rest of the session. It is
-        // released when a different state arrives (Queued from a re-enqueue), so a real second
-        // run is never suppressed.
+        // The queue republishes every item whenever its OWN state moves, so a terminal item echoes
+        // after the publish that carried its ending — and without this the echo reapplies what the
+        // scan just retired. Latched, because the republishing continues all session; released on
+        // a different state, so a real second run is never suppressed.
         if (_retiredState == snapshot.State) return;
         _retiredState = null;
 
@@ -216,17 +197,13 @@ public sealed partial class PackRowViewModel : ObservableObject
         RaiseAll();
     }
 
-    /// <summary>
-    /// The pack is absent from the queue's update, either removed or never enqueued. Unlike the
-    /// scan's clear this drops the message too: an absent item has no history to explain.
-    /// </summary>
+    /// <summary>The pack is absent from the update. Unlike the scan's clear this drops the message
+    /// too: an absent item has no history to explain.</summary>
     public void ClearQueueOverlay()
     {
-        // The bridge calls this on every row absent from every update, and every update carries
-        // every item, so with a 30-pack catalog and one download running this is thousands of
-        // no-op RaiseAll()s per second on the UI thread. These four are the whole of what this
-        // method clears: QueueState is null exactly when DropOverlay has already run (or never
-        // needed to), and DropOverlay's other fields are only ever written beside it.
+        // Called on every absent row of every update: with a 30-pack catalog and one download
+        // that is thousands of no-op RaiseAll()s a second on the UI thread. These four are the
+        // whole of what this method clears.
         if (QueueState is null && _retiredState is null
             && _keptMessage is null && _keptKind == RowMessageKind.None)
         {
@@ -271,11 +248,9 @@ public sealed partial class PackRowViewModel : ObservableObject
     public IRelayCommand RemoveCommand => _removeCommand ??=
         new RelayCommand(() => _queue.Remove(Code), () => CanRemove);
 
-    /// <summary>
-    /// An `Installed` row's checkbox is cleared and disabled, and this is the only way
-    /// past that. It clears the disable for this row and does not check the box. A command
-    /// rather than a settable property because a `MenuItem` cannot write one.
-    /// </summary>
+    /// <summary>An Installed row's checkbox is cleared and disabled; this is the only way past
+    /// that, and it does not check the box. A command rather than a settable property, because a
+    /// MenuItem cannot write one.</summary>
     [RelayCommand]
     private void Reinstall() => ForceCheckable = true;
 

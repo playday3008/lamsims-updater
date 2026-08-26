@@ -7,35 +7,27 @@ using LamSims.Core.Logging;
 
 namespace LamSims.Core.Unlocking.Wine;
 
-/// <param name="Detail">
-/// What identifies this candidate within its source, before dedup. Several candidates can name one
-/// prefix, so this is a proposal rather than the final label.
-/// </param>
+/// <param name="Detail">Identifies this candidate within its source, before dedup. Several
+/// candidates can name one prefix, so this is a proposal, not the final label.</param>
 public sealed record PrefixCandidate(string Path, EnvironmentSource Source, string Detail,
                                      bool Flatpak);
 
 /// <summary>
 /// Finds Wine prefixes by asking each launcher's own configuration, then validating what it finds.
-/// Extract loosely, validate strictly: a wrong extraction is harmless because
-/// <see cref="WinePrefix.TryOpen"/> rejects it with a reason, and that is what makes line-oriented
-/// parsing safe enough to need no YAML or VDF dependency.
+/// Extract loosely, validate strictly: <see cref="WinePrefix.TryOpen"/> rejects a wrong extraction
+/// with a reason, which is what makes line-oriented parsing safe without a YAML or VDF dependency.
 ///
-/// Every extraction source is best-effort. An unreadable or malformed config yields a diagnostic
-/// and no candidates, never an exception: one broken game file must not stop the scan.
+/// Every source is best-effort — a malformed config yields a diagnostic and no candidates, never
+/// an exception. One broken game file must not stop the scan.
 /// </summary>
 public sealed class WinePrefixScanner(LauncherHomes homes, string userName,
                                       IProgress<string>? notes = null,
                                       string flatpakInfoFile = "/.flatpak-info",
                                       ILogSink? log = null)
 {
-    /// <summary>
-    /// Where the per-candidate rejections go. Five launchers between them mention far more paths
-    /// than are prefixes — every Steam compatdata container, every Heroic game directory — and
-    /// each rejection used to be reported to <c>notes</c>, which the window renders in front of
-    /// the user. That put thirty lines of "nobody claimed this was a prefix" above the Install
-    /// button. What the user must act on still goes to <c>notes</c>; the enumeration's own
-    /// reasoning comes here.
-    /// </summary>
+    /// <summary>Where per-candidate rejections go. Five launchers mention far more paths than are
+    /// prefixes, and routing each rejection to <c>notes</c> put thirty lines of "nobody claimed
+    /// this was a prefix" above the Install button. <c>notes</c> is what the user must act on.</summary>
     private readonly ILogSink _log = log ?? NullLogSink.Instance;
 
     public IReadOnlyList<WinePrefix> Scan(string? configuredPrefix)
@@ -56,11 +48,10 @@ public sealed class WinePrefixScanner(LauncherHomes homes, string userName,
 
         var found = Describe(candidates);
 
-        // The one candidate the user typed themselves, and the one rejection that is an answer to
-        // something they did rather than a by-product of enumerating. Asked directly rather than
-        // recovered from Describe: opening the prefix again to learn the reason would re-report its
-        // architecture and its Windows users, and a membership test over `found` cannot tell a path
-        // that was rejected from one that deduplicated into another candidate's group.
+        // The one candidate the user typed, so its rejection answers something they did. Asked
+        // directly rather than recovered from Describe: reopening would re-report the prefix's
+        // architecture and users, and a membership test over `found` cannot tell a rejection from
+        // a dedup into another group.
         if (!string.IsNullOrWhiteSpace(configuredPrefix)
             && WinePrefix.WhyNotAPrefix(configuredPrefix) is { } why)
         {
@@ -88,24 +79,19 @@ public sealed class WinePrefixScanner(LauncherHomes homes, string userName,
         return found;
     }
 
-    /// <summary>
-    /// Dedup, label and open. Internal rather than private so a test can drive the labelling rules
-    /// directly: they are decided across candidates, and reaching them through six extraction
-    /// sources would make a labelling failure read as a discovery failure.
-    /// </summary>
+    /// <summary>Dedup, label and open. Internal so a test can drive the labelling rules directly:
+    /// reaching them through six extraction sources would make a labelling failure read as a
+    /// discovery failure.</summary>
     internal IReadOnlyList<WinePrefix> Describe(IReadOnlyList<PrefixCandidate> candidates)
     {
         var opened = new List<WinePrefix>();
         var seen = new HashSet<string>(StringComparer.Ordinal);
 
-        // Grouped by RESOLVED path, not canonical: ~/.steam/steam is a symlink to
-        // <data>/Steam on a real machine, and PathIdentity.Canonical is Path.GetFullPath, which
-        // never resolves a link — so canonical-only dedup shows every Steam prefix twice.
+        // RESOLVED, not canonical: ~/.steam/steam is a symlink, and Canonical is GetFullPath,
+        // which never follows one — so canonical-only dedup shows every Steam prefix twice.
         //
-        // Ordinal, because these are whole paths on a Linux filesystem and "~/Games/Prefix" and
-        // "~/Games/prefix" are two prefixes there. Folding them dropped the second one before it
-        // could become a target, so it could be neither installed into nor removed from — and the
-        // count below reported the survivor as shared by "2 games".
+        // Ordinal, because on a Linux filesystem "~/Games/Prefix" and "~/Games/prefix" are two
+        // prefixes: folding them dropped the second before it could become a target.
         foreach (var group in candidates.GroupBy(c => Resolve(c.Path) ?? c.Path,
                                                  StringComparer.Ordinal))
         {
@@ -141,22 +127,15 @@ public sealed class WinePrefixScanner(LauncherHomes homes, string userName,
     }
 
     /// <summary>
-    /// The physical path, with EVERY symlinked component resolved — not just the last one.
+    /// The physical path with EVERY symlinked component resolved, not just the last.
+    /// <c>Directory.ResolveLinkTarget</c> follows only the final component, and the link that
+    /// matters is routinely in the middle: <c>~/.steam/steam</c> is a symlink, and Steam candidates
+    /// hang below it at <c>steamapps/compatdata/*/pfx</c>, which is not itself a link.
     ///
-    /// <c>Directory.ResolveLinkTarget</c> follows a link only in the final component, and the link
-    /// that matters here is routinely in the middle: <c>~/.steam/steam</c> is a symlink to
-    /// <c>&lt;data&gt;/Steam</c> on a real machine, and Steam candidates are
-    /// <c>&lt;root&gt;/steamapps/compatdata/*/pfx</c> underneath it. Calling ResolveLinkTarget on
-    /// the candidate returns null there — <c>pfx</c> is not itself a link — so the two spellings of
-    /// one prefix stay distinct and every Steam prefix appears twice, which is the exact defect
-    /// deduplication exists to prevent.
-    ///
-    /// Internal rather than private: this is the one identity rule a path has to be compared under
-    /// everywhere a symlinked launcher home or a symlinked prefix component can appear —
-    /// <see cref="LauncherHomes.For"/> dedupes by it too, and <see cref="LauncherOverrides"/>
-    /// compares a launcher config's declared path against a discovered prefix's root by it, because
-    /// <see cref="PathIdentity.Canonical"/> alone (lexical, never follows a link) disagrees with
-    /// what actually got opened whenever either side runs through a symlink.
+    /// Internal because this is the identity rule everywhere a symlinked home or prefix component
+    /// appears — <see cref="LauncherHomes.For"/> and <see cref="LauncherOverrides"/> both compare
+    /// by it, since <see cref="PathIdentity.Canonical"/> is lexical and disagrees with what was
+    /// actually opened.
     /// </summary>
     internal static string? Resolve(string path)
     {
@@ -178,8 +157,7 @@ public sealed class WinePrefixScanner(LauncherHomes homes, string userName,
             {
                 passes++;
 
-                // Walk from root looking for the first link.
-                var cursor = root;
+                        var cursor = root;
                 var parts = current[root.Length..]
                     .Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries);
 
@@ -195,14 +173,12 @@ public sealed class WinePrefixScanner(LauncherHomes homes, string userName,
                                  ?? new FileInfo(cursor).LinkTarget;
                     if (target is null) continue;
 
-                    // Found a link. Resolve it and re-append the untraversed components.
-                    var resolved = PathIdentity.Canonical(Path.IsPathRooted(target)
+                            var resolved = PathIdentity.Canonical(Path.IsPathRooted(target)
                                       ? target
                                       : Path.Combine(Path.GetDirectoryName(cursor) ?? root, target))
                                   ?? cursor;
 
-                    // Re-append any untraversed components.
-                    var remaining = string.Join(Path.DirectorySeparatorChar.ToString(),
+                            var remaining = string.Join(Path.DirectorySeparatorChar.ToString(),
                                                parts[(i + 1)..]);
                     current = remaining.Length > 0
                         ? Path.Combine(resolved, remaining)
@@ -258,11 +234,8 @@ public sealed class WinePrefixScanner(LauncherHomes homes, string userName,
         }
     }
 
-    /// <summary>
-    /// The first <c>key: value</c> in a line-oriented config, unquoted and with an inline comment
-    /// stripped. Deliberately not a YAML parser: no dependency may be added, and a wrong extraction
-    /// is rejected by validation with a reason.
-    /// </summary>
+    /// <summary>The first <c>key: value</c> in a line-oriented config, unquoted and stripped of
+    /// inline comments. Deliberately not a YAML parser: validation rejects a wrong extraction.</summary>
     internal static string? ReadLineValue(string file, string key)
     {
         foreach (var value in ReadLineValues(file, key)) return value;
@@ -292,12 +265,9 @@ public sealed class WinePrefixScanner(LauncherHomes homes, string userName,
         }
     }
 
-    /// <summary>
-    /// A launcher's own config that could not be read or did not parse. The log, not the notes: this
-    /// is a fact about someone else's file, the scan carries on without it, and a user with five
-    /// launchers installed would collect these for launchers they have never configured. A warning
-    /// rather than an aside, because an unreadable config can hide a prefix they expected to see.
-    /// </summary>
+    /// <summary>A launcher config that could not be read. The log, not the notes: the scan carries
+    /// on, and a user with five launchers would collect these for ones they never configured. A
+    /// warning, because an unreadable config can hide a prefix they expected to see.</summary>
     private void Diagnostic(string message) => _log.Write(LogLine.Warning(message));
 
     private static string? Clean(string value)
@@ -341,10 +311,8 @@ public sealed class WinePrefixScanner(LauncherHomes homes, string userName,
         }
     }
 
-    /// <summary>
-    /// The root itself plus every path in its own library list. A Flatpak Steam's list is its own,
-    /// which is why this is keyed off the home rather than read once.
-    /// </summary>
+    /// <summary>The root plus every path in its own library list, keyed off the home because a
+    /// Flatpak Steam's list is its own.</summary>
     private IEnumerable<string> Libraries(string root)
     {
         // Ordinal for the same reason as Describe: two library paths differing only in case are
@@ -363,10 +331,8 @@ public sealed class WinePrefixScanner(LauncherHomes homes, string userName,
         }
     }
 
-    /// <summary>
-    /// Every <c>"key" "value"</c> pair with this key. VDF is quoted and tab-separated, and its
-    /// values carry <c>\\</c> and <c>\"</c> escapes that a raw read would leave in a path.
-    /// </summary>
+    /// <summary>Every <c>"key" "value"</c> pair with this key. VDF values carry <c>\\</c> and
+    /// <c>\"</c> escapes that a raw read would leave in the path.</summary>
     private IEnumerable<string> VdfValues(string file, string key)
     {
         string[] lines;
@@ -404,12 +370,9 @@ public sealed class WinePrefixScanner(LauncherHomes homes, string userName,
         return null;
     }
 
-    /// <summary>
-    /// The build is NOT config_info line 1 in general: GE-Proton writes its own name there, and
-    /// Valve Proton writes a version number with the build recoverable only from the later path
-    /// lines (<c>common/Proton - Experimental/files/...</c>). Taking line 1 unconditionally labels
-    /// every Valve prefix with a version that names no build.
-    /// </summary>
+    /// <summary>The build is NOT config_info line 1: GE-Proton writes its name there, Valve writes
+    /// a version number with the build only in the later path lines. Taking line 1 labels every
+    /// Valve prefix with a version that names no build.</summary>
     private static string Label(string container, string appId)
     {
         var build = BuildFromConfigInfo(Path.Combine(container, "config_info"))
@@ -490,10 +453,8 @@ public sealed class WinePrefixScanner(LauncherHomes homes, string userName,
 
                 using (document)
                 {
-                    // The config's single property is the game id, and both the prefix and the
-                    // title hang off it. Guard the shape first: EnumerateObject throws if the root
-                    // is not an object, and that exception would escape to Scan and kill the entire
-                    // discovery chain.
+                    // Guard the shape first: EnumerateObject throws on a non-object root, and that
+                    // would escape to Scan and kill the whole discovery chain.
                     if (document.RootElement.ValueKind != JsonValueKind.Object)
                     {
                         Diagnostic($"Heroic: '{file}' root is not a JSON object, skipping.");
@@ -512,10 +473,9 @@ public sealed class WinePrefixScanner(LauncherHomes homes, string userName,
                 }
             }
 
-            // defaultSettings.winePrefix is a CONTAINER holding one prefix per game, not a prefix:
-            // on a real machine it has neither system.reg nor drive_c, so treating it as one
-            // guarantees a spurious rejection for every Heroic user and finds none of the prefixes
-            // actually inside it.
+            // defaultSettings.winePrefix is a CONTAINER of one prefix per game, not a prefix: it
+            // has neither system.reg nor drive_c, so treating it as one rejects every Heroic user
+            // and finds none of the prefixes inside it.
             var config = Path.Combine(home.Root, "config.json");
             if (ReadJson(config, "Heroic") is not { } settings) continue;
 
@@ -575,11 +535,8 @@ public sealed class WinePrefixScanner(LauncherHomes homes, string userName,
         }
     }
 
-    /// <summary>
-    /// A parsed document, or null with a diagnostic. Malformed JSON is ordinary on a machine with
-    /// several launchers and must not stop the scan: the prefixes from every other source still
-    /// have to come back.
-    /// </summary>
+    /// <summary>A parsed document, or null with a diagnostic. Malformed JSON is ordinary with
+    /// several launchers installed and must not stop the other sources.</summary>
     private JsonDocument? ReadJson(string file, string source)
     {
         try

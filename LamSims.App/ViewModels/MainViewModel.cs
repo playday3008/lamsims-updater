@@ -37,15 +37,13 @@ public sealed partial class MainViewModel : ObservableObject
         _load = load ?? services.Catalog.LoadAsync;
         _save = save ?? services.Settings.SaveAsync;
 
-        // Built here, not in Composition: MainWindow and the tests replace services.Dispatcher
-        // with `services with { Dispatcher = … }` after Build returns, and a LogViewModel built
-        // in Composition would have captured the dispatcher that gets thrown away.
+        // Not in Composition: callers swap in their own Dispatcher after Build returns, and one
+        // built there would have captured the discarded one.
         Log = new LogViewModel(services.Log, services.Dispatcher, services.Clipboard);
         _ticker = new ProgressTicker(services.Clock, services.Log);
 
-        // Seeded without going through the property setters: those queue a save and, for the
-        // download directory, move the engine. A value the user already chose is neither a
-        // change nor a reason to write it back.
+        // Not through the setters: those queue a save and move the engine. A value the user
+        // already chose is not a change.
         _gameDirectory = services.Current.GameDirectory;
         _downloadDirectory = services.Current.DownloadDirectory;
         _connections = services.Current.Connections;
@@ -74,15 +72,12 @@ public sealed partial class MainViewModel : ObservableObject
 
     public LogViewModel Log { get; }
 
-    /// <summary>
-    /// Set by the window: closing it is the view's business, but the unlocker's elevated relaunch is
-    /// the one path that has to close it from here, because ShutdownAsync alone leaves the shell up.
-    /// </summary>
+    /// <summary>Set by the window. The elevated relaunch is the one path that must close it from
+    /// here, since ShutdownAsync alone leaves the shell up.</summary>
     public Action? RequestClose { get; set; }
 
-    // These wrappers keep the three delegate fields read: a private field assigned and never
-    // read is CS0414, and this repository builds warnings as errors. An uncalled private method
-    // is not a warning, and CS0414 counts a syntactic read rather than a reachable one.
+    // These wrappers keep the three delegate fields read: an assigned-never-read private field is
+    // CS0414, and this repository builds warnings as errors. An uncalled private method is not.
     private Task<CatalogResolution> ResolveCatalogAsync(CancellationToken ct) => _resolve(ct);
 
     private Task<CatalogResolution> LoadCatalogFromAsync(CatalogSource source, CancellationToken ct) =>
@@ -100,9 +95,8 @@ public sealed partial class MainViewModel : ObservableObject
     {
         _services.Current.Connections = value;
 
-        // SegmentedDownloader reads this per download rather than capturing it, and the shared
-        // client's pool is sized for DownloadOptions.MaxConnections, so the new count is in force
-        // from the next pack, with no restart and nothing to rebuild.
+        // Read per download, and the shared pool is sized for MaxConnections, so this takes effect
+        // from the next pack with nothing to rebuild.
         _services.DownloadOptions.Connections = Math.Clamp(value, 1, DownloadOptions.MaxConnections);
 
         QueueSave();
@@ -114,9 +108,8 @@ public sealed partial class MainViewModel : ObservableObject
 
         if (!MoveDownloadsTo(value))
         {
-            // The engine refused the directory and stayed where it was, so the setting has to stay
-            // where it was too. Persisting a root that cannot be created loses the working one:
-            // the next launch fails to create it as well and falls back to the default.
+            // The engine stayed put, so the setting must too: persisting a root that cannot be
+            // created loses the working one on the next launch.
             _revertingDownloadDirectory = true;
             try { DownloadDirectory = _services.Current.DownloadDirectory; }
             finally { _revertingDownloadDirectory = false; }
@@ -130,10 +123,9 @@ public sealed partial class MainViewModel : ObservableObject
     private bool _revertingDownloadDirectory;
 
     /// <summary>
-    /// Points the engine at a new download directory. Every consumer holds the one
-    /// <see cref="DownloadPaths"/> and asks it for paths per call, so this moves all of them at
-    /// once. Gated on an empty queue by <see cref="CanMoveDownloads"/>: a move under a live
-    /// download would orphan the <c>.part</c> file and the lock the run still holds.
+    /// Points the engine at a new download directory. Every consumer asks the one
+    /// <see cref="DownloadPaths"/> per call, so this moves all of them at once. Gated on an empty
+    /// queue: a move under a live download orphans its <c>.part</c> file and its lock.
     /// </summary>
     /// <returns>False when the directory was refused and the engine stayed where it was.</returns>
     private bool MoveDownloadsTo(string? directory)
@@ -161,10 +153,9 @@ public sealed partial class MainViewModel : ObservableObject
     internal int OrphansSwept { get; private set; }
 
     /// <summary>
-    /// Startup cleanup, which is what OrphanCleaner was written for and what nothing was calling:
-    /// a .part file for a pack the catalog no longer lists is unreachable from inside the app and
-    /// grows without bound. Once per session, and only off a catalog that actually loaded, because
-    /// the known codes are what protect every pack still listed. Archives are never touched.
+    /// A .part file for a pack the catalog no longer lists is unreachable from inside the app.
+    /// Once per session, and only off a catalog that loaded — the known codes are what protect
+    /// every pack still listed. Archives are never touched.
     /// </summary>
     private void SweepOrphansOnce(IReadOnlySet<string> knownCodes)
     {
@@ -186,10 +177,8 @@ public sealed partial class MainViewModel : ObservableObject
 
     private Timer? _saveTimer;
 
-    /// <summary>
-    /// Whether the debounce actually has a driver. Asserted rather than waited on: the tick is
-    /// real time, and this suite does not sleep.
-    /// </summary>
+    /// <summary>Whether the debounce has a driver. Asserted rather than waited on: the tick is
+    /// real time and this suite does not sleep.</summary>
     internal bool SettingsTimerRunning => _saveTimer is not null;
 
     /// <summary>Writes a pending change only once the debounce has elapsed. Driven by a timer.</summary>
@@ -230,11 +219,8 @@ public sealed partial class MainViewModel : ObservableObject
         Scan();
     }
 
-    /// <summary>
-    /// Refused while anything is still in the queue. A move under a live download leaves the
-    /// <c>.part</c> file and the lock behind in the old directory, where the run that owns them
-    /// is still writing and the next pass will never look.
-    /// </summary>
+    /// <summary>Refused while anything is queued: a move leaves the <c>.part</c> file and the
+    /// lock in the old directory, still being written and never looked at again.</summary>
     public bool CanMoveDownloads => PendingCount == 0;
 
     [RelayCommand(CanExecute = nameof(CanMoveDownloads))]
@@ -323,11 +309,9 @@ public sealed partial class MainViewModel : ObservableObject
                 break;
         }
 
-        // Every branch rebuilt the rows, and a fresh row knows nothing about what is on disk.
-        // StartAsync scans separately, but ChangeCatalogAsync and UseCachedCatalogAsync reach
-        // the rows only through here, so without this an already-installed pack reads
-        // "Not installed" with a live checkbox and Add re-downloads it. Scan() is a no-op with
-        // no game directory.
+        // A fresh row knows nothing about what is on disk, and the catalog-change paths reach the
+        // rows only through here: without this an installed pack reads "Not installed" and Add
+        // re-downloads it.
         if (!string.IsNullOrWhiteSpace(GameDirectory)) Scan();
     }
 
@@ -357,11 +341,8 @@ public sealed partial class MainViewModel : ObservableObject
     [RelayCommand]
     private void DismissBanner(Banner banner) => Banners.Remove(banner);
 
-    /// <summary>
-    /// Refused while anything is still in the queue: a rebuilt row list orphans an in-flight
-    /// pack, which keeps its lock and its bandwidth with no row to cancel it from, and a pack
-    /// whose entry changed would render progress under a size and digest the run is not using.
-    /// </summary>
+    /// <summary>Refused while anything is queued: a rebuilt row list orphans an in-flight pack,
+    /// which keeps its lock and bandwidth with no row to cancel it from.</summary>
     public bool CanChangeCatalog => PendingCount == 0;
 
     [RelayCommand(CanExecute = nameof(CanChangeCatalog))]
@@ -376,12 +357,9 @@ public sealed partial class MainViewModel : ObservableObject
         Apply(await LoadCatalogFromAsync(new CatalogSource(CatalogSourceKind.Settings, picked), ct));
     }
 
-    /// <summary>
-    /// What the user has typed into the catalog box: a local path or an http(s) URL, told apart
-    /// by <see cref="CatalogSource.IsRemote"/> when the source is loaded. Distinct from
-    /// <see cref="CatalogDescription"/>, which reports the source actually in use; the two
-    /// differ whenever the box holds an edit that has not been applied.
-    /// </summary>
+    /// <summary>What the user typed into the catalog box. Distinct from
+    /// <see cref="CatalogDescription"/>, which reports the source in use; the two differ whenever
+    /// the box holds an unapplied edit.</summary>
     [ObservableProperty]
     private string _catalogInput = "";
 
@@ -454,10 +432,8 @@ public sealed partial class MainViewModel : ObservableObject
     [ObservableProperty]
     private string? _winePrefix;
 
-    /// <summary>
-    /// Applied live. The scanner reads the setting per scan, so re-running detection is all that is
-    /// needed and the object graph is never rebuilt.
-    /// </summary>
+    /// <summary>Applied live: the scanner reads the setting per scan, so re-running detection is
+    /// all that is needed.</summary>
     partial void OnWinePrefixChanged(string? value)
     {
         _services.Current.WinePrefix = value;
@@ -485,9 +461,8 @@ public sealed partial class MainViewModel : ObservableObject
     {
         Rows.Clear();
 
-        // The rescan dedupe is keyed by code and the rows it described are gone. Left standing,
-        // a pack completed before a catalog change and enqueued again afterwards would have its
-        // rebuilt row adopt an echoed Completed with no rescan to retire the overlay.
+        // Keyed by code, and the rows it described are gone: left standing, a rebuilt row would
+        // adopt an echoed Completed with no rescan to retire the overlay.
         _rescanned.Clear();
 
         foreach (var entry in entries) Rows.Add(new PackRowViewModel(entry, _services.Queue));
@@ -518,11 +493,9 @@ public sealed partial class MainViewModel : ObservableObject
 
         foreach (var item in update.Items) _ticker.Observe(item);
 
-        // Every update carries every item, so a completion echoes for the rest of the session
-        // and the set below is what stops it rescanning each time. The set also has to be
-        // released: a re-enqueued pack leaves Completed first, and if its code stayed in the set
-        // its second completion would fire no rescan, leaving the row pinned at "Installed" with
-        // a disabled checkbox and a terminal overlay nothing retires.
+        // Every update carries every item, so a completion echoes all session and the set stops
+        // the rescan repeating. It must also be released: otherwise a re-enqueued pack's second
+        // completion fires no rescan and the row stays pinned at "Installed".
         foreach (var item in update.Items)
         {
             if (item.State != QueueItemState.Completed) _rescanned.Remove(item.Code);
@@ -548,9 +521,7 @@ public sealed partial class MainViewModel : ObservableObject
         var markers = _services.InstallState.LoadAll(GameDirectory);
         var result = InstallScanner.Scan(GameDirectory, Rows.Select(r => r.Entry), markers);
 
-        // InstalledUnverified belongs to the installed family (InstallScanner's own doc: "every
-        // install this tool did not perform... it is never a warning"), so it counts alongside
-        // Installed rather than alongside NotInstalled.
+        // InstalledUnverified is an installed state, not a warning; see InstallScanner.
         var installedCount = result.Packs.Count(p =>
             p.State is PackInstallState.Installed or PackInstallState.InstalledUnverified);
         var partialCount = result.Packs.Count(p => p.State == PackInstallState.Partial);
@@ -570,9 +541,8 @@ public sealed partial class MainViewModel : ObservableObject
                 BannerKind.Error));
         }
 
-        // Ordinal: InstallScanner builds every PackScanResult from the catalog's own pack.Code,
-        // so these strings are identical to the rows'. The store's case-insensitive dictionary
-        // is consulted inside the scanner and its comparer never reaches the results.
+        // Ordinal: the scanner builds every result from the catalog's own pack.Code, so these are
+        // the rows' strings. Its case-insensitive store never reaches the results.
         foreach (var scan in result.Packs) RowFor(scan.Code)?.ApplyScan(scan);
     }
 
@@ -649,9 +619,8 @@ public sealed partial class MainViewModel : ObservableObject
 
     public async Task StartAsync(CancellationToken ct)
     {
-        // MainWindow.OnOpened is an `async void` override and is the only caller, so nothing in
-        // the framework guarantees it runs once. A second call would build a second QueueBridge
-        // over a single-reader channel, and the two would split the updates between them.
+        // The only caller is an `async void` override, which nothing guarantees runs once. A
+        // second QueueBridge over a single-reader channel would split the updates in two.
         if (_started) return;
 
         _started = true;
@@ -662,10 +631,8 @@ public sealed partial class MainViewModel : ObservableObject
         _queueRun = ObserveQueueAsync(ct);
         _bridgeRun = _bridge.RunAsync();
 
-        // The debounce promises a write shortly after the change, and nothing was delivering it:
-        // a queued save only ever reached disk through a graceful close, so a slider moved before
-        // a reboot, a logout or a kill was silently discarded. FlushDueSettingsAsync is a no-op
-        // until the debounce elapses, so ticking at the debounce interval costs nothing.
+        // Without this a queued save only reached disk on a graceful close, so a slider moved
+        // before a kill was discarded. The flush is a no-op until the debounce elapses.
         _saveTimer = new Timer(
             _ => _services.Dispatcher.Post(() => _ = FlushDueSettingsAsync(CancellationToken.None)),
             null, SaveDebounce, SaveDebounce);
@@ -681,13 +648,8 @@ public sealed partial class MainViewModel : ObservableObject
 
     internal int AssetTempsSwept { get; private set; }
 
-    /// <summary>
-    /// Here rather than beside the orphan sweep below, and before detection rather than after,
-    /// because this one is only safe while no fetch can have started: an asset temp carries no
-    /// pack code, so nothing tells a live one from an abandoned one. Nothing above this line can
-    /// reach an unlocker install — detection does not fetch, and the shell is not interactive
-    /// until this method returns.
-    /// </summary>
+    /// <summary>Before detection, because this is only safe while no fetch can have started: an
+    /// asset temp carries no pack code, so nothing tells a live one from an abandoned one.</summary>
     private void SweepAssetTemps()
     {
         try
@@ -701,26 +663,16 @@ public sealed partial class MainViewModel : ObservableObject
     }
 
     /// <summary>
-    /// Runs before the catalog load. On Windows, detection is at most four registry opens and a
-    /// couple of File.Exists calls, cheap enough to cost the catalog nothing. The Wine backend is
-    /// not bounded the same way: it walks the configured prefix setting,
-    /// <c>$WINEPREFIX</c>, and five launcher sources — Wine, Steam, Lutris, Heroic and Bottles —
-    /// each doubled for a Flatpak install, plus this application's own orphaned-override sweep, and
-    /// can parse up to eight full <c>.reg</c> files per prefix along the way. Without this call at
-    /// all, IsSupported can be true with Targets empty, which renders a DLC Unlocker section with no
-    /// rows and no way to install anything.
+    /// Runs before the catalog load. Windows detection is a handful of registry opens; the Wine
+    /// backend walks the prefix setting, <c>$WINEPREFIX</c> and five launcher sources, each
+    /// doubled for Flatpak, parsing up to eight <c>.reg</c> files per prefix. Without it,
+    /// IsSupported can be true with Targets empty — a DLC Unlocker section with no rows.
     ///
-    /// The scan does not run on the caller's thread: UnlockerViewModel.RefreshCoreAsync hops onto
-    /// Task.Run for the detection call and for each row's status check, the same idiom
-    /// ObserveQueueAsync below uses and for the same reason — this method is awaited from
-    /// MainWindow.OnOpened on the UI thread, and without the hop the whole walk would run on the
-    /// thread that draws.
+    /// UnlockerViewModel.RefreshCoreAsync hops onto Task.Run for the walk; this method is awaited
+    /// from OnOpened, so without that hop it would run on the thread that draws.
     ///
-    /// Guarded narrowly, matching FlushSettingsNowAsync above: IOException and
-    /// UnauthorizedAccessException are the only exceptions either unlocker backend surfaces, since
-    /// WindowsUnlockerHost swallows a missing or unreadable registry key and every read under
-    /// Unlocking/Wine catches IOException, UnauthorizedAccessException and JsonException at its
-    /// source. A bug elsewhere still crashes loudly instead of being absorbed as a banner.
+    /// Guarded narrowly: IOException and UnauthorizedAccessException are the only exceptions
+    /// either backend surfaces, so a bug elsewhere still crashes loudly.
     /// </summary>
     private async Task DetectUnlockerAsync(CancellationToken ct)
     {
@@ -736,23 +688,17 @@ public sealed partial class MainViewModel : ObservableObject
     }
 
     /// <summary>
-    /// The queue's fault arrives here rather than through the bridge. `RunAsync`'s finally calls
-    /// `_updates.Writer.TryComplete()` with no argument on every exit path including the fault
-    /// path (`PackQueue.cs:536`, and `:1093` for a queue never run), so the bridge's
-    /// `await foreach` always ends cleanly and the `fault` it reports is always null against a
-    /// real queue. Left unobserved, the exception surfaces only where `ShutdownAsync` awaits
-    /// `_queueRun`, inside `OnClosing`'s `async void`, as an unhandled crash on window close,
-    /// and the banner it raises would be dead code.
+    /// The queue's fault arrives here, not through the bridge: RunAsync's finally always completes
+    /// the channel without an argument, so the bridge's fault is always null against a real queue.
+    /// Unobserved, the exception would surface as an unhandled crash on window close.
     /// </summary>
     private async Task ObserveQueueAsync(CancellationToken ct)
     {
         try
         {
-            // Task.Run, because StartAsync is awaited from MainWindow.OnOpened on the UI thread
-            // and nothing in LamSims.Core or LamSims.App calls ConfigureAwait, so without a hop
-            // the whole engine's continuations resume here and the hash and the extract do their
-            // work on the thread that draws. The token is not passed to Task.Run: an
-            // already-cancelled token would then fault this task rather than let RunAsync return.
+            // Task.Run because nothing here calls ConfigureAwait: without the hop the hash and the
+            // extract run on the thread that draws. The token is deliberately not passed — an
+            // already-cancelled one would fault this task rather than let RunAsync return.
             await Task.Run(() => _services.Queue.RunAsync(ct));
         }
         catch (Exception e)
@@ -762,12 +708,9 @@ public sealed partial class MainViewModel : ObservableObject
         }
     }
 
-    /// <summary>
-    /// The queue has ended. Two callers: the bridge, when the update channel closes (always with
-    /// a null fault, see <see cref="ObserveQueueAsync"/>), and <c>ObserveQueueAsync</c> itself,
-    /// which is the only place a real fault can be seen. Both cases disable the queue controls;
-    /// only a fault also banners.
-    /// </summary>
+    /// <summary>The queue has ended. Called by the bridge (always a null fault, see
+    /// <see cref="ObserveQueueAsync"/>) and by ObserveQueueAsync, the only place a real fault is
+    /// seen. Both disable the controls; only a fault banners.</summary>
     public void NoteQueueClosed(Exception? fault)
     {
         IsQueueAlive = false;
@@ -794,10 +737,8 @@ public sealed partial class MainViewModel : ObservableObject
             await saveTimer.DisposeAsync();
         }
 
-        // First, and before anything is torn down: an unlocker operation cannot be cancelled, and
-        // the process exiting inside its File.Copy is the damage the shutdown wait exists to prevent.
-        // Guarded for the same reason as the flush below: this runs under OnClosing's `async void`,
-        // where an escaping exception is an unhandled crash on close.
+        // First: an unlocker operation cannot be cancelled, and exiting inside its File.Copy is
+        // the damage this wait exists to prevent. Guarded because OnClosing is `async void`.
         try
         {
             await Unlocker.DrainAsync();
@@ -808,10 +749,8 @@ public sealed partial class MainViewModel : ObservableObject
                 $"The unlocker did not finish cleanly: {e.Message}", BannerKind.Error));
         }
 
-        // This runs from OnClosing's `async void`, where an escaping exception is an unhandled
-        // crash on close, and a crash here is the same mid-extract exit the wait above prevents.
-        // FlushSettingsNowAsync catches only IOException and UnauthorizedAccessException, so any
-        // other failure from the save delegate (a serialiser fault, say) would escape it.
+        // OnClosing is `async void`, and FlushSettingsNowAsync catches only IOException and
+        // UnauthorizedAccessException, so a serialiser fault would escape it as a crash on close.
         try
         {
             await FlushSettingsNowAsync(CancellationToken.None);
@@ -821,23 +760,13 @@ public sealed partial class MainViewModel : ObservableObject
             Raise(new Banner("settings", $"Your settings could not be saved: {e.Message}", BannerKind.Warning));
         }
 
-        // CancelAll before disposal, and Complete() never. Complete() makes a blocked pack
-        // eligible to start, clears a standing pause and releases the loop's signal, so between
-        // it and the next statement the loop can take a pack lock and reach the installer, which
-        // writes its journal marker before the first entry and leaves a Partial install behind.
-        // CancelAll marks every pending and blocked item Cancelled, which is terminal, and
-        // DisposeAsync calls StopAcceptingWork itself, so Complete() adds nothing anyway.
+        // CancelAll, never Complete(): Complete() makes a blocked pack eligible to start and
+        // releases the loop's signal, so the installer could still reach its journal marker and
+        // leave a Partial install behind. DisposeAsync calls StopAcceptingWork itself anyway.
         //
-        // Guarded for the same reason as the flush above: DisposeAsync waits for the runner and
-        // runs the cancellation callback chain on this thread.
-        //
-        // The inner finally matters. PackQueue.CancelAll ends in cts.Cancel(), which runs
-        // registered cancellation callbacks synchronously on this thread and rethrows them
-        // wrapped in an AggregateException. With both calls in one try that throw would skip the
-        // disposal: _completed would never be set, the loop would keep taking Queued items and
-        // installing packs after the user closed the window, and the window would stay open,
-        // held by MainWindow's re-entrancy guard, while it happened. Disposal therefore happens
-        // on every path out of CancelAll.
+        // The inner finally matters: CancelAll ends in cts.Cancel(), which runs cancellation
+        // callbacks on this thread and rethrows them wrapped. In one try that throw would skip
+        // disposal, and the loop would keep installing packs after the window closed.
         try
         {
             try

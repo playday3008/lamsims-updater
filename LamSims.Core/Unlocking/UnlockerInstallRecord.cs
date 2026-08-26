@@ -11,32 +11,21 @@ namespace LamSims.Core.Unlocking;
 /// <param name="ClientPath">
 /// In full, so a hashed-key collision cannot make a record vouch for a different install.
 /// </param>
-/// <param name="OwnsAutostartBackup">
-/// Whether this client's install is the one that captured the autostart value. The value is one
-/// machine-wide entry and the backup is one file, so exactly one record may claim it, and only
-/// that record's removal restores it.
-/// </param>
+/// <param name="OwnsAutostartBackup">Whether this install captured the autostart value. One
+/// machine-wide entry, one backup file, so exactly one record may claim it and only that record's
+/// removal restores it.</param>
 public sealed record UnlockerInstallRecord(string ClientPath, ClientKind Client,
                                           bool OwnsAutostartBackup);
 
-/// <summary>
-/// One record per installed client, grouped by install scope. Scope is the caller's
-/// <see cref="UnlockerPaths.ConfigDirectory"/>: one value on Windows, one per Wine prefix
-/// elsewhere, which is why nothing here is global.
-///
-/// This exists because multi-client detection turned three single-install assumptions into shared
-/// state. The unlocker's own configuration directory is shared by both clients and cannot be
-/// split, so removal has to know whether anyone else still needs it.
-/// </summary>
+/// <summary>One record per installed client, grouped by scope — the caller's
+/// <see cref="UnlockerPaths.ConfigDirectory"/>, which is why nothing here is global. It exists
+/// because the unlocker's configuration directory is shared by both clients and cannot be split,
+/// so removal has to know whether anyone else still needs it.</summary>
 public sealed class UnlockerInstallRecordStore(AppPaths paths)
 {
-    /// <summary>
-    /// Known limitation: records are keyed per <see cref="ClientKind"/>, so two installs of the
-    /// SAME kind in one scope (two EA app directories, say) share one record file and the second
-    /// overwrites the first. Nothing here can see such a sibling, which is why the caller's
-    /// shared-configuration decision also tests for an installed sibling DLL by path; that check,
-    /// not this store, is what protects the shared configuration in that case.
-    /// </summary>
+    /// <summary>Known limitation: keyed per <see cref="ClientKind"/>, so two installs of the SAME
+    /// kind in one scope share a record file and the second overwrites the first. The caller's
+    /// by-path sibling-DLL check, not this store, is what covers that case.</summary>
     private string FileFor(string scope, ClientKind client) =>
         Path.Combine(paths.UnlockerInstallDirectory, $"{Key(scope)}-{Name(client)}.json");
 
@@ -85,14 +74,11 @@ public sealed class UnlockerInstallRecordStore(AppPaths paths)
     }
 
     /// <summary>
-    /// The scope's other installed clients. Drives the one decision that cannot be made per
-    /// client: whether removal may delete the configuration directory both clients read.
-    ///
-    /// <c>Complete</c> is false when the answer could not be established: the directory is
-    /// unreadable, or a sibling record in this scope could not be parsed. "No other client" and
-    /// "cannot tell" must not collapse into one value, because the caller deletes a directory on
-    /// the strength of it, and collapsing them reintroduces the very defect this store exists to
-    /// fix. An absent directory is a complete answer of none.
+    /// The scope's other installed clients, driving the one decision that cannot be made per
+    /// client: whether removal may delete the shared configuration directory. <c>Complete</c> is
+    /// false when the answer could not be established — "no other client" and "cannot tell" must
+    /// not collapse, because the caller deletes a directory on the strength of it. An absent
+    /// directory is a complete answer of none.
     /// </summary>
     public (IReadOnlyList<UnlockerInstallRecord> Records, bool Complete) Others(
         string scope, ClientKind client)

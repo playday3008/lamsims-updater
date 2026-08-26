@@ -11,29 +11,19 @@ using LamSims.Core.Installing;
 namespace LamSims.Core.Queueing;
 
 /// <summary>
-/// Runs packs one at a time and publishes the whole queue's state after every change.
+/// Runs packs one at a time, publishing the queue's state after every change. Sequencing is
+/// correctness, not policy: two runs of one pack fight over its chunk sidecar and archive. A
+/// second process is held off by <see cref="PackLock"/> instead.
 ///
-/// Sequencing is required for correctness: two runs of one pack overwrite each other's chunk
-/// sidecar, one can delete an archive the other is still extracting, and two concurrent packs
-/// share a single connection budget. A second instance of the application is held off by
-/// <see cref="PackLock"/> rather than by this ordering.
-///
-/// Controls may be called from any thread while <see cref="RunAsync"/> runs.
-///
-/// <b>A queue that has been run must eventually be disposed.</b> <see cref="RunAsync"/> leaves its
-/// linked cancellation source alive on purpose and <see cref="DisposeAsync"/> is the only thing
-/// that ever releases it.
+/// Controls are callable from any thread. A queue that has been run must be disposed:
+/// <see cref="DisposeAsync"/> is the only thing that releases the linked source.
 /// </summary>
 public sealed class PackQueue : IAsyncDisposable
 {
     private sealed class Item
     {
-        /// <summary>
-        /// Settable, not init-only: re-enqueueing a terminal item is the retry mechanism, and a
-        /// retry after "mirror is down" is precisely the case where the shell has refreshed the
-        /// catalog. Reset swaps in the new entry so the retry uses the new mirrors, size and
-        /// digest rather than the dead ones it just failed against.
-        /// </summary>
+        /// <summary>Settable so a retry runs against the refreshed catalog entry, not the dead
+        /// mirrors it just failed against.</summary>
         public required PackEntry Pack { get; set; }
         public required string GameDirectory { get; set; }
         public QueueItemState State { get; set; } = QueueItemState.Queued;
@@ -46,27 +36,15 @@ public sealed class PackQueue : IAsyncDisposable
         public IReadOnlyList<string> Warnings { get; set; } = Array.Empty<string>();
         public int BlockedAttempts { get; set; }
 
-        /// <summary>
-        /// What <see cref="_completedCount"/> read when this item was last refused its lock. The
-        /// retry pass compares against it to tell "another pack has run since" from "nothing has
-        /// happened at all", so the one free retry is spent on a wait that could plausibly have
-        /// helped.
-        /// </summary>
+        /// <summary>What <see cref="_completedCount"/> read when this item was last refused its
+        /// lock, so its one free retry is spent only after another pack has actually run.</summary>
         public long BlockedAtCount { get; set; }
 
-        /// <summary>
-        /// Set when a pause, rather than the user, cancelled this item, so its Cancelled result
-        /// puts it back in the queue instead of ending it.
-        /// </summary>
+        /// <summary>A pause, not the user, cancelled this item: Settle requeues it.</summary>
         public bool PausedOut { get; set; }
 
-        /// <summary>
-        /// Zero, not long.MinValue. Environment.TickCount64 is milliseconds since boot, so
-        /// `now - 0` exceeds any interval except on a machine that booted less than one interval
-        /// ago. A MinValue sentinel would make `now - LastProgressTicks` overflow (the project
-        /// does not set CheckForOverflowUnderflow, so it wraps to about -9.2e18), the guard would
-        /// return before assigning, and the sentinel would never be cleared.
-        /// </summary>
+        /// <summary>Zero, not long.MinValue: `now - MinValue` overflows (no
+        /// CheckForOverflowUnderflow here) and the sentinel would never clear.</summary>
         public long LastProgressTicks { get; set; }
 
         public QueueItemSnapshot ToSnapshot() => new(
@@ -78,22 +56,16 @@ public sealed class PackQueue : IAsyncDisposable
     }
 
     /// <summary>
-    /// One iteration's cancellation source, wrapped so that tripping it and disposing it are
-    /// serialised. A control must not call Cancel while holding <see cref="_gate"/>: Cancel runs
-    /// every registered callback synchronously on the calling thread, and under the real workflow
-    /// that is a linked failure source, one deadline source per in-flight range request with
-    /// SocketsHttpHandler's connection teardown hanging off each, the per-read deadlines, and the
-    /// timer and semaphore registrations, all serial, all of it blocking every progress sink,
-    /// Publish, Settle and every other control for as long as it takes. Moving the bare Cancel
-    /// outside the lock instead would race the loop's disposal of the source, and Cancel racing
-    /// Dispose is undefined behaviour rather than an ObjectDisposedException.
+    /// One iteration's cancellation source, wrapped so tripping and disposing are serialised.
+    /// Cancel must never run under <see cref="_gate"/>: it invokes every registration
+    /// synchronously — HTTP deadlines, connection teardown, timers — blocking every control for
+    /// as long as that takes. Cancelling outside the lock instead would race the loop's Dispose,
+    /// which is undefined behaviour rather than an exception.
     ///
-    /// <see cref="_g"/> is a leaf lock: nothing that holds it ever takes <see cref="_gate"/>, and
-    /// nothing that holds <see cref="_gate"/> ever takes it. That second half is why
-    /// <see cref="IsCancellationRequested"/> is a bare field read: a control reads it under
-    /// <see cref="_gate"/>, so taking <see cref="_g"/> there would invert the order against a
-    /// cancellation callback that re-enters the queue. The read is safe after Dispose; Token is
-    /// not, and is only ever read by the loop that owns the run.
+    /// <see cref="_g"/> is a leaf lock, never taken under <see cref="_gate"/> and never taking
+    /// it. Hence <see cref="IsCancellationRequested"/> is a bare field read: taking _g under
+    /// _gate would invert the order against a cancellation callback re-entering the queue. Token
+    /// is unsafe after Dispose and is read only by the loop that owns the run.
     /// </summary>
     private sealed class ActiveRun(CancellationTokenSource cts)
     {
@@ -138,49 +110,29 @@ public sealed class PackQueue : IAsyncDisposable
     private int _started;
     private int _disposed;
 
-    /// <summary>
-    /// The run's own cancellation source, linked to the token <see cref="RunAsync"/> was handed.
-    /// Written once by <see cref="RunAsync"/> and read by <see cref="DisposeAsync"/> from whatever
-    /// thread disposes, hence the volatile access on both sides. Null until the run reaches the
-    /// assignment, and <see cref="DisposeAsync"/> copes with that rather than assuming it.
-    /// </summary>
+    /// <summary>The run's source, linked to <see cref="RunAsync"/>'s token. Volatile on both
+    /// sides because <see cref="DisposeAsync"/> reads it from another thread, and null until the
+    /// run reaches the assignment.</summary>
     private CancellationTokenSource? _loop;
 
-    /// <summary>
-    /// Completed by <see cref="RunAsync"/>'s finally, as its very last act, so awaiting it means
-    /// the loop has stopped, the item in flight has released its pack lock and the channel is
-    /// closed. That is the whole of what <see cref="DisposeAsync"/> waits for.
-    /// </summary>
+    /// <summary>Completed as <see cref="RunAsync"/>'s finally's last act, so awaiting it means
+    /// the loop stopped, the pack lock is released and the channel is closed.</summary>
     private readonly TaskCompletionSource _finished =
         new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-    /// <summary>
-    /// The item in flight and the run that stops it, or null between items. Both are written
-    /// under <see cref="_gate"/> by the same lock acquisition that selects the item, and cleared
-    /// together in <see cref="RunItemAsync"/>'s finally, so a control never sees one without the
-    /// other.
-    ///
-    /// Nothing is claimed about where the loop has got to by the time a control calls
-    /// <see cref="ActiveRun.Cancel"/>: the control has released <see cref="_gate"/> by then, and
-    /// the loop may already have retired the run. Cancel and Retire are serialised by the run's
-    /// own leaf lock, so either ordering is safe.
-    /// </summary>
+    /// <summary>The item in flight and the run that stops it, or null between items. Written and
+    /// cleared together under <see cref="_gate"/>, so a control never sees one without the other.
+    /// The loop may already have retired the run by the time a control cancels; the run's leaf
+    /// lock serialises the two, so either order is safe.</summary>
     private ActiveRun? _active;
     private Item? _activeItem;
 
-    /// <summary>
-    /// A pause the loop has not acted on yet. Distinct from <c>_state == Pausing</c> because
-    /// Resume clears it: an install that finishes after the user changed their mind must not
-    /// park the queue.
-    /// </summary>
+    /// <summary>A pause the loop has not acted on. Distinct from <c>Pausing</c> because Resume
+    /// clears it: an install finishing after the user changed their mind must not park the queue.</summary>
     private bool _pauseRequested;
 
-    /// <summary>
-    /// How many run attempts have ended, counted on every exit from RunItemAsync including
-    /// cancellation and an exception, not only on a clean finish. RequeueBlocked uses it to tell
-    /// "the queue went quiet because work happened" from "the queue went quiet immediately", so a
-    /// blocked pack's one free retry is not burned microseconds after it was refused.
-    /// </summary>
+    /// <summary>Run attempts ended, counted on every exit from RunItemAsync including faults, so
+    /// RequeueBlocked can tell "work happened" from "nothing happened at all".</summary>
     private long _completedCount;
 
     public PackQueue(IPackRunner runner, DownloadPaths paths, QueueOptions? options = null)
@@ -206,17 +158,10 @@ public sealed class PackQueue : IAsyncDisposable
             }
             else if (IsTerminal(existing) || existing.State == QueueItemState.Blocked)
             {
-                // Re-enqueueing a finished item is how a failed pack is retried. It goes to the
-                // back with its history cleared; a second list entry for one pack would not be
-                // meaningful.
-                //
-                // A once-blocked item is pending rather than terminal, but it is treated as an
-                // explicit retry request. RequeueBlocked only retries when the wait could
-                // plausibly have helped, so in the long-lived shell (no Complete()) a lone
-                // blocked pack rests indefinitely, and with two contending packs neither block
-                // raises _completedCount and both rest. Ignoring the re-enqueue would make the
-                // one action the user can take a silent no-op, without even a Publish, because
-                // that return sits inside the lock.
+                // Re-enqueueing a finished item is the retry: it goes to the back, history cleared.
+                // A blocked item is pending, not terminal, but counts as an explicit "retry now" —
+                // in a long-lived shell RequeueBlocked may never fire, so ignoring it would make
+                // the user's only action a silent no-op.
                 Reset(existing, pack, gameDirectory);
                 _items.Remove(existing);
                 _items.Add(existing);
@@ -232,32 +177,22 @@ public sealed class PackQueue : IAsyncDisposable
     }
 
     /// <summary>
-    /// No more work is coming, so finish what is queued and stop, including a pack a pause
-    /// cancelled out and put back in the queue.
-    ///
-    /// This clears the pause rather than respecting it. Left standing, a pause with a Queued
-    /// item parks the loop on its signal forever: Finished() is false, nothing releases the
-    /// signal again, RunAsync never returns, its finally never runs, and every consumer sitting
-    /// in `await foreach (var u in queue.Updates)` waits on a channel nobody will close.
+    /// No more work is coming: finish what is queued and stop. Clears the pause rather than
+    /// respecting it — a standing pause with a Queued item parks the loop on its signal forever,
+    /// and every consumer then waits on a channel nobody will close.
     /// </summary>
     public void Complete()
     {
-        // Only on the transition: an unconditional publish would emit a redundant update on the
-        // ordinary "shut down an idle queue" path. TakeNext publishes the Idle that follows when
-        // it turns out there was nothing queued after all.
+        // Only on the transition; TakeNext publishes the Idle that follows.
         if (StopAcceptingWork()) Publish();
 
         _signal.Release();
     }
 
     /// <summary>
-    /// The "no more work is coming" transition, shared by <see cref="Complete"/> and
-    /// <see cref="DisposeAsync"/>. Clearing the pause is the half that matters: see
-    /// <see cref="Complete"/> for why a standing pause with a Queued item parks the loop forever.
-    ///
-    /// Returns whether the queue came out of a pause, which is the only case worth publishing.
-    /// <see cref="DisposeAsync"/> ignores that and publishes nothing, because the last update a
-    /// consumer should see is the Idle that <see cref="RunAsync"/>'s finally writes.
+    /// Shared by <see cref="Complete"/> and <see cref="DisposeAsync"/>. Returns whether the queue
+    /// came out of a pause — the only case worth publishing. Disposal ignores it, because the last
+    /// update a consumer should see is <see cref="RunAsync"/>'s finally's Idle.
     /// </summary>
     private bool StopAcceptingWork()
     {
@@ -273,22 +208,16 @@ public sealed class PackQueue : IAsyncDisposable
     }
 
     /// <summary>
-    /// Stops the queue. A download stops now, since cancellation plus the resumable .part file
-    /// is the only pause the engine has, and the pack goes back to Queued so Resume picks it up.
-    /// An extract is allowed to finish, because extraction is not resumable and the pause lands
-    /// at the item boundary instead.
+    /// Stops the queue. A download stops now and returns to Queued — cancellation plus the .part
+    /// file is the only pause the engine has. An extract finishes, since it is not resumable, so
+    /// the pause lands at the item boundary.
     ///
-    /// NEVER cache a ProgressTracker across a pause and resume. Under cancellation,
-    /// OperationCanceledException matches neither catch filter in ChunkFetcher, so Abandoned is
-    /// never reported and _provisional[worker] keeps the bytes that attempt had read.
-    /// SegmentedDownloader builds a fresh tracker per DownloadAsync call and a resume re-enters
-    /// through that same call, so those stranded bytes die with the tracker. Anything holding one
-    /// across a resume turns that into permanent progress inflation.
+    /// NEVER cache a ProgressTracker across a pause: cancellation matches no catch filter in
+    /// ChunkFetcher, so its provisional bytes are never abandoned and progress inflates
+    /// permanently. A fresh tracker per DownloadAsync call is what discards them.
     ///
-    /// Refused after Complete(), the reciprocal of Complete() clearing a standing pause: a pause
-    /// with queued work parks the loop on its signal, and once no more work is coming there is no
-    /// Enqueue left to release it. Only a Resume could, and a shell that called Complete() is on
-    /// its way out and will not send one.
+    /// Refused after Complete(): a pause with queued work parks the loop, and no Enqueue is left
+    /// to release it.
     /// </summary>
     public void Pause()
     {
@@ -308,23 +237,17 @@ public sealed class PackQueue : IAsyncDisposable
             }
             else if (_activeItem.State == QueueItemState.Installing || IsTerminal(_activeItem))
             {
-                // Installing: extraction is not resumable, so the pause lands at the item
-                // boundary. Terminal: Settle has already decided how this run ended and
-                // RunItemAsync's finally is on its way to the same boundary, so stamping
-                // PausedOut now would requeue a pack that finished on its own.
+                // Both land at the item boundary. Stamping PausedOut on a terminal item would
+                // requeue a pack that finished on its own.
                 _state = QueueState.Pausing;
             }
             else
             {
                 _state = QueueState.Pausing;
 
-                // A token that is already tripped was tripped by someone whose intent outranks a
-                // pause: a user Cancel or CancelAll, which clear PausedOut and leave the item
-                // unwinding, or the RunAsync token during shutdown. Re-stamping PausedOut here
-                // would make Settle read that ending as a requeue and put a pack the user
-                // cancelled back in the queue, to install itself on the next Resume. The window
-                // is the whole runner unwind, not an instant. After a landed pause and a Resume
-                // there is nothing to lose: TakeNext hands out a fresh run.
+                // An already-tripped token belongs to someone whose intent outranks a pause: a
+                // user Cancel, or shutdown. Re-stamping PausedOut would requeue a pack the user
+                // cancelled. The window is the whole runner unwind, not an instant.
                 if (!_active!.IsCancellationRequested)
                 {
                     _activeItem.PausedOut = true;
@@ -335,9 +258,7 @@ public sealed class PackQueue : IAsyncDisposable
 
         Publish();
 
-        // Deliberately not atomic with the PausedOut write above, and it must stay that way: see
-        // ActiveRun for why Cancel cannot run under _gate. Nothing reads PausedOut in between,
-        // since Settle reads it exactly once, long after both.
+        // Not atomic with the PausedOut write, and must stay that way: see ActiveRun.
         run?.Cancel();
     }
 
@@ -359,12 +280,9 @@ public sealed class PackQueue : IAsyncDisposable
         _signal.Release();
     }
 
-    /// <summary>
-    /// Ends one pack. The active one is stopped through its token so the runner unwinds and
-    /// Settle records the ending; a pending one is marked here. A terminal one is ignored,
-    /// because it has already ended and rewriting a Completed pack as Cancelled would misreport
-    /// work that actually happened.
-    /// </summary>
+    /// <summary>Ends one pack. The active one stops through its token so Settle records the
+    /// ending; a pending one is marked here. A terminal one is ignored — rewriting a Completed
+    /// pack as Cancelled would misreport work that happened.</summary>
     public void Cancel(string code)
     {
         ActiveRun? run = null;
@@ -376,8 +294,7 @@ public sealed class PackQueue : IAsyncDisposable
 
             if (ReferenceEquals(item, _activeItem))
             {
-                // Cleared, not merely left alone: a pause that cancelled this same item moments
-                // ago set it, and Settle would then turn the user's cancel into a requeue.
+                // Cleared, not left alone: a pause that just set it would turn this into a requeue.
                 item.PausedOut = false;
                 run = _active;
             }
@@ -389,10 +306,8 @@ public sealed class PackQueue : IAsyncDisposable
 
         Publish();
 
-        // Cancelling the last Queued item can flip Finished() from false to true, and a loop
-        // parked on the signal has nothing else to wake it. Spurious when the active item was the
-        // one cancelled, which costs nothing: TakeNext absorbs the permit and publishes nothing
-        // unless the state actually moved.
+        // Cancelling the last Queued item can flip Finished(), and a parked loop has nothing else
+        // to wake it. A spurious permit costs nothing: TakeNext absorbs it.
         _signal.Release();
         run?.Cancel();
     }
@@ -417,9 +332,7 @@ public sealed class PackQueue : IAsyncDisposable
                 }
                 else
                 {
-                    // Pending includes a blocked item still awaiting its retry: leaving it
-                    // Blocked would let RequeueBlocked resurrect something the user just
-                    // cancelled.
+                    // Includes a blocked item awaiting retry, which RequeueBlocked would resurrect.
                     item.State = QueueItemState.Cancelled;
                 }
             }
@@ -432,12 +345,8 @@ public sealed class PackQueue : IAsyncDisposable
         run?.Cancel();
     }
 
-    /// <summary>
-    /// Takes a pack out of the list entirely. Refuses the active one, since removing it would
-    /// leave it running as a ghost, holding its lock and moving bytes while invisible in every
-    /// update, and refuses a terminal one, which the user keeps in view to read its error or
-    /// retry it.
-    /// </summary>
+    /// <summary>Takes a pack out of the list. Refuses the active one, which would run on as a
+    /// ghost holding its lock, and a terminal one, which the user keeps in view.</summary>
     public bool Remove(string code)
     {
         bool removed;
@@ -453,7 +362,6 @@ public sealed class PackQueue : IAsyncDisposable
         {
             Publish();
 
-            // Removing the last Queued item flips Finished() the same way a cancel does.
             _signal.Release();
         }
 
@@ -462,82 +370,56 @@ public sealed class PackQueue : IAsyncDisposable
 
     /// <summary>
     /// Drives the queue until it drains after <see cref="Complete"/>, until <paramref name="ct"/>
-    /// trips, or until <see cref="DisposeAsync"/> stops it. Returns normally in all three cases,
-    /// since a queue told to stop has not failed, and may be called only once.
+    /// trips, or until <see cref="DisposeAsync"/> stops it. Returns normally in all three — a
+    /// queue told to stop has not failed. Callable once, and refused after disposal.
     ///
-    /// <b>A queue that has been run must eventually be disposed.</b> The linked source created
-    /// here is deliberately not disposed here, because <see cref="DisposeAsync"/> cancels through
-    /// it and <c>Cancel()</c> on a disposed source throws, and disposal routinely follows a clean
-    /// <c>Complete(); await run;</c>. So the source outlives this method, and with a real
-    /// cancellable <paramref name="ct"/> it holds a registration on it. A caller that never
-    /// disposes leaks exactly that: one CancellationTokenSource plus its registration node on the
-    /// shell's token, per run. It does not leak the queue, because CreateLinkedTokenSource
-    /// registers a callback whose state is the linked source itself, and nothing in that closure
-    /// reaches this instance, its items or its update backlog. Each is small but the count is
-    /// unbounded: every queue ever run against one long-lived token adds another, and none goes
-    /// away before that token's source does.
-    ///
-    /// Refused once <see cref="DisposeAsync"/> has run.
+    /// The linked source is deliberately NOT disposed here: <see cref="DisposeAsync"/> cancels
+    /// through it, and Cancel on a disposed source throws. A caller that never disposes leaks one
+    /// source plus its registration on <paramref name="ct"/> per run — small, but unbounded
+    /// against a long-lived token.
     /// </summary>
     public async Task RunAsync(CancellationToken ct)
     {
-        // Outside the try on purpose, and the only thing that is: the second caller must not
-        // run the finally and complete a channel the first caller owns.
+        // Outside the try, and the only thing that is: a second caller must not run the finally
+        // and close a channel the first owns.
         if (Interlocked.Exchange(ref _started, 1) == 1)
             throw new InvalidOperationException("This queue has already been run.");
 
-        // Declared out here and assigned inside the try, rather than built before it: this method
-        // has already set _started, and DisposeAsync waits on _finished for as long as _started is
-        // set. Any throw between the exchange above and the try would leave every later disposal
-        // hanging on a _finished nobody completes, and CreateLinkedTokenSource against an
-        // already-disposed source can throw.
+        // Assigned inside the try, not before it: _started is already set, so any throw before the
+        // try would hang every later disposal on a _finished nobody completes.
         CancellationTokenSource? loop = null;
 
         try
         {
-            // A run after disposal is refused rather than quietly started: items enqueued before
-            // disposal are still Queued, so the loop would take pack locks and install packs for a
-            // queue the shell has already let go of, through a linked source nothing will ever
-            // dispose. Inside the try, unlike the _started guard above, precisely because this
-            // caller *is* the finally's owner: the exchange made it so, and a disposer concurrent
-            // with this call is already waiting on the _finished the finally completes.
+            // Refused, not quietly started: the loop would take pack locks and install packs for a
+            // queue the shell has let go of. Inside the try because this caller owns the finally.
             ObjectDisposedException.ThrowIf(Volatile.Read(ref _disposed) == 1, this);
 
-            // Ownership belongs to DisposeAsync, per the remark above. Published volatile because a
-            // concurrent DisposeAsync reads it; a disposal that lands in the gap since _started was
-            // set finds null and degrades to "drain what is queued", which still terminates because it
-            // has already set _completed and released the signal.
+            // Volatile because a concurrent DisposeAsync reads it; one landing in the gap finds null
+            // and degrades to "drain what is queued", which still terminates.
             loop = CancellationTokenSource.CreateLinkedTokenSource(ct);
             Volatile.Write(ref _loop, loop);
 
-            // Inside the try because Directory.CreateDirectory does throw: a read-only root, a
-            // denied permission, or a plain file sitting where the directory should be. Outside
-            // it, that fault would skip the finally and leave every consumer already inside
-            // `await foreach (var u in queue.Updates)` waiting on a channel nobody will close.
-            // Still the first statement, because DownloadPaths.Root is otherwise created inside
-            // SegmentedDownloader.DownloadAsync, which runs after PackLock would need it.
+            // Inside the try because this throws on a read-only root or a denied permission, and
+            // that fault would otherwise skip the finally and strand every consumer. First,
+            // because PackLock needs the root before SegmentedDownloader would create it.
             _paths.EnsureCreated();
 
             await LoopAsync(loop.Token);
         }
         catch (OperationCanceledException) when (loop?.IsCancellationRequested == true)
         {
-            // A queue told to stop has not failed. Filtered on the loop source rather than on ct,
-            // because a queue stopped by DisposeAsync has not failed either, and the loop only
-            // ever sees the linked token, so ct alone would let a disposal's own cancellation
-            // escape as a fault out of `await run`.
+            // Filtered on the loop source, not ct: a queue stopped by DisposeAsync has not failed
+            // either, and ct alone would let that escape as a fault out of `await run`.
         }
         finally
         {
-            // RunAsync owns completion, on every exit path. Two closers would race and one
-            // would take a ChannelClosedException out of the loop.
+            // RunAsync owns completion on every exit path; two closers would race.
             lock (_gate) _state = QueueState.Idle;
             Publish();
             _updates.Writer.TryComplete();
 
-            // Last, so that a DisposeAsync released by this has nothing left to wait for: the item
-            // in flight has already unwound through RunItemAsync's finally and let go of its pack
-            // lock, and the channel is closed.
+            // Last, so a DisposeAsync released by this has nothing left to wait for.
             _finished.TrySetResult();
         }
     }
@@ -548,30 +430,24 @@ public sealed class PackQueue : IAsyncDisposable
         {
             ct.ThrowIfCancellationRequested();
 
-            // Created before selection and retired at the end of every iteration, whether an item
-            // was taken or not: TakeNext registers it as _active under the same lock that picks
-            // the item, so a control that arrives an instant later already has a handle on the
-            // run it is meant to stop. One run per iteration, never reused, because a source that
-            // a pause already cancelled would stop the resumed run before it began. The finally is
-            // what makes Retire unmissable, including on the exception paths, and Retire is what
-            // makes a control's Cancel a no-op instead of a race against Dispose.
+            // Created before selection so TakeNext can register it under the same lock that picks
+            // the item. One per iteration, never reused: a source a pause already cancelled would
+            // stop the resumed run before it began. The finally makes Retire unmissable, and
+            // Retire is what turns a late Cancel into a no-op rather than a race with Dispose.
             var run = new ActiveRun(CancellationTokenSource.CreateLinkedTokenSource(ct));
 
             try
             {
                 var next = TakeNext(run, out var stateChanged);
 
-                // Both directions matter, and neither is observable without this. In the
-                // long-lived shell (no Complete(), RunAsync running until its token trips)
-                // RunAsync's finally never arrives, so without publishing here the last update a
-                // consumer ever sees says Running with every item terminal, indefinitely.
+                // In a long-lived shell RunAsync's finally never arrives, so without this the last
+                // update a consumer sees says Running with every item terminal, indefinitely.
                 if (stateChanged) Publish();
 
                 if (next is null)
                 {
-                    // Before the Finished check and before the wait: the queue going quiet is
-                    // precisely the moment a pack refused its lock earlier is owed its retry, and
-                    // a true return means something is Queued again for the next pass to take.
+                    // Before Finished and before the wait: the queue going quiet is exactly when a
+                    // pack refused its lock is owed its retry.
                     if (RequeueBlocked()) continue;
                     if (Finished()) return;
 
@@ -589,24 +465,16 @@ public sealed class PackQueue : IAsyncDisposable
     }
 
     /// <summary>
-    /// The next item to run, or null when there is nothing runnable right now, and the point
-    /// where the run is registered so the controls can reach it.
+    /// The next item to run, or null, and where the run is registered so controls can reach it.
+    /// Registration must stay inside the lock that selects the item: any gap lets Pause jump to
+    /// Paused while the item runs on, Cancel be overwritten by Settle, and Remove leave a ghost.
     ///
-    /// The registration happens under the same lock acquisition that selects the item, and must
-    /// stay there. Any gap between selecting and registering is a window where a control acts on
-    /// the wrong world: Pause would see no active item and jump straight to Paused while the
-    /// item ran on un-cancelled, Cancel would mark it Cancelled only for Settle to overwrite
-    /// that, and Remove would delete it from the list while it kept running as a ghost.
+    /// The pause check leads, and is what keeps the loop from spinning: a pause is the one thing
+    /// that returns an item to Queued, so without it the next pass finds the same item and floods
+    /// an unbounded channel.
     ///
-    /// The pause check leads, and is what keeps the loop from spinning. Pause is the one thing
-    /// that legitimately returns an item to Queued, so without it an iteration would run,
-    /// consume no work, and find the same item still Queued: a hot loop appending a QueueUpdate
-    /// per turn to an unbounded channel.
-    ///
-    /// <paramref name="stateChanged"/> reports whether the queue's own state moved, so the
-    /// caller publishes the transition and nothing else: an unconditional publish would emit a
-    /// redundant Idle update on every spurious wake-up. It is assigned in a finally because this
-    /// method has three exits and none of them may strand the state.
+    /// <paramref name="stateChanged"/> reports whether the queue's state moved, so the caller
+    /// publishes the transition and nothing else. Assigned in a finally because of three exits.
     /// </summary>
     private Item? TakeNext(ActiveRun run, out bool stateChanged)
     {
@@ -629,8 +497,7 @@ public sealed class PackQueue : IAsyncDisposable
                 _active = run;
                 _activeItem = next;
 
-                // A stale flag from an earlier pause of this same pack would make Settle read
-                // this run's ending as a requeue.
+                // A stale flag would make Settle read this run's ending as a requeue.
                 next.PausedOut = false;
                 return next;
             }
@@ -642,24 +509,11 @@ public sealed class PackQueue : IAsyncDisposable
     }
 
     /// <summary>
-    /// Nothing left to do and no more coming. The blocked clause is reachable: RequeueBlocked and
-    /// this method are two separate <see cref="_gate"/> acquisitions, and Complete() runs on
-    /// whatever thread the shell calls it from. A lone Blocked-at-one-attempt item whose wait
-    /// could not plausibly have helped yet is skipped by RequeueBlocked with <see cref="_completed"/>
-    /// still false, the gate is released, Complete() flips it, and this method then sees a completed
-    /// queue with nothing Queued. Without the clause the loop returns there: the channel closes with
-    /// the pack Blocked at one attempt, carrying an error that promises a retry it never got, and
-    /// RunAsync returns normally so nothing reports the loss. With it, Finished is false,
-    /// WaitAsync consumes the permit Complete() has just released, and the next pass requeues and
-    /// retries. The window is only a few instructions wide.
-    ///
-    /// It cannot park the loop instead. Reaching here with <see cref="_completed"/> set and a
-    /// once-blocked item present means exactly that window, and Complete()'s permit is already
-    /// pending; every other route has RequeueBlocked returning true and never reaches this check.
-    ///
-    /// Flipping the two calls in the idle branch breaks it in the other direction: the queue
-    /// would return while a pack was still owed its retry.
-    /// </summary>
+    /// Nothing left to do and no more coming. The blocked clause covers a real few-instruction
+    /// window: RequeueBlocked skips a once-blocked item with <see cref="_completed"/> still false,
+    /// releases the gate, Complete() flips it, and without the clause the channel would close on a
+    /// pack promising a retry it never got. It cannot park the loop, because reaching here that way
+    /// means Complete()'s permit is already pending.
     /// </summary>
     private bool Finished()
     {
@@ -670,25 +524,15 @@ public sealed class PackQueue : IAsyncDisposable
     }
 
     /// <summary>
-    /// Runs one item under its pack lock, or records that another copy of the application holds
-    /// it. The lock covers verify, download and install together, because a second instance that
-    /// took the pack between phases would overwrite the same chunk sidecar and delete an archive
-    /// this one is still extracting.
+    /// Runs one item under its pack lock, or records that another copy of the application holds it.
+    /// The lock spans verify, download and install together, since a second instance taking the
+    /// pack between phases would share its chunk sidecar and delete an archive still extracting.
     ///
-    /// The acquisition itself is *inside* the try, and both its outcomes branch inside it rather
-    /// than returning early, because deregistration, the deferred pause and the publish live in the
-    /// finally and there must go on being exactly one place that does them. A blocked pack has ended
-    /// its attempt just as surely as a completed one, so the controls must see a deregistered queue
-    /// immediately afterwards.
-    ///
-    /// A *throwing* acquire (a missing root, a permission that changed mid-run, a directory where
-    /// the lock file should be) becomes a Failed item with the message, like any other I/O failure,
-    /// rather than killing the queue. Above the try it would skip the finally instead, and the
-    /// damage is the deregistration that never happens rather than the fault itself: _activeItem
-    /// goes on naming a retired run, so Remove refuses the pack forever, Cancel no-ops, Pause
-    /// reaches Pausing and never Paused, and the last snapshot the user sees says Queued with no
-    /// error at all.
-    /// </summary>
+    /// The acquire is inside the try and both outcomes branch inside it, because deregistration,
+    /// the deferred pause and the publish all live in the finally and must have one home. A
+    /// throwing acquire becomes a Failed item; above the try it would skip the finally, leaving
+    /// _activeItem naming a retired run forever — Remove refuses the pack, Cancel no-ops, and the
+    /// last snapshot says Queued with no error at all.
     /// </summary>
     private async Task RunItemAsync(Item item, ActiveRun run)
     {
@@ -697,10 +541,8 @@ public sealed class PackQueue : IAsyncDisposable
 
         try
         {
-            // TryAcquire returning null is the only signal of contention there is. The lock file is
-            // deliberately left on disk when a lock is released (see PackLock), so its existence
-            // says nothing about whether the lock is held, and nothing here may infer state from it
-            // or delete one.
+            // The only signal of contention there is. PackLock leaves its file on disk when
+            // released, so nothing here may infer state from that file or delete one.
             held = PackLock.TryAcquire(_paths, item.Pack.Code);
             blocked = held is null;
 
@@ -709,12 +551,10 @@ public sealed class PackQueue : IAsyncDisposable
         }
         catch (Exception e) when (e is not OperationCanceledException)
         {
-            // Cancellation is excluded because it is already handled and is not a failure:
-            // InvokeRunnerAsync turns a trip of this run's own token into a Cancelled *result* for
-            // Settle to read, and routes any other OperationCanceledException, an HTTP read
-            // timeout for instance, through its own catch as a Failed. So nothing reachable throws
-            // one past here; if something ever does, it belongs to a shutdown and must not land
-            // "The operation was canceled." in the user's error column.
+            // Cancellation is already handled: InvokeRunnerAsync turns this run's token into a
+            // Cancelled result and any other OperationCanceledException into a Failed. Anything
+            // reaching here belongs to a shutdown and must not land "The operation was canceled."
+            // in the user's error column.
             lock (_gate)
             {
                 item.State = QueueItemState.Failed;
@@ -723,8 +563,7 @@ public sealed class PackQueue : IAsyncDisposable
         }
         finally
         {
-            // Before the state update and the publish, so the snapshot a consumer reads after this
-            // item cannot claim the pack is done while its lock is still held.
+            // Before the publish, so no snapshot claims the pack is done while its lock is held.
             held?.Dispose();
 
             lock (_gate)
@@ -732,26 +571,20 @@ public sealed class PackQueue : IAsyncDisposable
                 _active = null;
                 _activeItem = null;
 
-                // Stamped, not incremented, on the blocked path; see MarkBlocked. The throwing
-                // acquire counts as an attempt: blocked stays false there, which is what this field's
-                // "an attempt happened, including cancellation and an exception" reading requires.
+                // Not raised on the blocked path; see MarkBlocked. A throwing acquire does count,
+                // since blocked stays false there.
                 if (!blocked)
                 {
                     _completedCount++;
 
-                    // The one free retry is per contiguous run of refusals, not per item lifetime.
-                    // A pack that got its lock and then went back to Queued, as a pause does, must
-                    // not carry a spent attempt into a block that happens later for an unrelated
-                    // reason, or it goes terminal with no retry and an error claiming the queue
-                    // drained when nothing drained.
+                    // The free retry is per contiguous run of refusals, not per item lifetime: a
+                    // pack requeued by a pause must not carry a spent attempt into a later block.
                     item.BlockedAttempts = 0;
                     item.BlockedAtCount = 0;
                 }
 
-                // The pause deferred through an install takes effect here, at the item boundary,
-                // and a pause that already cancelled a download settles here too. Reading
-                // _pauseRequested rather than _state is what lets a Resume during Pausing undo
-                // the pause without having to reach into the item that is still running.
+                // Where a deferred pause lands. Reading _pauseRequested rather than _state is what
+                // lets a Resume during Pausing undo it without reaching into the running item.
                 if (_pauseRequested) _state = QueueState.Paused;
             }
 
@@ -766,17 +599,12 @@ public sealed class PackQueue : IAsyncDisposable
             item.BlockedAttempts++;
             item.State = QueueItemState.Blocked;
 
-            // Stamped, not incremented: _completedCount must NOT rise here. Bumping it would make
-            // `_completedCount != item.BlockedAtCount` true on the very next pass and burn the one
-            // free retry microseconds after the block, against the same still-held lock, which is
-            // exactly the long-hold case the retry cannot win.
+            // Stamped, not incremented: raising _completedCount here would burn the free retry on
+            // the next pass, against the same still-held lock.
             item.BlockedAtCount = _completedCount;
 
-            // Neither half may promise a retry that is not scheduled. The first attempt's retry
-            // waits on the rest of the queue, and in a long-lived shell the rest of the queue may
-            // never produce anything to wait for, so the message offers the action that always
-            // works, which Enqueue now honours for a blocked pack. The second says what happened
-            // rather than "when the queue drained", which is only one of the ways a retry is earned.
+            // Neither half may promise a retry that is not scheduled: in a long-lived shell the
+            // rest of the queue may never produce anything to wait for.
             item.Error =
                 $"Another copy of this application is working on '{item.Pack.Code}'. "
                 + (item.BlockedAttempts >= 2
@@ -786,17 +614,11 @@ public sealed class PackQueue : IAsyncDisposable
     }
 
     /// <summary>
-    /// Gives a once-blocked item one more go, but only when the wait could plausibly have helped:
-    /// another item has finished since it was refused, or the caller has said no more work is
-    /// coming. Retrying the instant it is blocked would burn the single free attempt microseconds
-    /// later against the same still-held lock, which is exactly the long-hold case the retry cannot
-    /// win. An item that is the only thing in a still-open queue therefore waits until more work
-    /// arrives or Complete() is called. In a long-lived shell neither may ever come, which is why
-    /// Enqueue treats a re-enqueue of a blocked pack as an explicit "retry it now".
-    ///
-    /// Terminates because the attempt count only rises and an item this pass re-queues can be
-    /// blocked at most once more before becoming terminal.
-    /// </summary>
+    /// Gives a once-blocked item one more go, but only when the wait could have helped: another
+    /// item finished, or no more work is coming. Retrying immediately would burn the free attempt
+    /// against the same still-held lock. A lone blocked pack in an open queue therefore waits —
+    /// which is why Enqueue treats a re-enqueue as an explicit "retry now". Terminates because the
+    /// attempt count only rises.
     /// </summary>
     private bool RequeueBlocked()
     {
@@ -833,11 +655,8 @@ public sealed class PackQueue : IAsyncDisposable
                 new InstallSink(this, item),
                 ct);
 
-            // A null result is not "already handled": nothing has touched the item yet, and
-            // returning null would leave it Queued for TakeNext to pick straight back up, with
-            // every await completing synchronously, appending a QueueUpdate per turn to an
-            // unbounded channel until the process runs out of memory. Fail it here so there is
-            // exactly one meaning for the null Settle sees.
+            // A null result is not "already handled": left Queued, TakeNext picks it straight back
+            // up and floods an unbounded channel. Fail it so null has one meaning for Settle.
             if (result is null)
             {
                 lock (_gate)
@@ -851,20 +670,15 @@ public sealed class PackQueue : IAsyncDisposable
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            // Result-shaped, so Settle stays the single place that decides what a cancellation
-            // means. The filter discriminates on *which* token tripped, not on exception type:
-            // a cancellation from the queue's own token is a stop, while an
-            // OperationCanceledException from anything else, an HTTP read timeout for instance,
-            // is a genuine failure and must fall through to the catch below. A pause hands the
-            // runner a linked token whose trip has to become a requeue rather than a permanent
-            // Failed.
+            // Result-shaped, so Settle stays the one place that decides what a cancellation means.
+            // The filter discriminates on WHICH token tripped: an HTTP read timeout raises the
+            // same exception type and must fall through to the catch below as a genuine failure.
             return new PackWorkflowResult(
                 PackStage.Downloading, DownloadResult.Cancelled(), null, Array.Empty<string>());
         }
         catch (Exception e)
         {
-            // A runner exception never escapes the loop and never kills the queue: neither the
-            // real workflow nor a test double is provably result-shaped.
+            // A runner exception never kills the queue: no runner is provably result-shaped.
             lock (_gate)
             {
                 item.State = QueueItemState.Failed;
@@ -877,8 +691,7 @@ public sealed class PackQueue : IAsyncDisposable
 
     private void Settle(Item item, PackWorkflowResult? result)
     {
-        // Null now has exactly one meaning: InvokeRunnerAsync already marked the item Failed,
-        // whether the runner threw or handed back nothing.
+        // Null has one meaning: InvokeRunnerAsync already marked the item Failed.
         if (result is null) return;
 
         lock (_gate)
@@ -892,31 +705,23 @@ public sealed class PackQueue : IAsyncDisposable
                 { Install: not null } => QueueItemState.Failed,
                 { Download.Outcome: DownloadOutcome.Cancelled } => QueueItemState.Cancelled,
                 { Download: not null } => QueueItemState.Failed,
-                // Unreachable backstop: PackWorkflow always returns a non-null Download or
-                // Install. Failed rather than a throw, so a future stage that forgets one
-                // degrades into a visible error instead of killing the loop.
+                // Unreachable backstop. Failed rather than a throw, so a future stage that forgets
+                // one degrades into a visible error instead of killing the loop.
                 _ => QueueItemState.Failed,
             };
 
             item.Error ??= result.Install?.Error ?? result.Download?.Error;
 
-            // A pause is not an ending. This is the single place the conversion happens, and it
-            // happens under the same lock acquisition that set Cancelled, so no consumer ever
-            // sees a snapshot claiming the paused pack was cancelled. Deliberately not
-            // duplicated in InvokeRunnerAsync's OperationCanceledException catch: that catch
-            // returns a Cancelled *result*, which flows through here like any other, and a
-            // second conversion site would give one item two places that could requeue it.
+            // A pause is not an ending, and this is the only place the conversion happens — under
+            // the same lock that set Cancelled, so no consumer sees the paused pack as cancelled.
             if (item.State == QueueItemState.Cancelled && item.PausedOut)
             {
                 item.State = QueueItemState.Queued;
                 item.PausedOut = false;
 
-                // A resumed SegmentedDownloader rebuilds its baseline from committed chunks
-                // alone, and ChunkFetcher reports Abandoned only for a validator mismatch or a
-                // retryable error, never for the cancellation a pause raises. So every byte read
-                // into an uncommitted chunk is refetched, and keeping the figure here would make
-                // a caller watch BytesCompleted fall on resume. The re-enqueue path already draws
-                // this boundary in Reset.
+                // A resume rebuilds its baseline from committed chunks alone, so every byte in an
+                // uncommitted chunk is refetched; keeping the figure would make BytesCompleted
+                // fall on resume.
                 item.BytesCompleted = 0;
                 item.TotalBytes = 0;
                 item.BytesPerSecond = 0;
@@ -932,10 +737,8 @@ public sealed class PackQueue : IAsyncDisposable
 
     private static void Reset(Item item, PackEntry pack, string gameDirectory)
     {
-        // The retry runs against the entry the caller just handed us, not the one it failed
-        // against: "mirror is down" is the motivating case for a retry, and by the time the
-        // user presses it the shell may well have refreshed the catalog with live mirrors, a
-        // corrected size and a corrected digest.
+        // Against the entry the caller just handed us: by retry time the shell may have refreshed
+        // the catalog with live mirrors and a corrected digest.
         item.Pack = pack;
         item.GameDirectory = gameDirectory;
         item.State = QueueItemState.Queued;
@@ -953,13 +756,9 @@ public sealed class PackQueue : IAsyncDisposable
     }
 
     /// <summary>
-    /// Builds and writes under one lock acquisition. Building inside and writing outside lets
-    /// two threads (a progress sink and the loop) each build a consistent snapshot and then
-    /// write them transposed, so a consumer that replaces its state wholesale sees a newer
-    /// state followed by an older one. TryWrite on an unbounded channel never blocks, so
-    /// holding the lock across it costs nothing, and it must not throw back into the loop once
-    /// the channel is complete.
-    /// </summary>
+    /// Builds and writes under ONE lock acquisition. Split, two threads can each build a
+    /// consistent snapshot and then write them transposed, so a consumer sees a newer state
+    /// followed by an older one. TryWrite never blocks and never throws on a closed channel.
     /// </summary>
     private void Publish()
     {
@@ -968,15 +767,9 @@ public sealed class PackQueue : IAsyncDisposable
                 new QueueUpdate(_state, _items.Select(i => i.ToSnapshot()).ToArray()));
     }
 
-    /// <summary>
-    /// The interval check must be the FIRST thing this does, and must short-circuit before any
-    /// snapshot is built. With 8 workers delivering once per ReadAsync return, the reporting
-    /// worker can be pinned inside ProgressTracker.Deliver's drain loop for an unbounded number
-    /// of *sibling* deposits rather than the single handler invocation it looks like. That is not
-    /// a correctness problem, since ReadTimeout bounds the read and not the gap before it, but
-    /// this only mitigates it if the cheap TickCount64 comparison happens before the expensive
-    /// work.
-    /// </summary>
+    /// <summary>The interval check must come FIRST and short-circuit before any snapshot is
+    /// built: the reporting worker can be pinned in ProgressTracker's drain loop for an unbounded
+    /// number of sibling deposits, and only the cheap comparison mitigates that.</summary>
     private void PublishProgress(Item item)
     {
         if (_options.ProgressInterval > TimeSpan.Zero)
@@ -1040,50 +833,35 @@ public sealed class PackQueue : IAsyncDisposable
     }
 
     /// <summary>
-    /// Stops the queue and waits for the item in flight to actually stop before letting go of its
-    /// pack lock. Releasing on Cancel alone would not be true to that: cancellation is not
-    /// synchronous, and ZipInstaller observes its token once per entry, so a multi-gigabyte entry
-    /// keeps writing well after Cancel returns. A second instance of the application that
-    /// acquired the lock in that window would extract into the same game directory, which is the
-    /// collision the lock exists to prevent.
-    /// </summary>
+    /// Stops the queue and waits for the item in flight to actually stop before its pack lock is
+    /// released. Cancel alone is not enough: ZipInstaller checks its token once per entry, so a
+    /// huge entry keeps writing long after Cancel returns, and a second instance acquiring the
+    /// lock in that window extracts into the same game directory.
     ///
-    /// Safe to call more than once, before the queue has run, and while it is running. It never
-    /// completes the channel once the queue has run: <see cref="RunAsync"/>'s finally owns that on
-    /// every exit path, so the two cannot race and hand each other a ChannelClosedException.
-    ///
-    /// A queue that has been run must eventually get here. <see cref="RunAsync"/> leaves its linked
-    /// cancellation source alive on purpose, and this is the only thing that releases it.
+    /// Safe at any time and any number of times. Never completes the channel once the queue has
+    /// run — <see cref="RunAsync"/>'s finally owns that. A queue that has been run must get here:
+    /// this is the only thing that releases the linked source.
     /// </summary>
     public async ValueTask DisposeAsync()
     {
         if (Interlocked.Exchange(ref _disposed, 1) == 1)
         {
-            // Required rather than tidiness: _loop is never nulled, so a second pass would
-            // Cancel() the very source the first pass disposed below, and Cancel() throws on a
-            // disposed source.
-            //
-            // The await makes this the same promise the first caller got. Sequential
-            // double-dispose is harmless either way, but two threads disposing at once (a shell
-            // closing a window while the app-exit path runs) would otherwise tell the loser
-            // "disposal is done" while the runner is still mid-entry and the pack lock is still
-            // held. Guarded on _started because a first caller that took the never-run branch
-            // leaves _finished uncompleted forever, and an unguarded await would hang on it.
+            // Required, not tidiness: _loop is never nulled, so a second pass would Cancel the
+            // source the first disposed. The await makes this the same promise the first caller
+            // got — without it, two concurrent disposers would tell the loser "done" while the
+            // pack lock is still held. Guarded on _started, which the never-run branch leaves
+            // with _finished uncompleted forever.
             if (Volatile.Read(ref _started) == 1) await _finished.Task;
             return;
         }
 
-        // Not merely _completed: a queue paused with a Queued item parks its loop on the signal
-        // forever, which is why Complete() clears the pause, and disposal inherits that. It matters
-        // on the degraded path below, where _loop is null and there is no cancellation to fall back
-        // on. Return value ignored on purpose; see StopAcceptingWork.
+        // Not merely _completed: this clears the pause too, which is what the degraded path below
+        // relies on when _loop is null and there is no cancellation to fall back on.
         StopAcceptingWork();
 
-        // Read before _started, and the same reference is what gets disposed at the end: reading it
-        // again later could hand back a source a racing RunAsync is still using. A disposal landing
-        // between _started being set and the assignment therefore sees null here, which is the
-        // intended no-op; _completed plus the permit below still bring the loop down, by draining
-        // rather than by cancelling.
+        // Read before _started: re-reading later could hand back a source a racing RunAsync is
+        // still using. A disposal landing in the gap sees null, and _completed plus the permit
+        // below still bring the loop down by draining.
         var loop = Volatile.Read(ref _loop);
 
         loop?.Cancel();
@@ -1093,9 +871,8 @@ public sealed class PackQueue : IAsyncDisposable
         {
             await _finished.Task;
 
-            // Re-read only now. A disposal that saw null above raced the assignment; the source
-            // RunAsync went on to create is ours to release, and its finally has run, so nothing is
-            // still reading its token.
+            // Re-read only now: a disposal that saw null raced the assignment, and RunAsync's
+            // finally has since run, so nothing still reads that token.
             loop = Volatile.Read(ref _loop);
         }
         else
@@ -1107,9 +884,7 @@ public sealed class PackQueue : IAsyncDisposable
 
         loop?.Dispose();
 
-        // _signal is deliberately NOT disposed. Complete() or any other control arriving after
-        // disposal would then throw ObjectDisposedException out of a method whose contract is to be
-        // safe at any time, and SemaphoreSlim holds no unmanaged resource unless
-        // AvailableWaitHandle is used, which it never is here.
+        // _signal is deliberately NOT disposed: a control arriving after disposal would throw out
+        // of a method contracted to be safe at any time, and it holds no unmanaged resource.
     }
 }
