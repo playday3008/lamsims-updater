@@ -10,14 +10,21 @@
          inert. Bound on the three content blocks rather than on the DockPanel so the stopping
          notice below is not dimmed along with the controls it explains. -->
     <StackPanel DockPanel.Dock="Top" Spacing="6" IsEnabled="{Binding !IsShuttingDown}">
-      <Grid ColumnDefinitions="110,*,Auto" ColumnSpacing="8">
+      <!-- 128, and the same 128 in all five label grids below, which is what keeps the labels in
+           one column down the window. Measured under Skia rather than chosen: the longest label,
+           "Catalog (in use):", wants 109px in the bundled Inter, and the 110 this used to be left it
+           one pixel from clipping into the value beside it — a Grid does not clip its children, so
+           it would have overlapped rather than truncated. Headless cannot check this: it stubs the
+           text shaper and measures every glyph to the same width, so a width assertion there says
+           nothing about the real face. WindowLabelColumnTests guards the agreement instead. -->
+      <Grid ColumnDefinitions="128,*,Auto" ColumnSpacing="8">
         <TextBlock Grid.Column="0" Text="Game folder:" VerticalAlignment="Center" />
         <TextBlock Grid.Column="1" Text="{Binding GameDirectory}" VerticalAlignment="Center"
                    TextTrimming="CharacterEllipsis" />
         <Button Grid.Column="2" Content="Browse" Command="{Binding BrowseGameCommand}" />
       </Grid>
 
-      <Grid ColumnDefinitions="110,*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="8" RowSpacing="2">
+      <Grid ColumnDefinitions="128,*,Auto" RowDefinitions="Auto,Auto" ColumnSpacing="8" RowSpacing="2">
         <TextBlock Grid.Row="0" Grid.Column="0" Text="Catalog:" VerticalAlignment="Center" />
         <TextBox Grid.Row="0" Grid.Column="1" Text="{Binding CatalogInput}"
                  PlaceholderText="A catalog.json path, or an https:// URL" />
@@ -27,26 +34,35 @@
           <Button Content="Use cached copy" Command="{Binding UseCachedCatalogCommand}" />
         </StackPanel>
         <!-- The source actually in use, which differs from the box above whenever the box holds
-             an edit the user has not pressed Load on yet. -->
+             an edit the user has not pressed Load on yet. Labelled, because unlabelled it is a
+             grey path under a text box that holds a different path, and a reader has no way to
+             tell which of the two the application is reading. Both halves hide together: with
+             nothing loaded the description is empty, and a lone "In use:" beside nothing at all
+             says less than a row that is not there. -->
+        <TextBlock Grid.Row="1" Grid.Column="0" Text="Catalog (in use):" Classes="secondary"
+                   IsVisible="{Binding CatalogDescription,
+                               Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
         <TextBlock Grid.Row="1" Grid.Column="1" Text="{Binding CatalogDescription}" Classes="secondary"
-                   TextTrimming="CharacterEllipsis" />
+                   TextTrimming="CharacterEllipsis"
+                   IsVisible="{Binding CatalogDescription,
+                               Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
       </Grid>
 
       <Expander x:Name="AdvancedSection" Header="Advanced">
         <StackPanel Spacing="6">
-          <Grid ColumnDefinitions="110,*,Auto" ColumnSpacing="8">
+          <Grid ColumnDefinitions="128,*,Auto" ColumnSpacing="8">
             <TextBlock Grid.Column="0" Text="Downloads:" VerticalAlignment="Center" />
             <TextBlock Grid.Column="1" Text="{Binding DownloadDirectory}" VerticalAlignment="Center"
                        TextTrimming="CharacterEllipsis" />
             <Button Grid.Column="2" Content="Browse" Command="{Binding BrowseDownloadsCommand}" />
           </Grid>
-          <Grid ColumnDefinitions="110,Auto,Auto" ColumnSpacing="8">
+          <Grid ColumnDefinitions="128,Auto,Auto" ColumnSpacing="8">
             <TextBlock Grid.Column="0" Text="Connections:" VerticalAlignment="Center" />
             <Slider Grid.Column="1" Minimum="1" Maximum="16" Width="220"
                     Value="{Binding Connections}" />
             <TextBlock Grid.Column="2" Text="{Binding Connections}" VerticalAlignment="Center" />
           </Grid>
-          <Grid ColumnDefinitions="110,*,Auto" ColumnSpacing="8">
+          <Grid ColumnDefinitions="128,*,Auto" ColumnSpacing="8">
             <TextBlock Grid.Column="0" Text="Wine prefix:" VerticalAlignment="Center" />
             <TextBlock Grid.Column="1" Text="{Binding WinePrefix}" VerticalAlignment="Center"
                        TextTrimming="CharacterEllipsis" />
