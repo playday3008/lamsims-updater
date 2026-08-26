@@ -1,4 +1,7 @@
+using LamSims.Core.Queueing;
 using LamSims.Core.Scanning;
+using System;
+using System.Collections.Generic;
 using System.Linq;
 using Xunit;
 using Avalonia.Controls;
@@ -54,5 +57,70 @@ public class RowLayoutTests
 
         Assert.False(ViewHost.Find<CheckBox>(host.RowVisual("EP01")).IsEnabled);
         Assert.True(ViewHost.Find<CheckBox>(host.RowVisual("EP02")).IsEnabled);
+    }
+
+    private static QueueItemSnapshot Snap(string code, QueueItemState state) =>
+        new(code, "Get to Work", state, 42, 100, 0, null, null, null, Array.Empty<string>());
+
+    private static TextBlock Status(ViewHost host, string code) =>
+        ViewHost.Find<TextBlock>(host.RowVisual(code),
+            t => t.Text == host.Row(code).StatusText);
+
+    private static Color ForegroundOf(TextBlock text) =>
+        Assert.IsAssignableFrom<ISolidColorBrush>(text.Foreground).Color;
+
+    /// <summary>
+    /// The status carried no colour at all until now: only the message line below it did, so a
+    /// failed row and an installed row read identically at a glance.
+    /// </summary>
+    [AvaloniaFact]
+    public void A_rows_status_is_coloured_by_the_state_it_reports()
+    {
+        using var host = ViewHost.Show(
+            Packs.Entry("EP01"), Packs.Entry("EP02"), Packs.Entry("EP03"),
+            Packs.Entry("EP04"), Packs.Entry("EP05"));
+
+        host.Row("EP01").ApplyScan(new PackScanResult("EP01", PackInstallState.NotInstalled, [], null, null));
+        host.Row("EP02").ApplyScan(new PackScanResult("EP02", PackInstallState.Installed, [], null, null));
+        host.Row("EP03").ApplyScan(new PackScanResult("EP03", PackInstallState.Partial, ["EP03"], null, null));
+        host.Row("EP04").ApplyQueue(Snap("EP04", QueueItemState.Downloading));
+        host.Row("EP05").ApplyQueue(Snap("EP05", QueueItemState.Failed));
+        host.Pump();
+
+        var wanted = new Dictionary<string, string>
+        {
+            ["EP01"] = "#a6adc8",  // Subtext0: idle keeps the resting secondary colour
+            ["EP02"] = "#a6e3a1",  // Green
+            ["EP03"] = "#f9e2af",  // Yellow
+            ["EP04"] = "#89b4fa",  // Blue
+            ["EP05"] = "#f38ba8",  // Red
+        };
+
+        foreach (var (code, hex) in wanted)
+        {
+            Assert.Equal(Color.Parse(hex), ForegroundOf(Status(host, code)));
+        }
+    }
+
+    /// <summary>
+    /// The bar was 120px wide and fixed, which made it the widest thing in the row and set the
+    /// floor for the whole list column. Its percentage is already spelled out in StatusText.
+    /// </summary>
+    [AvaloniaFact]
+    public void The_progress_bar_is_a_hairline_across_the_whole_row()
+    {
+        using var host = ViewHost.Show(Packs.Entry("EP01"));
+
+        host.Row("EP01").ApplyQueue(Snap("EP01", QueueItemState.Downloading));
+        host.Pump();
+
+        var row = host.RowVisual("EP01");
+        var bar = ViewHost.Find<ProgressBar>(row);
+        var line1 = ViewHost.Find<Grid>(row, g => g.RowDefinitions.Count == 2);
+
+        Assert.True(bar.IsVisible);
+        Assert.Equal(2d, bar.Bounds.Height);
+        Assert.True(bar.Bounds.Width >= line1.Bounds.Width,
+            $"the bar is {bar.Bounds.Width} wide in a row {line1.Bounds.Width} wide");
     }
 }

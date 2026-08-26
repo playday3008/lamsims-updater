@@ -41,6 +41,26 @@
     <Setter Property="Foreground" Value="{DynamicResource RedBrush}"/>
   </Style>
 
+  <!-- Declared after TextBlock.secondary and relying on it: the status text carries `secondary`
+       as its resting colour and one of these four when it earns one. Both selectors are the same
+       specificity, so the later declaration is what wins; moving these above `secondary` would
+       leave every status grey. -->
+  <Style Selector="TextBlock.status-ok">
+    <Setter Property="Foreground" Value="{DynamicResource GreenBrush}"/>
+  </Style>
+
+  <Style Selector="TextBlock.status-busy">
+    <Setter Property="Foreground" Value="{DynamicResource BlueBrush}"/>
+  </Style>
+
+  <Style Selector="TextBlock.status-warning">
+    <Setter Property="Foreground" Value="{DynamicResource YellowBrush}"/>
+  </Style>
+
+  <Style Selector="TextBlock.status-error">
+    <Setter Property="Foreground" Value="{DynamicResource RedBrush}"/>
+  </Style>
+
   <Style Selector="TextBlock.warning">
     <Setter Property="Foreground" Value="{DynamicResource YellowBrush}"/>
   </Style>

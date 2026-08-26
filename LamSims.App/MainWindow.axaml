@@ -187,7 +187,7 @@
                Text="Finishing up — waiting for the current pack to stop…"
                IsVisible="{Binding IsShuttingDown}" />
 
-    <Grid ColumnDefinitions="2*,8,*" IsEnabled="{Binding !IsShuttingDown}">
+    <Grid ColumnDefinitions="*,8,2*" IsEnabled="{Binding !IsShuttingDown}">
       <Panel Grid.Column="0">
       <ListBox ItemsSource="{Binding FilteredRows}">
         <ListBox.ItemTemplate>
@@ -207,22 +207,32 @@
                   <MenuItem Header="Reinstall anyway" Command="{Binding ReinstallCommand}" />
                 </ContextMenu>
               </StackPanel.ContextMenu>
-              <Grid ColumnDefinitions="Auto,Auto,2*,3*,Auto,Auto">
-                <CheckBox Grid.Column="0" Margin="0,0,8,0"
+              <!-- Two lines rather than one. Everything on a single line needs the width of a
+                   code, a name, a status, a size and a bar side by side, and that width is what
+                   the list column has to be given; stacked, the column narrows to the longest
+                   pack name and the log gets the rest of the window. -->
+              <Grid ColumnDefinitions="Auto,*,Auto" RowDefinitions="Auto,Auto">
+                <CheckBox Grid.Row="0" Grid.Column="0" Margin="0,0,8,0"
                           IsChecked="{Binding IsChecked}" IsEnabled="{Binding IsCheckable}" />
-                <TextBlock Grid.Column="1" Text="{Binding Code}" MinWidth="56" Margin="0,0,8,0"
-                           VerticalAlignment="Center" />
-                <TextBlock Grid.Column="2" Text="{Binding Name}" Margin="0,0,8,0"
+                <TextBlock Grid.Row="0" Grid.Column="1" Text="{Binding Name}" Margin="0,0,8,0"
                            VerticalAlignment="Center" TextTrimming="CharacterEllipsis" />
-                <TextBlock Grid.Column="3" Text="{Binding StatusText}" Margin="0,0,8,0"
-                           VerticalAlignment="Center" TextWrapping="Wrap" />
-                <TextBlock Grid.Column="4" Classes="secondary" Text="{Binding SizeText}"
-                           MinWidth="72" Margin="0,0,8,0"
+                <TextBlock Grid.Row="0" Grid.Column="2" Classes="secondary" Text="{Binding SizeText}"
+                           MinWidth="72"
                            HorizontalAlignment="Right" VerticalAlignment="Center" />
-                <ProgressBar Grid.Column="5" Width="120" Minimum="0" Maximum="100"
-                             VerticalAlignment="Center"
-                             Value="{Binding ProgressPercent}"
-                             IsVisible="{Binding IsProgressVisible}" />
+                <!-- A Grid, not a horizontal StackPanel: a StackPanel measures with infinite
+                     available width, so the status would never wrap and a Blocked row's error
+                     text would lay out past the edge of the column. -->
+                <Grid Grid.Row="1" Grid.Column="1" Grid.ColumnSpan="2"
+                      ColumnDefinitions="Auto,*" ColumnSpacing="8">
+                  <TextBlock Grid.Column="0" Classes="secondary" Text="{Binding Code}"
+                             MinWidth="48" />
+                  <TextBlock Grid.Column="1" Classes="secondary" Text="{Binding StatusText}"
+                             TextWrapping="Wrap"
+                             Classes.status-ok="{Binding IsStatusOk}"
+                             Classes.status-busy="{Binding IsStatusBusy}"
+                             Classes.status-warning="{Binding IsStatusWarning}"
+                             Classes.status-error="{Binding IsStatusError}" />
+                </Grid>
               </Grid>
               <TextBlock Text="{Binding Message}" Margin="28,0,0,0" TextWrapping="Wrap"
                          Classes.warning="{Binding IsWarning}"
@@ -233,6 +243,12 @@
                          TextTrimming="CharacterEllipsis"
                          IsVisible="{Binding CurrentEntry,
                                      Converter={x:Static StringConverters.IsNotNullOrEmpty}}" />
+              <!-- A rule along the bottom of the row rather than a 120px bar beside the status.
+                   The bar was the widest fixed thing in the row and the percentage it showed is
+                   already spelled out in StatusText. -->
+              <ProgressBar Height="2" MinHeight="0" Minimum="0" Maximum="100"
+                           Value="{Binding ProgressPercent}"
+                           IsVisible="{Binding IsProgressVisible}" />
             </StackPanel>
           </DataTemplate>
         </ListBox.ItemTemplate>

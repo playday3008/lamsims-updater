@@ -51,11 +51,40 @@ public class WindowLayoutTests
     {
         using var host = ViewHost.Show(Packs.Entry("EP01"));
 
-        var grid = ViewHost.Find<Grid>(host.RowVisual("EP01"), g => g.ColumnDefinitions.Count == 6);
+        var outer = ViewHost.Find<Grid>(host.RowVisual("EP01"), g => g.RowDefinitions.Count == 2);
 
         Assert.Equal(
-            ["Auto", "Auto", "2*", "3*", "Auto", "Auto"],
-            grid.ColumnDefinitions.Select(c => c.Width.ToString()).ToArray());
+            ["Auto", "1*", "Auto"],
+            outer.ColumnDefinitions.Select(c => c.Width.ToString()).ToArray());
+
+        // The second line: code, then the status filling what is left. Only the star column can
+        // wrap, which is why the status lives there and the code does not.
+        //
+        // A direct child, not a descendant search: Fluent's CheckBox template contains a Grid of
+        // its own, and a two-column predicate matches that one first.
+        var line2 = Assert.Single(outer.Children.OfType<Grid>());
+
+        Assert.Equal(
+            ["Auto", "1*"],
+            line2.ColumnDefinitions.Select(c => c.Width.ToString()).ToArray());
+    }
+
+    /// <summary>
+    /// The list is the column that gives way. Its rows trim and wrap; the log's lines are the
+    /// text a user is reading while they wait, so the star share goes there.
+    /// </summary>
+    [AvaloniaFact]
+    public void The_log_column_is_twice_the_pack_list()
+    {
+        using var host = ViewHost.Show(Packs.Entry("EP01"));
+
+        var split = ViewHost.Find<Grid>(host.Window,
+            g => g.ColumnDefinitions.Count == 3
+                 && g.Children.OfType<Border>().Any(b => b.Classes.Contains("log")));
+
+        Assert.Equal(
+            ["1*", "8", "2*"],
+            split.ColumnDefinitions.Select(c => c.Width.ToString()).ToArray());
     }
 
     [AvaloniaFact]
