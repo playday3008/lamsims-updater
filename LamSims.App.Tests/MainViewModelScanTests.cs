@@ -155,4 +155,100 @@ public class MainViewModelScanTests
 
         Assert.Equal(after, vm.ScanCount);
     }
+
+    [Fact]
+    public void The_saves_folder_is_a_warning_that_names_the_folder_to_choose_instead()
+    {
+        // The directory users actually pick: same name as the installation, perfectly readable, and
+        // every pack installed into it stays invisible to the game.
+        var vm = TestHost.ViewModel(out var host);
+        using var _h = host;
+        vm.BuildRows([Packs.Entry()]);
+        var saves = Path.Combine(host.Root, "Documents", "Electronic Arts", "The Sims 4");
+        Directory.CreateDirectory(Path.Combine(saves, "Mods"));
+        Directory.CreateDirectory(Path.Combine(saves, "Tray"));
+        vm.GameDirectory = saves;
+
+        vm.ScanCommand.Execute(null);
+
+        var banner = Assert.Single(vm.Banners, b => b.Id == "game-root");
+        Assert.Equal(BannerKind.Warning, banner.Kind);
+        Assert.Contains("saves folder", banner.Text);
+        Assert.Contains(Path.Combine("Game", "Bin"), banner.Text);
+    }
+
+    [Fact]
+    public void A_folder_matching_no_known_layout_is_a_warning_too()
+    {
+        var vm = TestHost.ViewModel(out var host);
+        using var _h = host;
+        vm.BuildRows([Packs.Entry()]);
+        var elsewhere = Path.Combine(host.Root, "somewhere-else");
+        Directory.CreateDirectory(elsewhere);
+        vm.GameDirectory = elsewhere;
+
+        vm.ScanCommand.Execute(null);
+
+        var banner = Assert.Single(vm.Banners, b => b.Id == "game-root");
+        Assert.Equal(BannerKind.Warning, banner.Kind);
+        Assert.Contains("does not look like", banner.Text);
+    }
+
+    [Fact]
+    public void The_warning_never_stops_a_pack_being_added()
+    {
+        // A warning, not a gate: the check has to be able to be wrong about a real installation
+        // without costing the user the install.
+        var vm = TestHost.ViewModel(out var host);
+        using var _h = host;
+        vm.BuildRows([Packs.Entry()]);
+        var elsewhere = Path.Combine(host.Root, "somewhere-else");
+        Directory.CreateDirectory(elsewhere);
+        vm.GameDirectory = elsewhere;
+
+        vm.ScanCommand.Execute(null);
+
+        Assert.Contains(vm.Banners, b => b.Id == "game-root");
+        Assert.True(vm.AddSelectedCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public void Choosing_a_real_installation_clears_an_earlier_warning()
+    {
+        var vm = TestHost.ViewModel(out var host);
+        using var _h = host;
+        vm.BuildRows([Packs.Entry()]);
+        var elsewhere = Path.Combine(host.Root, "somewhere-else");
+        Directory.CreateDirectory(elsewhere);
+        vm.GameDirectory = elsewhere;
+        vm.ScanCommand.Execute(null);
+        Assert.Contains(vm.Banners, b => b.Id == "game-root");
+
+        vm.GameDirectory = host.GameDirectory;
+        vm.ScanCommand.Execute(null);
+
+        Assert.DoesNotContain(vm.Banners, b => b.Id == "game-root");
+        Assert.True(vm.AddSelectedCommand.CanExecute(null));
+    }
+
+    [Fact]
+    public void An_unreadable_directory_replaces_the_layout_warning_rather_than_joining_it()
+    {
+        // Two banners for one directory read as two problems, and the layout of a directory that
+        // cannot be read at all is the smaller of the two claims.
+        var vm = TestHost.ViewModel(out var host);
+        using var _h = host;
+        vm.BuildRows([Packs.Entry()]);
+        var elsewhere = Path.Combine(host.Root, "somewhere-else");
+        Directory.CreateDirectory(elsewhere);
+        vm.GameDirectory = elsewhere;
+        vm.ScanCommand.Execute(null);
+        Assert.Contains(vm.Banners, b => b.Id == "game-root");
+
+        vm.GameDirectory = Path.Combine(host.Root, "no-such-directory");
+        vm.ScanCommand.Execute(null);
+
+        Assert.Contains(vm.Banners, b => b.Id == "game-directory");
+        Assert.DoesNotContain(vm.Banners, b => b.Id == "game-root");
+    }
 }

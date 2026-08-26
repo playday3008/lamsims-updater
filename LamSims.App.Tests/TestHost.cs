@@ -54,7 +54,11 @@ public sealed class TestHost : IDisposable
     {
         var root = Directory.CreateTempSubdirectory("lamsims-vm").FullName;
         var game = Path.Combine(root, "game");
-        Directory.CreateDirectory(game);
+
+        // Game/Bin, so the fixture is a directory GameRootCheck reads as an installation. Without
+        // it every scan here would raise the layout warning, and a test asserting on banners would
+        // be asserting against a game folder no user would have chosen.
+        Directory.CreateDirectory(Path.Combine(game, "Game", "Bin"));
 
         var paths = new AppPaths(Path.Combine(root, "config"));
         paths.EnsureCreated();

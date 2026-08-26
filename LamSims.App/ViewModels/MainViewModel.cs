@@ -533,17 +533,49 @@ public sealed partial class MainViewModel : ObservableObject
         if (result.GameDirectoryReadable)
         {
             Dismiss("game-directory");
+            CheckGameFolderLayout();
         }
         else
         {
             Raise(new Banner("game-directory",
                 $"The game folder '{GameDirectory}' could not be read, so no pack can be shown as installed.",
                 BannerKind.Error));
+
+            // A layout warning about a directory that cannot be read at all says less than the
+            // read failure beside it, and two banners for one directory read as two problems.
+            Dismiss("game-root");
         }
 
         // Ordinal: the scanner builds every result from the catalog's own pack.Code, so these are
         // the rows' strings. Its case-insensitive store never reaches the results.
         foreach (var scan in result.Packs) RowFor(scan.Code)?.ApplyScan(scan);
+    }
+
+    /// <summary>
+    /// Warns when the chosen folder is not a Sims 4 installation, which the scan cannot say on its
+    /// own: the saves folder of the same name is perfectly readable and simply holds no pack, so
+    /// every row reads NotInstalled and an install into it looks like it worked.
+    ///
+    /// A warning, never a refusal. The layouts are EA's and Valve's to change, and the check has to
+    /// be wrong about a real installation without costing the user the install.
+    /// </summary>
+    private void CheckGameFolderLayout()
+    {
+        var bin = Path.Combine("Game", "Bin");
+
+        var message = GameRootCheck.Inspect(GameDirectory) switch
+        {
+            GameRootVerdict.SavesFolder =>
+                $"'{GameDirectory}' is the Sims 4 saves folder, not the installation. Packs "
+                + $"installed there stay invisible to the game: choose the folder holding {bin}.",
+            GameRootVerdict.Unrecognised =>
+                $"'{GameDirectory}' holds no {bin}, so it does not look like a Sims 4 installation. "
+                + "Packs installed there stay invisible to the game.",
+            _ => null,
+        };
+
+        if (message is null) Dismiss("game-root");
+        else Raise(new Banner("game-root", message, BannerKind.Warning));
     }
 
     public void ApplyQueueState(QueueState state)
