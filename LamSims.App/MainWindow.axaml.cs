@@ -12,7 +12,48 @@ public partial class MainWindow : Window
     private bool _shutdownStarted;
     private bool _shutdownDone;
 
-    public MainWindow() => AvaloniaXamlLoader.Load(this);
+    public MainWindow()
+    {
+        AvaloniaXamlLoader.Load(this);
+        OnlyOneSectionOpenAtATime();
+    }
+
+    /// <summary>
+    /// The two settings sections are mutually exclusive. Not decoration: the region is docked to
+    /// the top of a DockPanel, so it takes its full desired height and the pack list and the log
+    /// get whatever is left. Measured at the default 640px window, both sections open leaves them
+    /// ZERO — arranged past the bottom edge, with no scrollbar anywhere to reach them, because the
+    /// scroll deliberately lives inside each growable list rather than around the region as a
+    /// whole. One at a time leaves them 71px at worst (fifteen unlocker targets) and 201px at best.
+    ///
+    /// Here rather than in the view model: nothing outside this window reads which section is open,
+    /// and nothing persists it. Wired in the parameterless constructor so it holds for the shipped
+    /// window and for a test that builds one directly.
+    ///
+    /// Closing the other section re-enters this handler with IsExpanded false, which the guard
+    /// ignores, so there is no loop to break.
+    /// </summary>
+    private void OnlyOneSectionOpenAtATime()
+    {
+        var sections = new[] { this.FindControl<Expander>("AdvancedSection"),
+                               this.FindControl<Expander>("UnlockerSection") };
+
+        foreach (var section in sections)
+        {
+            if (section is null) continue;
+
+            section.PropertyChanged += (sender, e) =>
+            {
+                if (e.Property != Expander.IsExpandedProperty) return;
+                if (e.NewValue is not true) return;
+
+                foreach (var other in sections)
+                {
+                    if (other is not null && !ReferenceEquals(other, sender)) other.IsExpanded = false;
+                }
+            };
+        }
+    }
 
     public MainWindow(AppServices services) : this()
     {

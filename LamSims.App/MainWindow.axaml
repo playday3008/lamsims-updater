@@ -2,7 +2,7 @@
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
         x:Class="LamSims.App.MainWindow"
         Width="900" Height="640"
-        MinWidth="760" MinHeight="480"
+        MinWidth="760" MinHeight="560"
         Title="LamSims Updater">
   <DockPanel Margin="12">
 
@@ -32,7 +32,7 @@
                    TextTrimming="CharacterEllipsis" />
       </Grid>
 
-      <Expander Header="Advanced">
+      <Expander x:Name="AdvancedSection" Header="Advanced">
         <StackPanel Spacing="6">
           <Grid ColumnDefinitions="110,*,Auto" ColumnSpacing="8">
             <TextBlock Grid.Column="0" Text="Downloads:" VerticalAlignment="Center" />
@@ -61,7 +61,7 @@
            rather than offering a control that cannot work.
            The nested DataContext is why the binding sweep has to re-root; without that, every
            binding below would read as unresolved. -->
-      <Expander Header="DLC Unlocker" DataContext="{Binding Unlocker}"
+      <Expander x:Name="UnlockerSection" Header="DLC Unlocker" DataContext="{Binding Unlocker}"
                 IsVisible="{Binding IsSupported}">
         <StackPanel Spacing="6">
           <Grid ColumnDefinitions="Auto,Auto,*" ColumnSpacing="8">
@@ -72,6 +72,32 @@
             <Button Grid.Column="2" HorizontalAlignment="Right" Content="Refresh"
                     Command="{Binding RefreshCommand}" />
           </Grid>
+          <!-- OUTSIDE the scroller below, deliberately. These are the only three things detection
+               reports that ask something of the user, and inside the target list's scroller they
+               scrolled out of sight behind eight rows nobody had to read.
+
+               The scroll lives HERE, inside the section that grows, and not around the settings
+               region as a whole: wrapped outside, unfolding a section made the game folder, the
+               catalog box and the Scan row scroll away with it, which is worse than the overflow it
+               was fixing. The target list is the only part of this section whose height is not
+               fixed — one row per client per prefix, and a machine with several launchers has
+               plenty. Select all / Refresh sit above this and Install / Remove below it, outside the
+               scroller, so the controls are reachable whatever the list does.
+
+               140 is measured, not picked: it is four target rows, and it fixes the section's height
+               so eight targets and fifteen arrange identically. Three targets — the reported case —
+               sit under the cap, so nothing scrolls and the pack list keeps 149px. Past the cap the
+               pack list holds 71px at the 640px default and 331px at 900. Raising the cap buys
+               target rows straight out of the pack list: at 180 the list was 31px, which reads as
+               broken.
+
+               AllowAutoHide is off because Fluent's scrollbar OVERLAYS the content when it can hide,
+               and it landed on top of the status column: "Not install" with the bar over the rest.
+               Off, it reserves its own width. HorizontalScrollBarVisibility is off explicitly too:
+               enabled, it measures the content with infinite width and the TextTrimming on every
+               path below stops firing. -->
+          <ScrollViewer MaxHeight="140" VerticalScrollBarVisibility="Auto"
+                        HorizontalScrollBarVisibility="Disabled" AllowAutoHide="False">
           <ItemsControl ItemsSource="{Binding Targets}">
             <ItemsControl.ItemTemplate>
               <DataTemplate>
@@ -100,9 +126,14 @@
               </DataTemplate>
             </ItemsControl.ItemTemplate>
           </ItemsControl>
-          <!-- Why detection found less than the user expected: an unreadable launcher config, a
-               32-bit prefix, a sandboxed build. The `secondary` class already exists and is
-               styled; a new class here would fail ThemeSweepTests in both directions. -->
+          </ScrollViewer>
+          <!-- The three things detection can report that ask something of the user: a prefix they
+               named in the setting that is not one, a Flatpak sandbox that cannot see the host, and
+               finding nothing at all. Every other diagnostic — a prefix with no client registered, a
+               32-bit prefix, an unreadable launcher config — goes to the log, because one line per
+               prefix examined is a list nobody reads and it used to bury the buttons below.
+               The `secondary` class already exists and is styled; a new class here would fail
+               ThemeSweepTests in both directions. -->
           <ItemsControl ItemsSource="{Binding DetectionNotes}"
                         IsVisible="{Binding HasDetectionNotes}">
             <ItemsControl.ItemTemplate>
@@ -139,6 +170,12 @@
         </StackPanel>
       </Expander>
 
+      <!-- Bounded for the same reason the target list is, and in the same shape: the thing that
+           grows carries its own scroll, rather than the settings region scrolling as a whole and
+           taking the game folder and the catalog box out of reach with it. A run of banners is
+           rarer than a long target list but no more bounded — one per failure, each dismissible. -->
+      <ScrollViewer MaxHeight="120" VerticalScrollBarVisibility="Auto"
+                    HorizontalScrollBarVisibility="Disabled">
       <ItemsControl ItemsSource="{Binding Banners}">
         <ItemsControl.ItemTemplate>
           <DataTemplate>
@@ -161,6 +198,7 @@
           </DataTemplate>
         </ItemsControl.ItemTemplate>
       </ItemsControl>
+      </ScrollViewer>
 
       <Grid ColumnDefinitions="Auto,Auto,Auto,*,Auto" ColumnSpacing="8">
         <Button Grid.Column="0" Content="Select all" Command="{Binding SelectAllCommand}" />

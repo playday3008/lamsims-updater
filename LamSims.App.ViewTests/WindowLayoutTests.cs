@@ -1,9 +1,11 @@
 using System;
 using System.Linq;
 using Xunit;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
 using Avalonia.VisualTree;
+using LamSims.App.ViewModels;
 
 namespace LamSims.App.ViewTests;
 
@@ -17,7 +19,136 @@ public class WindowLayoutTests
         // Star columns with no floor collapse into illegibility; a window that has never been
         // given a minimum can be dragged to nothing.
         Assert.Equal(760d, host.Window.MinWidth);
-        Assert.Equal(480d, host.Window.MinHeight);
+        Assert.Equal(560d, host.Window.MinHeight);
+    }
+
+    /// <summary>
+    /// The settings block: the StackPanel docked to the top of the window's DockPanel, holding the
+    /// game folder, the catalog box, both expanders, the banners and the Scan row.
+    /// </summary>
+    private static StackPanel SettingsRegion(ViewHost host) =>
+        ViewHost.Find<DockPanel>(host.Window).Children.OfType<StackPanel>().First();
+
+    /// <summary>
+    /// Fluent's Expander theme leaves HorizontalAlignment at Left, which makes an expander size to
+    /// its content in both states: the Advanced section measured 145px closed and 389px open in an
+    /// 876px column, so unfolding it moved its own right edge and the chevron with it. Both states
+    /// are asserted against the region's width, because equal-to-each-other alone would also be
+    /// true of two identically wrong widths.
+    /// </summary>
+    [AvaloniaFact]
+    public void An_expander_is_the_width_of_its_column_open_or_closed()
+    {
+        using var host = ViewHost.Show(Packs.Entry("EP01"));
+
+        var column = SettingsRegion(host).Bounds.Width;
+
+        Assert.True(column > 0, "the settings region laid out no content to measure against");
+
+        // Visible ones only: the DLC Unlocker section hides itself when no backend reports support,
+        // which is the case for this host, and a hidden control arranges to zero width.
+        var expanders = host.Window.GetVisualDescendants().OfType<Expander>()
+            .Where(e => e.IsVisible).ToList();
+
+        Assert.NotEmpty(expanders);
+
+        foreach (var expander in expanders)
+        {
+            Assert.Equal(column, expander.Bounds.Width);
+        }
+
+        foreach (var expander in expanders) expander.IsExpanded = true;
+        host.Pump();
+
+        foreach (var expander in expanders)
+        {
+            Assert.Equal(column, expander.Bounds.Width);
+        }
+    }
+
+    /// <summary>
+    /// The two settings sections are mutually exclusive, and the reason is arithmetic rather than
+    /// taste: the region is docked to the top of a DockPanel, so both open at the default window
+    /// height left the pack list and the log arranged past the bottom edge at zero height, with no
+    /// scrollbar anywhere — the scroll lives inside each growable list, not around the region.
+    ///
+    /// Both directions are driven, because a handler wired to one section only would pass a test
+    /// that opened them in one order.
+    /// </summary>
+    [AvaloniaFact]
+    public void Opening_one_settings_section_closes_the_other()
+    {
+        using var host = ViewHost.Show(Packs.Entry("EP01"));
+
+        var advanced = ViewHost.Find<Expander>(host.Window, e => e.Name == "AdvancedSection");
+        var unlocker = ViewHost.Find<Expander>(host.Window, e => e.Name == "UnlockerSection");
+
+        advanced.IsExpanded = true;
+        host.Pump();
+        Assert.True(advanced.IsExpanded);
+        Assert.False(unlocker.IsExpanded);
+
+        unlocker.IsExpanded = true;
+        host.Pump();
+        Assert.False(advanced.IsExpanded);
+        Assert.True(unlocker.IsExpanded);
+
+        advanced.IsExpanded = true;
+        host.Pump();
+        Assert.True(advanced.IsExpanded);
+        Assert.False(unlocker.IsExpanded);
+
+        // The pack list and the log survive it, which is the point of the rule.
+        AssertTheLogIsOnScreen(host);
+    }
+
+    /// <summary>
+    /// The settings region is docked to the top, and a docked child is given its full desired
+    /// height, so an unbounded list inside it arranges the pack list and the log past the bottom
+    /// edge with no scrollbar anywhere to reach them. Each list that can grow therefore carries its
+    /// OWN scroll — the banner run here, the unlocker's target list — rather than the region
+    /// scrolling as a whole, which took the game folder and the catalog box out of reach with it.
+    ///
+    /// Banners crowd the region from a test more cheaply than anything else; the reported bug
+    /// arrived through the unlocker's detection notes, which stacked in the same StackPanel.
+    /// </summary>
+    [AvaloniaFact]
+    public void A_crowded_settings_region_cannot_push_the_pack_list_off_the_window()
+    {
+        using var host = ViewHost.Show(Packs.Entry("EP01"));
+
+        for (var i = 0; i < 30; i++)
+        {
+            host.ViewModel.Banners.Add(new Banner($"b{i}", $"banner {i}", BannerKind.Info));
+        }
+
+        host.Pump();
+
+        // The rows above the banners must NOT have scrolled away, which is the whole reason the
+        // scroll moved inside: the game folder label is the first thing in the region.
+        var labels = host.Window.GetVisualDescendants().OfType<TextBlock>()
+            .Where(t => t.IsVisible).Select(t => t.Text).ToArray();
+        Assert.Contains("Game folder:", labels);
+        Assert.Contains("Catalog:", labels);
+
+        AssertTheLogIsOnScreen(host);
+    }
+
+    /// <summary>
+    /// Translated to the window, because Bounds is relative to the parent and the failure this
+    /// guards is about WHERE the DockPanel's fill child was arranged, not how big it thinks it is.
+    /// </summary>
+    private static void AssertTheLogIsOnScreen(ViewHost host)
+    {
+        var log = ViewHost.Find<Border>(host.Window, b => b.Classes.Contains("log"));
+        var origin = log.TranslatePoint(new Point(0, 0), host.Window);
+
+        Assert.NotNull(origin);
+        Assert.True(log.Bounds.Height > 100d,
+            $"the log was arranged {log.Bounds.Height}px tall, so it is on screen in name only");
+        Assert.True(origin.Value.Y + log.Bounds.Height <= host.Window.Bounds.Height,
+            $"the log runs to {origin.Value.Y + log.Bounds.Height}px in a "
+            + $"{host.Window.Bounds.Height}px window, so its bottom is off screen");
     }
 
     /// <summary>

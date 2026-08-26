@@ -1,6 +1,7 @@
 using System.Linq;
 using System.Threading;
 using Xunit;
+using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
 using Avalonia.VisualTree;
@@ -52,6 +53,85 @@ public class UnlockerRegionTests
         host.Pump();
 
         return host;
+    }
+
+    private static UnlockerTarget[] ManyTargets(int count) =>
+        Enumerable.Range(0, count)
+            .Select(i => new UnlockerTarget("test-backend", ClientKind.EaApp,
+                $"/home/playday/Games/Heroic/Prefixes/default/Game{i}/drive_c/Program Files/"
+                + "Electronic Arts/EA Desktop", "EA app"))
+            .ToArray();
+
+    private static double SectionHeight(ViewHost host) => UnlockerExpander(host).Bounds.Height;
+
+    /// <summary>
+    /// The target list scrolls inside the section, so the section's own height stops depending on
+    /// how many clients were found. That is what keeps the pack list and the log on screen: this
+    /// region is docked to the top of a DockPanel and takes its full desired height, so an
+    /// unbounded list here arranges them past the bottom edge with no scrollbar to reach them.
+    ///
+    /// Two counts either side of the cap, compared to each other: asserting one height against a
+    /// literal would pass against a list that grows and happens to match at that count.
+    /// </summary>
+    [AvaloniaFact]
+    public void The_section_is_the_same_height_however_many_clients_were_found()
+    {
+        using var few = ShowExpanded(out _, ManyTargets(8));
+        using var many = ShowExpanded(out _, ManyTargets(15));
+
+        Assert.Equal(SectionHeight(few), SectionHeight(many));
+
+        // And the buttons below the list are still inside the window, which is what the user could
+        // not reach before the list was bounded.
+        foreach (var host in new[] { few, many })
+        {
+            var install = host.Window.GetVisualDescendants().OfType<Button>()
+                .First(b => b.Content?.ToString() == "Install selected");
+            var bottom = install.TranslatePoint(new Point(0, install.Bounds.Height), host.Window);
+
+            Assert.NotNull(bottom);
+            Assert.True(bottom.Value.Y <= host.Window.Bounds.Height,
+                $"Install selected runs to {bottom.Value.Y}px in a {host.Window.Bounds.Height}px window");
+        }
+    }
+
+    /// <summary>
+    /// A detection note is the one thing in this section a user must read — a prefix they named that
+    /// is not one, a sandbox, nothing found at all. It sits OUTSIDE the target list's scroller for
+    /// that reason: inside it, a machine with eight clients scrolled the note out of sight behind
+    /// rows nobody had to read, which is where the first version of this layout put it.
+    /// </summary>
+    [AvaloniaFact]
+    public void A_detection_note_is_visible_behind_a_target_list_long_enough_to_scroll()
+    {
+        using var host = ShowExpanded(out _, ManyTargets(15));
+
+        const string note = "No Wine prefix was found. Set its path in the Wine prefix setting.";
+        host.ViewModel.Unlocker.DetectionNotes.Add(note);
+        host.ViewModel.Unlocker.HasDetectionNotes = true;
+        host.Pump();
+
+        var block = host.Window.GetVisualDescendants().OfType<TextBlock>()
+            .FirstOrDefault(t => t.Text == note);
+
+        Assert.NotNull(block);
+        Assert.True(block.IsVisible, "the note is in the tree but not visible");
+
+        // The CLIP, not IsVisible and not the arranged position. A note inside the scroller is
+        // still visible and still reports a position — it is simply clipped away by the viewport,
+        // which is exactly the bug, and both of the weaker assertions passed against it.
+        var transformed = block.GetTransformedBounds();
+
+        Assert.NotNull(transformed);
+
+        // Bounds are in the element's own space and Clip is in the window's, so the transform has
+        // to be applied before they can be compared — without it the two rectangles are in
+        // different coordinate systems and the comparison is meaningless.
+        var onScreen = transformed.Value.Bounds.TransformToAABB(transformed.Value.Transform);
+
+        Assert.True(transformed.Value.Clip.Contains(onScreen),
+            $"the note is on screen at {onScreen} but clipped to {transformed.Value.Clip}, "
+            + "so part of it cannot be seen");
     }
 
     private static Grid ProgressRow(ViewHost host) =>
