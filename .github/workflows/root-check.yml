@@ -34,7 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     container: mcr.microsoft.com/dotnet/sdk:10.0
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: dotnet restore LamSims.slnx
       - run: dotnet build LamSims.slnx -warnaserror --no-restore
       - run: dotnet test LamSims.slnx --no-build --no-restore
