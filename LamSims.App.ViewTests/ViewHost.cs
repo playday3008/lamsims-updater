@@ -116,25 +116,25 @@ public sealed class ViewHost : IDisposable
     /// <summary>
     /// Runs dispatcher jobs until a condition holds. Headless has no message loop of its own, and
     /// the shipped window's close is deliberately deferred behind an await, so nothing completes
-    /// without this. Bounded rather than timed: it never waits on the clock for a result.
+    /// without this.
     ///
-    /// Yields per pass rather than spinning. This is also used to wait on work that runs on a
-    /// thread-pool thread (UnlockerViewModel's detection hops off the UI thread via Task.Run), and
-    /// RunJobs() on an empty queue returns almost immediately — a pure spin can burn all 20000
-    /// passes in a few milliseconds, well under thread-pool scheduling latency under load, before
-    /// the pool thread has even been scheduled to run the work whose completion this is waiting
-    /// for. Thread.Yield() gives that thread a chance to actually run between passes instead of
-    /// starving it. Not a timed wait: the iteration cap is still the only hang guard, and no clock
-    /// is read anywhere in this method.
+    /// <see cref="SpinWait"/>, not a bare Thread.Yield(): this also waits on work that hops to a
+    /// thread-pool thread, and a yield is a no-op where nothing is runnable on the same core — the
+    /// cap then burned in 100ms, which is what made detection "never finish" on macOS alone.
+    /// SpinWait escalates to Thread.Sleep(1), so a pass costs real time. The cap is the only hang
+    /// guard and generous on purpose, 22s to exhaust: one trimmed to fail faster flakes on every
+    /// machine slower than the one that trimmed it.
     /// </summary>
     public static bool PumpUntil(Func<bool> condition, int passes = 20000)
     {
+        var spin = new SpinWait();
+
         for (var i = 0; i < passes; i++)
         {
             if (condition()) return true;
 
             Dispatcher.UIThread.RunJobs();
-            Thread.Yield();
+            spin.SpinOnce();
         }
 
         return condition();
