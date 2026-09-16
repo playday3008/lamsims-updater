@@ -885,7 +885,7 @@ namespace sims4_updater.Models
             ; if you want to disable a DLC - add ; before IID
 
             [config]
-            CNT=155
+            CNT=160
 
             NAM1=Life of the Party Digital Content
             IID1=SIMS4.OFF.SOLP.0x0000000000008E14
@@ -1259,7 +1259,7 @@ namespace sims4_updater.Models
             GRP62=THESIMS4PC
             TYP62=DEFAULT
 
-            NAM63=The Sims™ 4 Cottage Living (bonuses only)
+            NAM63=The Sims™ 4 Gnome on the Go Digital Content
             IID63=SIMS4.OFF.SOLP.0x00000000000454E8
             ETG63=GnomeOnTheGo_CLPreorderBonus:283880
             GRP63=THESIMS4PC
@@ -1757,7 +1757,7 @@ namespace sims4_updater.Models
             GRP145=THESIMS4PC
             TYP145=DEFAULT
 
-            NAM146=The Sims™ 4 Royalty & Legacy Grand Bundle
+            NAM146=The Sims™ 4 Royalty & Legacy Expansion Pack
             IID146=SIMS4.OFF.SOLP.0x0000000000077ECC
             ETG146=EP21_RoyaltyAndLegacy_0x0000000000077ECC:491212
             GRP146=THESIMS4PC
@@ -1816,6 +1816,37 @@ namespace sims4_updater.Models
             ETG155=SP78_LadyBMasqBallFashionKit_0x0000000000081DFD:531965
             GRP155=THESIMS4PC
             TYP155=DEFAULT
+
+            NAM156=The Sims™ 4 Awesome Animal Hats Digital Content
+            IID156=SIMS4.OFF.SOLP.0x00000000000098C2
+            ETG156=OriginExclusivePack_0x00000000000098C2:39106
+            GRP156=THESIMS4PC
+            TYP156=DEFAULT
+
+            NAM157=The Sims™ 4 Digital Soundtrack
+            IID157=SIMS4.OFF.SOLP.0x000000000000B51A
+            ETG157=TS4DigitalSoundtrack_0x000000000000B51A:46362
+            GRP157=THESIMS4PC
+            TYP157=DEFAULT
+
+            NAM158=The Sims™ 4 Music Den Kit + 200 Moola
+            IID158=SIMS4.OFF.SOLP.0x0000000000081EAA
+            ETG158=SP80_MusicDen_0x0000000000081EAA:532138
+            GRP158=THESIMS4PC
+            TYP158=DEFAULT
+
+            NAM159=The Sims™ 4 Mean Girls Capsule Kit
+            IID159=SIMS4.OFF.SOLP.0x0000000000083ED5
+            ETG159=SP83_MeanGirlsCapsuleKit_0x0000000000083ED5:540373
+            GRP159=THESIMS4PC
+            TYP159=DEFAULT
+
+            NAM160=The Sims™ 4 Clueless Capsule Kit
+            IID160=SIMS4.OFF.SOLP.0x0000000000083ED6
+            ETG160=SP84_CluelessCapsuleKit_0x0000000000083ED6:540374
+            GRP160=THESIMS4PC
+            TYP160=DEFAULT
+
             
             
             """;

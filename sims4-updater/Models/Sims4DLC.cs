@@ -42,7 +42,7 @@ namespace sims4_updater.Models
             logger.AddLog($"URL: {Url}");
 
             using var httpClient = new HttpClient();
-            httpClient.Timeout = TimeSpan.FromHours(2);
+            httpClient.Timeout = TimeSpan.FromHours(5);
             
             try
             {
