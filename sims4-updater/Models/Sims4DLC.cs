@@ -22,7 +22,7 @@ namespace sims4_updater.Models
         private bool _toInstall = false;
         private string _downloadFolder = string.Empty;
 
-        public async Task<bool> Download(Logger logger)
+        public async Task<bool> Download(GoFileDownloader gofile_downloader, Logger logger)
         {
             _downloadFolder = System.IO.Path.Combine(System.IO.Path.GetTempPath(), "Sims4DLCs");
 
@@ -41,51 +41,54 @@ namespace sims4_updater.Models
             logger.AddLog($"Starting download DLC: {Name}");
             logger.AddLog($"URL: {Url}");
 
-            using var httpClient = new HttpClient();
-            httpClient.Timeout = TimeSpan.FromHours(5);
-            
             try
             {
-                using var response = await httpClient.GetAsync(Url, HttpCompletionOption.ResponseHeadersRead);
-                response.EnsureSuccessStatusCode();
-
-                var totalBytes = response.Content.Headers.ContentLength ?? 0;
-                logger.AddLog($"File size: {FormatFileSize(totalBytes)}");
-                logger.AddLog($"Initiating download to: {outputFilePath}");
-
-                using var streamToReadFrom = await response.Content.ReadAsStreamAsync();
-                using var streamToWriteTo = File.Open(outputFilePath, FileMode.Create);
-
-                var buffer = new byte[81920]; // 80KB buffer
-                long totalBytesRead = 0;
-                int bytesRead;
-                var lastProgressUpdate = DateTime.Now;
-
-                while ((bytesRead = await streamToReadFrom.ReadAsync(buffer, 0, buffer.Length)) > 0)
+                string stagingFolder = System.IO.Path.Combine(_downloadFolder, $"{Code}_gofile");
+                if (System.IO.Directory.Exists(stagingFolder))
                 {
-                    await streamToWriteTo.WriteAsync(buffer, 0, bytesRead);
-                    totalBytesRead += bytesRead;
-
-                    if ((DateTime.Now - lastProgressUpdate).TotalSeconds >= 1)
-                    {
-                        if (totalBytes > 0)
-                        {
-                            var progressPercentage = (int)((totalBytesRead * 100) / totalBytes);
-                            StaticsVariables.Instance.Progress = progressPercentage;
-                        }
-
-                        StaticsVariables.Instance.DownloadSizeInfo = 
-                            $"{FormatFileSize(totalBytesRead)} / {FormatFileSize(totalBytes)}";
-                        logger.AddLog($"Download progress: {FormatFileSize(totalBytesRead)} / {FormatFileSize(totalBytes)}");
-                        lastProgressUpdate = DateTime.Now;
-                    }
+                    System.IO.Directory.Delete(stagingFolder, true);
                 }
 
-                StaticsVariables.Instance.Progress = 100;
-                StaticsVariables.Instance.DownloadSizeInfo = 
-                    $"{FormatFileSize(totalBytesRead)} / {FormatFileSize(totalBytesRead)}";
+                EventHandler<GoFileDownloadProgress> progressHandler = (_, progress) =>
+                {
+                    StaticsVariables.Instance.Progress = progress.TotalBytes > 0
+                        ? progress.Percentage
+                        : 0;
+                    StaticsVariables.Instance.DownloadSizeInfo = progress.TotalBytes > 0
+                        ? $"{FormatFileSize(progress.BytesDownloaded)} / {FormatFileSize(progress.TotalBytes)}"
+                        : FormatFileSize(progress.BytesDownloaded);
+                };
 
-                logger.AddLog($"Download completed: {FormatFileSize(totalBytesRead)}");
+                gofile_downloader.ProgressChanged += progressHandler;
+                try
+                {
+                    logger.AddLog($"Initiating GoFile download to: {stagingFolder}");
+                    bool downloaded = await gofile_downloader.DownloadAsync(Url, stagingFolder);
+                    if (!downloaded)
+                    {
+                        logger.AddLog("GoFile did not return any downloadable files.");
+                        return false;
+                    }
+                }
+                finally
+                {
+                    gofile_downloader.ProgressChanged -= progressHandler;
+                }
+
+                string? downloadedZip = System.IO.Directory
+                    .GetFiles(stagingFolder, "*.zip", System.IO.SearchOption.AllDirectories)
+                    .FirstOrDefault();
+                if (downloadedZip is null)
+                {
+                    logger.AddLog("GoFile download completed, but no ZIP archive was found.");
+                    return false;
+                }
+
+                System.IO.File.Move(downloadedZip, outputFilePath, true);
+                System.IO.Directory.Delete(stagingFolder, true);
+                StaticsVariables.Instance.Progress = 100;
+                StaticsVariables.Instance.DownloadSizeInfo = FormatFileSize(new FileInfo(outputFilePath).Length);
+                logger.AddLog($"Download completed: {FormatFileSize(new FileInfo(outputFilePath).Length)}");
                 return true;
             }
             catch (Exception ex)
@@ -97,7 +100,9 @@ namespace sims4_updater.Models
 
         public void Extract(Logger logger)
         {
-            string downloadFilePath = string.Empty;
+            try
+            {
+                string downloadFilePath = string.Empty;
 
             downloadFilePath = System.IO.Path.Combine(_downloadFolder, $"{Code}.zip");
 
@@ -115,6 +120,11 @@ namespace sims4_updater.Models
             }
 
             System.IO.Compression.ZipFile.ExtractToDirectory(downloadFilePath, extractFolder);
+            }
+            catch (Exception ex)
+            {
+                logger.AddLog($"Extraction failed: {ex.Message}");
+            }
         } 
 
         public void Install(string gamepath, Logger logger) 
