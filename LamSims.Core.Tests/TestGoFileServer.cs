@@ -36,6 +36,15 @@ public sealed class TestGoFileServer : IAsyncDisposable
     /// <summary>Answer the next listing with this API status instead of "ok".</summary>
     public string? NextListingStatus { get; set; }
 
+    /// <summary>
+    /// Answer this many requests with 429 before serving normally, as the real API does once a
+    /// burst of listings crosses its rate limit. Decremented per request.
+    /// </summary>
+    public int FailNextWith429 { get; set; }
+
+    /// <summary>Sent as Retry-After on a 429. Null sends no header.</summary>
+    public int? RetryAfterSeconds { get; set; }
+
     /// <summary>Listings served without the X-Website-Token header, which the real API refuses.</summary>
     public int ListingsMissingWebsiteToken => Volatile.Read(ref _listingsMissingWebsiteToken);
     private int _listingsMissingWebsiteToken;
@@ -64,6 +73,8 @@ public sealed class TestGoFileServer : IAsyncDisposable
         app.MapPost("/accounts", (HttpContext context) =>
         {
             var self = server!;
+
+            if (self.Throttle(context) is { } throttled) return throttled;
             var token = "tok" + Interlocked.Increment(ref self._tokensIssued);
             self._issuedTokens[token] = 0;
 
@@ -77,6 +88,8 @@ public sealed class TestGoFileServer : IAsyncDisposable
         app.MapGet("/contents/{id}", (HttpContext context, string id) =>
         {
             var self = server!;
+
+            if (self.Throttle(context) is { } throttled) return throttled;
 
             if (string.IsNullOrEmpty(context.Request.Headers["X-Website-Token"].ToString()))
                 Interlocked.Increment(ref self._listingsMissingWebsiteToken);
@@ -116,6 +129,19 @@ public sealed class TestGoFileServer : IAsyncDisposable
 
         server = new TestGoFileServer(app, new Uri(address.TrimEnd('/') + "/"));
         return server;
+    }
+
+    /// <summary>The 429 the real service sends when a burst of listings crosses its rate limit.</summary>
+    private IResult? Throttle(HttpContext context)
+    {
+        if (FailNextWith429 <= 0) return null;
+
+        FailNextWith429--;
+
+        if (RetryAfterSeconds is { } after)
+            context.Response.Headers.RetryAfter = after.ToString();
+
+        return Results.StatusCode(429);
     }
 
     public bool WasIssued(string token) => _issuedTokens.ContainsKey(token);

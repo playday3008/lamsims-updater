@@ -279,6 +279,88 @@ public class GoFileResolverTests
         }
     }
 
+    [Fact]
+    public async Task One_token_serves_every_share_in_a_run()
+    {
+        await using var api = await TestGoFileServer.StartAsync();
+        api.Contents["one"] = OneArchive();
+        api.Contents["two"] = OneArchive();
+        api.Contents["three"] = OneArchive();
+
+        var cookies = new CookieContainer();
+        using var http = ClientFor(cookies);
+        var resolver = new GoFileResolver(http, cookies, api.BaseUrl);
+
+        foreach (var id in new[] { "one", "two", "three" })
+            await resolver.ResolveAsync(Request($"https://gofile.io/d/{id}"), CancellationToken.None);
+
+        // One token for the run, not one per pack. Every request counts against the service's rate
+        // limit, and a queue resolves a share for every pack the user selected: minting a token
+        // each time doubled the calls and a full catalog ran into 429s partway through.
+        Assert.Equal(1, api.TokensIssued);
+    }
+
+    [Fact]
+    public async Task A_rate_limited_listing_is_retried_rather_than_failing_the_pack()
+    {
+        await using var api = await TestGoFileServer.StartAsync();
+        api.Contents["abc123"] = OneArchive();
+        api.FailNextWith429 = 2;
+
+        var cookies = new CookieContainer();
+        using var http = ClientFor(cookies);
+        var resolver = new GoFileResolver(
+            http, cookies, api.BaseUrl, delay: new FakeDelayProvider());
+
+        var resolved = await resolver.ResolveAsync(
+            Request("https://gofile.io/d/abc123"), CancellationToken.None);
+
+        // A 429 says "later", not "never". Without a retry every pack after the limit is reached
+        // fails outright, which is what a full-catalog run actually did: 48 of 116 packs threw on
+        // the listing while nothing was wrong with any of them.
+        Assert.Equal(3, resolved.Urls.Count);
+    }
+
+    [Fact]
+    public async Task A_persistent_rate_limit_is_reported_as_such()
+    {
+        await using var api = await TestGoFileServer.StartAsync();
+        api.Contents["abc123"] = OneArchive();
+        api.FailNextWith429 = 99;
+
+        var cookies = new CookieContainer();
+        using var http = ClientFor(cookies);
+        var resolver = new GoFileResolver(
+            http, cookies, api.BaseUrl, delay: new FakeDelayProvider());
+
+        var error = await Assert.ThrowsAsync<HttpRequestException>(
+            () => resolver.ResolveAsync(Request("https://gofile.io/d/abc123"), CancellationToken.None));
+
+        // Named, because "429" in a log is the difference between "wait and try again" and "this
+        // pack is gone", and the user's next action differs entirely.
+        Assert.Contains("rate", error.Message, StringComparison.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public async Task A_retry_after_header_is_honoured()
+    {
+        await using var api = await TestGoFileServer.StartAsync();
+        api.Contents["abc123"] = OneArchive();
+        api.FailNextWith429 = 1;
+        api.RetryAfterSeconds = 7;
+
+        var delays = new FakeDelayProvider();
+        var cookies = new CookieContainer();
+        using var http = ClientFor(cookies);
+        var resolver = new GoFileResolver(http, cookies, api.BaseUrl, delay: delays);
+
+        await resolver.ResolveAsync(Request("https://gofile.io/d/abc123"), CancellationToken.None);
+
+        // The service says how long to wait; guessing shorter earns another 429 and guessing
+        // longer stalls the queue for no reason.
+        Assert.Contains(delays.Delays, d => d == TimeSpan.FromSeconds(7));
+    }
+
     [Theory]
     [InlineData("https://gofile.io/d/abc123", true)]
     [InlineData("https://gofile.io/contents/abc123", true)]

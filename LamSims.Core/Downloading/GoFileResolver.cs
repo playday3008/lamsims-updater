@@ -60,10 +60,24 @@ public sealed class GoFileResolver : IMirrorResolver
 
     private const string UserAgent = "Mozilla/5.0";
 
+    /// <summary>Attempts at a listing the service rate-limited. A 429 says "later", not "never".</summary>
+    private const int RateLimitAttempts = 5;
+
+    /// <summary>Used when a 429 carries no Retry-After, and as the floor when it carries a short one.</summary>
+    private static readonly TimeSpan RateLimitBackoff = TimeSpan.FromSeconds(5);
+
     private readonly HttpClient _http;
     private readonly CookieContainer _cookies;
     private readonly Uri _api;
+    private readonly IDelayProvider _delay;
     private readonly ILogSink _log;
+
+    /// <summary>
+    /// The guest token for this resolver's lifetime. Every API call counts against the service's
+    /// rate limit and a queue resolves one share per selected pack, so a token minted per pack
+    /// doubled the calls: a full 116-pack catalog ran into 429s after about 68 of them.
+    /// </summary>
+    private string? _token;
 
     /// <param name="cookies">The container backing <paramref name="http"/>. Required rather than
     /// discovered: a handler's container cannot be read back from an HttpClient, and a resolver
@@ -71,11 +85,13 @@ public sealed class GoFileResolver : IMirrorResolver
     /// <param name="api">Where the API lives. Tests point this at a local stand-in; production
     /// uses the default, so no caller has to name the public host.</param>
     public GoFileResolver(
-        HttpClient http, CookieContainer cookies, Uri? api = null, ILogSink? log = null)
+        HttpClient http, CookieContainer cookies, Uri? api = null, ILogSink? log = null,
+        IDelayProvider? delay = null)
     {
         _http = http;
         _cookies = cookies;
         _api = api ?? new Uri(PublicApi);
+        _delay = delay ?? new SystemDelayProvider();
         _log = log ?? NullLogSink.Instance;
     }
 
@@ -113,7 +129,7 @@ public sealed class GoFileResolver : IMirrorResolver
         var contentId = ContentId(share)
             ?? throw new HttpRequestException($"'{share}' names no GoFile content id.");
 
-        var token = await GuestTokenAsync(ct);
+        var token = _token ??= await GuestTokenAsync(ct);
 
         using var listing = await ListAsync(contentId, token, ct);
 
@@ -161,14 +177,19 @@ public sealed class GoFileResolver : IMirrorResolver
 
     private async Task<string> GuestTokenAsync(CancellationToken ct)
     {
-        using var request = new HttpRequestMessage(HttpMethod.Post, new Uri(_api, "accounts"));
-        Sign(request, accountToken: string.Empty);
+        using var document = await SendAsync(
+            "a guest token",
+            () =>
+            {
+                var request = new HttpRequestMessage(HttpMethod.Post, new Uri(_api, "accounts"));
+                Sign(request, accountToken: string.Empty);
+                return request;
+            },
+            ct);
 
-        using var document = await SendJsonAsync(request, ct);
-        var root = document.RootElement;
-        EnsureOk(root);
+        EnsureOk(document.RootElement);
 
-        return root.GetProperty("data").GetProperty("token").GetString()
+        return document.RootElement.GetProperty("data").GetProperty("token").GetString()
             ?? throw new HttpRequestException("GoFile issued no account token.");
     }
 
@@ -177,11 +198,13 @@ public sealed class GoFileResolver : IMirrorResolver
         var url = new Uri(_api,
             $"contents/{Uri.EscapeDataString(contentId)}?cache=true&sortField=createTime&sortDirection=1");
 
-        using var request = new HttpRequestMessage(HttpMethod.Get, url);
-        request.Headers.TryAddWithoutValidation("Authorization", "Bearer " + token);
-        Sign(request, token);
-
-        var document = await SendJsonAsync(request, ct);
+        var document = await SendAsync($"the share '{contentId}'", () =>
+        {
+            var request = new HttpRequestMessage(HttpMethod.Get, url);
+            request.Headers.TryAddWithoutValidation("Authorization", "Bearer " + token);
+            Sign(request, token);
+            return request;
+        }, ct);
 
         try
         {
@@ -195,6 +218,57 @@ public sealed class GoFileResolver : IMirrorResolver
 
         return document;
     }
+
+    /// <summary>
+    /// One API call, retried while the service is rate limiting. Both calls go through here: a
+    /// queue resolving a share per pack makes two calls per pack, and the limit does not care
+    /// which of them crosses it.
+    ///
+    /// <paramref name="build"/> rather than a message, because an HttpRequestMessage cannot be
+    /// sent twice and each attempt needs a fresh one.
+    /// </summary>
+    private async Task<JsonDocument> SendAsync(
+        string what, Func<HttpRequestMessage> build, CancellationToken ct)
+    {
+        for (var attempt = 1; ; attempt++)
+        {
+            using var request = build();
+
+            using var response = await HttpDeadline.SendAsync(
+                _http, request, HttpDeadline.DefaultHeaderTimeout, ct);
+
+            if (response.StatusCode != HttpStatusCode.TooManyRequests)
+            {
+                response.EnsureSuccessStatusCode();
+                return await ReadJsonAsync(response, request.RequestUri!, ct);
+            }
+
+            if (attempt >= RateLimitAttempts)
+            {
+                throw new HttpRequestException(
+                    $"GoFile is rate limiting this client: {what} was refused with 429 on "
+                    + $"{RateLimitAttempts} attempts. Waiting a few minutes and running again "
+                    + "should clear it.");
+            }
+
+            // The service's own wait when it gives one, and a widening backoff when it does not.
+            var wait = RetryAfter(response) ?? RateLimitBackoff * attempt;
+
+            _log.Write(LogLine.Warning(
+                $"GoFile answered 429 for {what}; waiting {wait.TotalSeconds:0}s before attempt "
+                + $"{attempt + 1} of {RateLimitAttempts}"));
+
+            await _delay.DelayAsync(wait, ct);
+        }
+    }
+
+    /// <summary>The service's own wait, when it gives one. Only the delta-seconds form is read;
+    /// the HTTP-date form is not something this API sends.</summary>
+    private static TimeSpan? RetryAfter(HttpResponseMessage response) =>
+        response.Headers.RetryAfter?.Delta
+        ?? (response.Headers.RetryAfter?.Date is { } date
+            ? date - DateTimeOffset.UtcNow
+            : null);
 
     /// <summary>
     /// The headers the API requires of every request. The website token is a hash over the user
@@ -216,13 +290,9 @@ public sealed class GoFileResolver : IMirrorResolver
         return Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(raw))).ToLowerInvariant();
     }
 
-    private async Task<JsonDocument> SendJsonAsync(HttpRequestMessage request, CancellationToken ct)
+    private static async Task<JsonDocument> ReadJsonAsync(
+        HttpResponseMessage response, Uri url, CancellationToken ct)
     {
-        using var response = await HttpDeadline.SendAsync(
-            _http, request, HttpDeadline.DefaultHeaderTimeout, ct);
-
-        response.EnsureSuccessStatusCode();
-
         await using var body = await response.Content.ReadAsStreamAsync(ct);
 
         try
@@ -231,7 +301,7 @@ public sealed class GoFileResolver : IMirrorResolver
         }
         catch (JsonException e)
         {
-            throw new HttpRequestException($"GoFile answered '{request.RequestUri}' with content that is not JSON: {e.Message}");
+            throw new HttpRequestException($"GoFile answered '{url}' with content that is not JSON: {e.Message}");
         }
     }
 
