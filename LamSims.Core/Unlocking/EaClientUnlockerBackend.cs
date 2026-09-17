@@ -136,8 +136,7 @@ public sealed partial class EaClientUnlockerBackend(
 
         public void Done() => _done++;
         public void Finish(string step) => progress.Report(new UnlockerProgress(step, _done, total));
-        public int Completed => _done;
-    }
+        }
 
     private static string CodeFor(UnlockerTarget target) => target.Client.ToString().ToLowerInvariant();
 

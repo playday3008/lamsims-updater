@@ -52,18 +52,13 @@ public sealed class ProgressTracker
         Clock = () => _clock.Elapsed;
     }
 
-    public long BytesCompleted
-    {
-        get
-        {
-            lock (_gate)
-            {
-                var observed = _bytesCompleted;
-                foreach (var held in _provisional.Values) observed += held;
-                return observed;
-            }
-        }
-    }
+    /// <summary>
+    /// Bytes on disk plus the bytes attempts in flight have reported. Delegates to
+    /// <see cref="Snapshot"/> rather than repeating its summation: the two are the same quantity,
+    /// and as two copies of the arithmetic they could disagree about provisional bytes while every
+    /// test that reads only one of them stayed green.
+    /// </summary>
+    public long BytesCompleted => Snapshot().BytesCompleted;
 
     /// <summary>Bytes just read by an attempt that has not finished its chunk.</summary>
     public void Advance(int worker, long bytes)

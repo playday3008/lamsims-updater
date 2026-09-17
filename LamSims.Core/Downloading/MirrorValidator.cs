@@ -9,8 +9,6 @@ namespace LamSims.Core.Downloading;
 /// </summary>
 public sealed record MirrorValidator(string Url, string? ETag, string? LastModified, long? ContentLength)
 {
-    public static MirrorValidator None(string url) => new(url, null, null, null);
-
     /// <summary>Weak ETags (W/ prefix) must never be used as range validators.</summary>
     private bool HasStrongETag => ETag is not null && !ETag.StartsWith("W/", StringComparison.Ordinal);
 

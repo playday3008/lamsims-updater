@@ -15,10 +15,7 @@ public sealed class ZipSlipException : IOException
     public ZipSlipException(string entryName)
         : base($"Archive entry '{entryName}' resolves outside the game directory.")
     {
-        EntryName = entryName;
     }
-
-    public string EntryName { get; }
 }
 
 public enum InstallOutcome { Installed, InsufficientSpace, Cancelled, Failed }

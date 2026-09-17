@@ -755,7 +755,6 @@ public sealed partial class MainViewModel : ObservableObject
         }
     }
 
-    [RelayCommand]
     public async Task ShutdownAsync()
     {
         if (IsShuttingDown) return;

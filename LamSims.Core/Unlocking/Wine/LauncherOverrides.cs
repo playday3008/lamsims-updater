@@ -422,8 +422,9 @@ public sealed class LauncherOverrides(LauncherHomes homes)
             // Only the first field decides what loads. An absent first field is Wine's "disabled" —
             // the DLL never loads, so reading it as "absent" would report success. A value of
             // separators alone means the same.
-            var fields = value.Split(',');
-            var first = fields.Length == 0 ? "" : fields[0].Trim();
+            // String.Split always yields at least one element, so the first field is indexed
+            // directly; an empty value gives one empty field, which is the disabled case below.
+            var first = value.Split(',')[0].Trim();
             if (first.Length == 0) return OverrideVerdict.ForcesBuiltin;
 
             return first.StartsWith("n", StringComparison.OrdinalIgnoreCase)

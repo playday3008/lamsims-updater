@@ -107,6 +107,13 @@ public static class CatalogParser
             throw new InvalidEntryException("The entry is not a JSON object.");
 
         var code = RequiredString(element, "code");
+
+        // The two separator checks are redundant TODAY: HasInvalidCharacter rejects '/' and '\\'
+        // on every platform, not only the running one. They are kept because they are the
+        // traversal guard stated where a reader looks for it, and because the cost of the
+        // redundancy is two comparisons against a short string while the cost of their absence,
+        // if that helper is ever narrowed to the platform's own separator, is a write outside the
+        // download directory.
         if (FileNameRules.HasInvalidCharacter(code)
             || code.Contains(Path.DirectorySeparatorChar)
             || code.Contains(Path.AltDirectorySeparatorChar)
