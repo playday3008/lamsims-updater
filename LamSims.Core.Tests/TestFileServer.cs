@@ -43,6 +43,21 @@ public sealed class TestFileServerOptions
     /// <summary>Answer this many requests with 503 before serving normally. Decremented per request.</summary>
     public int FailNextRequests { get; set; }
 
+    /// <summary>
+    /// Answer with a 200 carrying this HTML instead of the file, ignoring the range asked for.
+    /// What GoFile serves when the accountToken cookie is absent or belongs to another session:
+    /// not an error, a web page under a success status, with its own Content-Length.
+    /// </summary>
+    public string? ServeHtmlInsteadOfFile { get; set; }
+
+    /// <summary>
+    /// Serve the file normally for this many requests before <see cref="ServeHtmlInsteadOfFile"/>
+    /// takes effect. 1 leaves the range probe served with the real entity, so the mirror is
+    /// admitted with its validator and only the chunk requests after it meet the page - which is
+    /// what a session expiring mid-download actually looks like.
+    /// </summary>
+    public int ServeHtmlAfterRequests { get; set; }
+
     /// <summary>Abort the response after writing this many bytes of body.</summary>
     public long? DropAfterBytes { get; set; }
 
@@ -200,6 +215,17 @@ public sealed class TestFileServer : IAsyncDisposable
         {
             opts.FailNextRequests--;
             context.Response.StatusCode = (int)HttpStatusCode.ServiceUnavailable;
+            return;
+        }
+
+        if (opts.ServeHtmlInsteadOfFile is { } page
+            && Volatile.Read(ref self._requestCount) > opts.ServeHtmlAfterRequests)
+        {
+            // Headers as the real service sends them: a success status, a document content type,
+            // and none of the validators the file response carries.
+            context.Response.StatusCode = (int)HttpStatusCode.OK;
+            context.Response.ContentType = "text/html; charset=utf-8";
+            await context.Response.WriteAsync(page);
             return;
         }
 

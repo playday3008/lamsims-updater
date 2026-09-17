@@ -753,4 +753,77 @@ public class SegmentedDownloaderTests
         Assert.Equal(DownloadOutcome.Completed, result.Outcome);
         Assert.Equal(content.LongLength, high);
     }
+    /// <summary>
+    /// A share host that has stopped recognising the session answers 200 with a web page rather
+    /// than an error, at every offset. Nothing in the transfer path distinguishes those bytes from
+    /// archive bytes by inspection, so if such a response were ever written the page would land at
+    /// the chunk's offset, the chunk would be flagged complete, and the sidecar would carry it
+    /// into every later resume - the digest objecting only at the end of a multi-gigabyte
+    /// download, and again on each retry.
+    ///
+    /// Three independent guards in FetchOnceAsync each reject this response on their own: the
+    /// validator mismatch, the 206 requirement, and the Content-Range check. Removing any ONE of
+    /// them leaves this test green, which is the point - it pins the property that the page never
+    /// reaches the archive, not any single mechanism. It fails when all three are gone.
+    ///
+    /// ONE mirror and ONE connection, deliberately: with a second mirror the other worker serves
+    /// every chunk and nothing is proven. The page starts AFTER the range probe, because a probe
+    /// served a page is rejected before a chunk is ever requested - by a fourth check, in
+    /// RangeProbe, that this test is not about.
+    /// </summary>
+    [Fact]
+    public async Task A_mirror_serving_a_web_page_under_a_success_status_never_reaches_the_archive()
+    {
+        var content = Payloads.Random(400_000);
+        var options = new TestFileServerOptions
+        {
+            // No ETag, a Last-Modified only: what the share hosts actually send, and the reason
+            // the mirror is admitted with a validator at all.
+            ETag = null,
+            LastModified = new DateTimeOffset(2025, 7, 12, 17, 9, 30, TimeSpan.Zero),
+        };
+        await using var server = await TestFileServer.StartAsync(content, options);
+
+        using var temp = new TempDir();
+        var paths = new DownloadPaths(temp.Path);
+        paths.EnsureCreated();
+        using var client = HttpFactory.Create(8);
+
+        var request = new DownloadRequest(
+            "EP01", new[] { server.FileUrl }, content.LongLength, Sha256Of(content));
+
+        var downloader = Downloader(client, paths, connections: 1, chunkSize: 100_000);
+
+        // Probed while it still serves the file, so it is admitted with its validator; the session
+        // then dies, exactly as an expired token does mid-download.
+        // After the range probe, not before it: the probe is what admits the mirror with its
+        // validator, and a mirror rejected at probe time never reaches the guard under test.
+        options.ServeHtmlAfterRequests = 1;
+        options.ServeHtmlInsteadOfFile =
+            "<!doctype html><html><head><title>Gofile</title></head><body>Not found</body></html>";
+
+        var result = await downloader.DownloadAsync(request, progress: null, CancellationToken.None);
+
+        // Failed, not Completed and not ChecksumMismatch: the mirror is set aside the moment it
+        // answers 200 to a conditional range request, before any of the page is written.
+        Assert.Equal(DownloadOutcome.Failed, result.Outcome);
+
+        // The archive must not exist at all. A ChecksumMismatch would mean the page was written
+        // and only caught at the end.
+        Assert.False(File.Exists(paths.ArchiveFile("EP01")));
+
+        // Nothing the server sent is anywhere in the partial file.
+        if (File.Exists(paths.PartFile("EP01")))
+        {
+            var partial = await File.ReadAllBytesAsync(paths.PartFile("EP01"));
+            Assert.DoesNotContain("<!doctype html>"u8.ToArray(), Windows(partial, 15));
+        }
+    }
+
+    /// <summary>Every 15-byte window of the buffer, so a marker can be sought at any offset.</summary>
+    private static IEnumerable<byte[]> Windows(byte[] buffer, int size)
+    {
+        for (var i = 0; i + size <= buffer.Length; i++)
+            yield return buffer[i..(i + size)];
+    }
 }

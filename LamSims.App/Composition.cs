@@ -48,7 +48,10 @@ public static class Composition
         var settings = loaded.Settings;
 
         var options = settings.ToDownloadOptions();
-        var http = HttpFactory.Create();
+
+        // The container is held alongside the client because GoFileResolver has to write into the
+        // same one the handler reads: a handler's container cannot be recovered from an HttpClient.
+        var (http, cookies) = HttpFactory.CreateWithCookies();
 
         // The composition's own default, which a test's overrideRoot redirects; the setting is
         // the user's choice layered on top of it.
@@ -83,7 +86,9 @@ public static class Composition
         var downloader = new SegmentedDownloader(
             http, downloadPaths, options, RetryOptions.Default, effectiveDelays, log);
         var installer = new ZipInstaller(installState, log: log);
-        var workflow = new PackWorkflow(downloader, installer, downloadPaths, log);
+        var workflow = new PackWorkflow(
+            downloader, installer, downloadPaths, log,
+            new GoFileResolver(http, cookies, log: log));
         var queue = new PackQueue(workflow, downloadPaths);
 
         // The unlocker must not create its own HttpClient: it fetches over the same one the

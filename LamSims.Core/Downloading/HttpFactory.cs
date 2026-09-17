@@ -10,8 +10,19 @@ namespace LamSims.Core.Downloading;
 /// </summary>
 public static class HttpFactory
 {
-    public static SocketsHttpHandler CreateHandler(int maxConnectionsPerServer) => new()
+    /// <summary>A client and the cookie container behind it. GoFile binds a download url to the
+    /// token that listed it, and a handler's container cannot be read back off an HttpClient, so
+    /// the resolver has to be handed the same instance the handler holds.</summary>
+    public sealed record Http(HttpClient Client, CookieContainer Cookies);
+
+    public static SocketsHttpHandler CreateHandler(
+        int maxConnectionsPerServer, CookieContainer? cookies = null) => new()
     {
+        // Off by default in SocketsHttpHandler. GoFile serves an HTML page under status 200 to a
+        // request whose accountToken cookie is absent or stale, so for those hosts the cookie is
+        // what separates the archive from a web page.
+        CookieContainer = cookies ?? new CookieContainer(),
+        UseCookies = true,
         // Load-bearing for throughput: an HTTP/2 host would otherwise multiplex every
         // range request onto a single TCP connection.
         EnableMultipleHttp2Connections = true,
@@ -42,4 +53,18 @@ public static class HttpFactory
     /// Connections workers.
     /// </summary>
     public static HttpClient Create() => Create(DownloadOptions.MaxConnections);
+
+    /// <summary>The application's client, paired with the container the resolver writes into.</summary>
+    public static Http CreateWithCookies()
+    {
+        var cookies = new CookieContainer();
+
+        var client = new HttpClient(
+            CreateHandler(DownloadOptions.MaxConnections, cookies), disposeHandler: true)
+        {
+            Timeout = Timeout.InfiniteTimeSpan,
+        };
+
+        return new Http(client, cookies);
+    }
 }

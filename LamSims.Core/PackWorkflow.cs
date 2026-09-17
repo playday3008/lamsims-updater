@@ -1,6 +1,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
+using System.Net.Http;
 using System.Threading;
 using System.Threading.Tasks;
 using LamSims.Core.Catalogs;
@@ -34,15 +35,20 @@ public sealed class PackWorkflow : IPackRunner
     private readonly ZipInstaller _installer;
     private readonly DownloadPaths _paths;
     private readonly ArchiveDigestStore _digests;
+    private readonly IMirrorResolver _resolver;
     private readonly ILogSink _log;
 
+    /// <param name="resolver">Turns the catalog's urls into fetchable ones. Defaults to the
+    /// pass-through, so a caller with no share-hosted packs need not name one.</param>
     public PackWorkflow(
-        SegmentedDownloader downloader, ZipInstaller installer, DownloadPaths paths, ILogSink? log = null)
+        SegmentedDownloader downloader, ZipInstaller installer, DownloadPaths paths,
+        ILogSink? log = null, IMirrorResolver? resolver = null)
     {
         _downloader = downloader;
         _installer = installer;
         _paths = paths;
         _digests = new ArchiveDigestStore(paths);
+        _resolver = resolver ?? PassThroughMirrorResolver.Instance;
         _log = log ?? NullLogSink.Instance;
     }
 
@@ -66,7 +72,30 @@ public sealed class PackWorkflow : IPackRunner
         if (trust == ArchiveTrust.NeedsDownload)
         {
             Report(phase, PackPhase.Downloading);
-            download = await _downloader.DownloadAsync(pack.ToDownloadRequest(), downloadProgress, ct);
+
+            DownloadRequest request;
+            try
+            {
+                // Only on the path that actually fetches: an archive already on disk and vouched
+                // for must not put the run behind a third-party listing service. Result-shaped
+                // like everything else here, since a share that has gone is a failure of this
+                // pack rather than of the queue.
+                request = await _resolver.ResolveAsync(pack.ToDownloadRequest(), ct);
+            }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested)
+            {
+                return new PackWorkflowResult(
+                    PackStage.Downloading, DownloadResult.Cancelled(), null, warnings);
+            }
+            catch (Exception e) when (e is HttpRequestException or IOException)
+            {
+                _log.Write(LogLine.Error($"Could not resolve a download url: {e.Message}", pack.Code));
+
+                return new PackWorkflowResult(
+                    PackStage.Downloading, DownloadResult.Failed(e.Message), null, warnings);
+            }
+
+            download = await _downloader.DownloadAsync(request, downloadProgress, ct);
 
             if (download.Outcome != DownloadOutcome.Completed)
                 return new PackWorkflowResult(PackStage.Downloading, download, null, warnings);
