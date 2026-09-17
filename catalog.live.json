@@ -1,6 +1,6 @@
 {
   "schemaVersion": 1,
-  "updatedUtc": "2026-08-23T01:39:47Z",
+  "updatedUtc": "2026-09-17T07:30:00Z",
   "packs": [
     {
       "code": "EP01",
@@ -273,6 +273,18 @@
       ],
       "installDirs": [
         "EP21"
+      ]
+    },
+    {
+      "code": "FP01",
+      "name": "The Sims 4 Holiday Celebration",
+      "size": 30127617,
+      "sha256": "b90d727d09402ef99b0d32aaad735135fe448d9382f6e6d1c862f491ae911f36",
+      "urls": [
+        "https://gofile.io/d/JQ9Qxp"
+      ],
+      "installDirs": [
+        "FP01"
       ]
     },
     {
@@ -1433,6 +1445,19 @@
       ]
     },
     {
+      "code": "SP80",
+      "name": "The Sims 4 Music Den Kit",
+      "type": "kit",
+      "size": 26931408,
+      "sha256": "3ec7fb479c52999423eeb9da32e07d17acdec004938d141eec79050bd4bc75f6",
+      "urls": [
+        "https://gofile.io/d/S1AQET"
+      ],
+      "installDirs": [
+        "SP80"
+      ]
+    },
+    {
       "code": "SP81",
       "name": "The Sims 4 Prairie Dreams Set",
       "type": "stuff",
@@ -1456,6 +1481,32 @@
       ],
       "installDirs": [
         "SP82"
+      ]
+    },
+    {
+      "code": "SP83",
+      "name": "The Sims 4 Mean Girls Capsule Kit",
+      "type": "kit",
+      "size": 40987519,
+      "sha256": "7b93bc074304e0a6a6faf98009c948ee5d12c12141691d9a1d7a66617fb238cb",
+      "urls": [
+        "https://gofile.io/d/z2CVXgGG"
+      ],
+      "installDirs": [
+        "SP83"
+      ]
+    },
+    {
+      "code": "SP84",
+      "name": "The Sims 4 Clueless Capsule Kit",
+      "type": "kit",
+      "size": 41029603,
+      "sha256": "6808ed4ee9b4c245c20fba95f213eef8f219fb1a3bf09b9d4c54b711219024cb",
+      "urls": [
+        "https://gofile.io/d/SM7HSxz4"
+      ],
+      "installDirs": [
+        "SP84"
       ]
     }
   ]
