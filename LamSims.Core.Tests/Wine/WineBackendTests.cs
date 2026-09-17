@@ -103,6 +103,22 @@ public sealed class WineBackendFixture : IDisposable
         Backend.RemoveAsync(target, new SyncProgress<UnlockerProgress>(Reports.Add),
                             CancellationToken.None);
 
+    /// <summary>
+    /// A backend over an empty directory, with no prefix laid out and nothing detected. For the
+    /// one assertion that must run on every platform: the fixture proper builds a Wine prefix on
+    /// disk and is Linux-only, which is why the platform gate itself had no ungated test.
+    /// </summary>
+    public static WinePrefixUnlockerBackend Bare(string root)
+    {
+        var app = new AppPaths(Path.Combine(root, "app"));
+        app.EnsureCreated();
+
+        return new WinePrefixUnlockerBackend(
+            new LauncherHomes(Path.Combine(root, "home"), null, null, null), app,
+            new FakeDelayProvider(), new FakeWineProcesses(), "playday", () => null, new Notes(),
+            NullLogSink.Instance);
+    }
+
     public string ConfigDirectory =>
         Path.Combine(Prefix.DriveC, "users", "playday", "AppData", "Roaming", "anadius",
                      "EA DLC Unlocker v2");
@@ -174,13 +190,18 @@ public class WineBackendDetectionTests
             Assert.Empty(await ea.Backend.DetectTargetsAsync(CancellationToken.None));
             Assert.True(ea.Log.Logged("is 32-bit and the EA app needs a 64-bit prefix.",
                                       LogSeverity.Warning),
-                        string.Join("\n", ea.Notes.Lines));
+                        string.Join("\n", ea.Log.Texts));
         }
 
         using var origin = new WineBackendFixture(ClientKind.Origin, arch: "win32");
 
         Assert.Single(await origin.Backend.DetectTargetsAsync(CancellationToken.None));
-        Assert.False(origin.Notes.Any("32-bit"), string.Join("\n", origin.Notes.Lines));
+
+        // The LOG, not the notes: the backend writes this diagnostic with _log.Write, and nothing
+        // under Unlocking/Wine ever writes "32-bit" to the notes channel. Asserted against the
+        // notes, this could not fail, and a backend that kept the Origin target while also warning
+        // about it would pass.
+        Assert.False(origin.Log.Logged("32-bit"), string.Join("\n", origin.Log.Texts));
     }
 
     [LinuxFact]
@@ -229,8 +250,31 @@ public class WineBackendDetectionTests
     {
         using var f = new WineBackendFixture();
 
-        Assert.Equal(OperatingSystem.IsLinux(), f.Backend.IsSupported);
+        // The constant this attribute guarantees, not OperatingSystem.IsLinux(): under [LinuxFact]
+        // both sides of that comparison are true, so it held for a property whose body was simply
+        // `true` - which would offer the backend on Windows and macOS, where the /proc liveness
+        // gate protecting a user.reg write can never fire.
+        Assert.True(f.Backend.IsSupported);
         Assert.Equal("wine-prefix", f.Backend.Id);
+    }
+
+    /// <summary>
+    /// Ungated, and without the Linux-only prefix fixture, so it runs on all three CI legs.
+    ///
+    /// It cannot fail on Linux: there OperatingSystem.IsLinux() and a hard-coded `true` agree, and
+    /// this assertion is the same shape the [LinuxFact] above used to have. Its value is on the
+    /// Windows and macOS legs, where a backend that dropped its platform gate would offer itself
+    /// for a user.reg write it cannot guard - the liveness check reads /proc, which is not there.
+    /// So a green run of this test locally proves nothing; a green run of the matrix does.
+    /// </summary>
+    [Fact]
+    public void The_backend_reports_support_for_this_platform_only()
+    {
+        using var temp = new TempDir();
+
+        var backend = WineBackendFixture.Bare(temp.Path);
+
+        Assert.Equal(OperatingSystem.IsLinux(), backend.IsSupported);
     }
 }
 

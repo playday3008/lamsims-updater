@@ -246,7 +246,10 @@ public class EaClientInstallTests
 
         Assert.NotEmpty(f.Reports);
         Assert.All(f.Reports, r => Assert.Equal(total, r.Total));
-        Assert.Equal(Enumerable.Range(0, f.Reports.Count), f.Reports.Select(r => r.Completed));
+        // Range over TOTAL, not over the reports' own count: built from f.Reports.Count this
+        // compared a sequence with itself, so an install that emitted nine of its eleven steps
+        // passed. Total is a constant of the run, so it is the only side that can disagree.
+        Assert.Equal(Enumerable.Range(0, total + 1), f.Reports.Select(r => r.Completed));
     }
 
     // Upstream deleted its source DLL before staging it, so the staged copy never happened. The

@@ -55,8 +55,14 @@ public class ThemeSweepTests
         Assert.True(dangling.Count == 0, string.Join(Environment.NewLine, dangling));
     }
 
+    /// <summary>
+    /// Named for what it does: it reads the STYLES and proves the sweep above had references to
+    /// examine. It says nothing about what the palette defines - the old name claimed that, and a
+    /// reader who believed it could weaken the dangling-reference check on the strength of a
+    /// guarantee this never made.
+    /// </summary>
     [Fact]
-    public void The_palette_defines_the_brushes_the_styles_use()
+    public void The_style_sweep_is_not_reading_an_empty_file()
     {
         // Guards the check above against passing vacuously. Its unique catch is the regex silently
         // ceasing to match while the file stays embedded; a styles file that stopped being

@@ -1,3 +1,5 @@
+using System;
+using System.Globalization;
 using System.Linq;
 using Avalonia.Controls;
 using Avalonia.Media;
@@ -93,6 +95,15 @@ public class LogRegionTests
 
         Assert.Contains(texts, t => t is not null && t.Contains("Fetching https://host.example.invalid"));
         Assert.Contains("EP01", texts);
+
+        // The TIME, which the name claims and nothing asserted: the Time TextBlock could be deleted
+        // or repointed at another property and every test in both suites stayed green, leaving the
+        // shipped log with no timestamps - the field someone copying the log to report a bug needs
+        // most. Derived from the host's fixed clock rather than written as a literal, and rendered
+        // in local time because that is what the view formats.
+        var written = new DateTimeOffset(2026, 8, 18, 12, 0, 0, TimeSpan.Zero).ToLocalTime();
+
+        Assert.Contains(written.ToString("HH:mm:ss", CultureInfo.InvariantCulture), texts);
     }
 
     /// <summary>

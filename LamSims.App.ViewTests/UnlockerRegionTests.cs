@@ -333,10 +333,17 @@ public class UnlockerRegionTests
         host.Pump();
         Assert.All(warnings, w => Assert.False(w.IsVisible));
 
-        // Nothing else in the suite executes or even looks for the two selection buttons, so they
-        // could be dropped from the XAML in silence.
-        Assert.NotNull(ViewHost.Find<Button>(host.Window,
-            b => b.Content as string == "Select all"));
-        Assert.NotNull(ViewHost.Find<Button>(host.Window, b => b.Content as string == "Select none"));
+        // Rooted at the REGION and matched on the command, not on the window and the caption: the
+        // pack list carries its own "Select all" button, so a window-wide search for that caption
+        // is satisfied by the wrong control and the unlocker's own button could be deleted in
+        // silence. Two different view models own the two commands, which is what makes the
+        // identity check decisive.
+        var region = UnlockerExpander(host);
+
+        var all = ViewHost.Find<Button>(region, b => b.Content as string == "Select all");
+        var none = ViewHost.Find<Button>(region, b => b.Content as string == "Select none");
+
+        Assert.Same(host.ViewModel.Unlocker.SelectAllCommand, all.Command);
+        Assert.Same(host.ViewModel.Unlocker.SelectNoneCommand, none.Command);
     }
 }

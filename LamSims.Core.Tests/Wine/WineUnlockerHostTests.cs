@@ -213,36 +213,46 @@ public class WineHostTests
     }
 
     /// <summary>
-    /// A REG_EXPAND_SZ ClientPath under a non-primary user in a multi-user prefix must expand
-    /// with that user's own directory name, not the alphabetically first one. If the expansion is
-    /// only against PrimaryUserDirectory, the path will not exist for a client installed under
-    /// the secondary user. This test uses %ProgramFiles% which is supported, creating the client
-    /// only in one user's directory to force the multi-user expansion logic to work correctly.
+    /// A REG_EXPAND_SZ ClientPath under a non-primary user must expand with THAT user's directory,
+    /// not the alphabetically first one, or a client installed under the second user resolves to a
+    /// path that does not exist and reads as absent.
+    ///
+    /// %LOCALAPPDATA%, deliberately, and not %ProgramFiles%: only the user-dependent variables
+    /// expand differently per user, so with %ProgramFiles% every candidate is the same string and
+    /// the test held for an implementation that expanded against the primary user alone.
+    ///
+    /// Opened as a user that is NOT one of the directories, which is what makes UserDirectories
+    /// return more than one candidate: asked for a name that matches, it returns that single
+    /// directory and the per-user loop has nothing to iterate. The client is placed only under
+    /// "beta", so an expansion that tries just the first candidate resolves to a file that is not
+    /// there.
     /// </summary>
     [LinuxFact]
     public void An_expand_string_path_under_a_second_user_expands_correctly()
     {
+        // "alpha" sorts before "beta", so a first-candidate-only expansion picks alpha and misses.
         using var f = new PrefixFixture();
-        // Create a second user named "beta" so the fixture has multiple users.
-        // WindowsUserDirectories will include both the default user and "beta".
+        f.AddUser("alpha");
         f.AddUser("beta");
 
-        // Add the EA Desktop client for the second user only.
-        f.AddClient(ClientKind.EaApp, EaClientPath);
+        // Under beta's own AppData, which is what %LOCALAPPDATA% has to resolve to.
+        var client = f.AddClient(
+            ClientKind.EaApp,
+            @"C:\users\beta\AppData\Local\Electronic Arts\EA Desktop\EADesktop.exe");
 
-        // Register with a REG_EXPAND_SZ path using %ProgramFiles%.
-        // This is supported by WineRegistryFile.Expand.
         f.WriteUserReg("WINE REGISTRY Version 2\n#arch=win64\n\n"
                        + "[Software\\\\Electronic Arts\\\\EA Desktop] 0\n"
-                       + "\"ClientPath\"=str(2):\"%ProgramFiles%\\\\Electronic Arts\\\\EA Desktop"
+                       + "\"ClientPath\"=str(2):\"%LOCALAPPDATA%\\\\Electronic Arts"
                        + "\\\\EA Desktop\\\\EADesktop.exe\"\n");
 
-        // Open the prefix as the second user (beta).
-        // The expansion should work correctly even though "beta" is not the primary user.
-        var value = new WineUnlockerHost(f.Open(null, "beta")).ReadClientPath(ClientRegistryKey.EaDesktop);
+        var value = new WineUnlockerHost(f.Open(null, "nobody")).ReadClientPath(ClientRegistryKey.EaDesktop);
 
         Assert.NotNull(value);
-        Assert.True(File.Exists(value));
+        Assert.True(File.Exists(value), $"'{value}' does not exist");
+
+        // Names beta's directory, not the default user's: File.Exists alone would also hold for an
+        // implementation that happened to find a file under another user.
+        Assert.Equal(Path.Combine(client, "EADesktop.exe"), value);
     }
 
     /// <summary>
