@@ -1,5 +1,6 @@
 <Window xmlns="https://github.com/avaloniaui"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:LamSims.App"
         x:Class="LamSims.App.MainWindow"
         Width="900" Height="640"
         MinWidth="760" MinHeight="560"
@@ -9,7 +10,29 @@
     <!-- While shutdown waits for the runner the content stays visible and goes
          inert. Bound on the three content blocks rather than on the DockPanel so the stopping
          notice below is not dimmed along with the controls it explains. -->
-    <StackPanel DockPanel.Dock="Top" Spacing="6" IsEnabled="{Binding !IsShuttingDown}">
+    <!-- The region is bounded as a WHOLE, and this is the outermost of three nested scrolls
+         rather than a replacement for the two inside it. Those bound the two lists that GROW
+         without limit - the unlocker's targets, the banner run - and they are what keeps the game
+         folder and the catalog box in place when those lists get long. Neither bounds the region:
+         a section's FIXED parts (two button rows, the detection notes, the progress row) sit
+         outside both caps, so one expanded section still took the window.
+
+         Measured, not chosen. With the DLC Unlocker open the region wants 429px whatever the
+         window height, and it is docked to the top of a DockPanel, so the pack list and the log
+         divide what is left: 69px each at the 560 minimum and 149 at the 640 default, against the
+         100px floor the layout tests hold the log to. A literal MaxHeight cannot fix that - below
+         429 it clips a section even at 1000px where there is room, above it, it is no cap at all
+         at 560. So the cap is a share of the window and moves with it: 0.62 leaves the content
+         213px at 560 and 243 at 640, and stops binding entirely past about 690px, where the region
+         fits unaided and this scroller never appears.
+
+         AllowAutoHide is off for the same reason it is off on the target list: Fluent OVERLAYS a
+         scrollbar that can hide, and here it would land on the Browse buttons down the right edge. -->
+    <ScrollViewer DockPanel.Dock="Top" VerticalScrollBarVisibility="Auto"
+                  HorizontalScrollBarVisibility="Disabled" AllowAutoHide="False"
+                  MaxHeight="{Binding $parent[Window].Bounds.Height,
+                              Converter={x:Static local:Ratio.Of}, ConverterParameter=0.62}">
+    <StackPanel Spacing="6" IsEnabled="{Binding !IsShuttingDown}">
       <!-- 128, and the same 128 in all five label grids below, which is what keeps the labels in
            one column down the window. Measured under Skia rather than chosen: the longest label,
            "Catalog (in use):", wants 109px in the bundled Inter, and the 110 this used to be left it
@@ -224,6 +247,7 @@
         <Button Grid.Column="4" Content="Scan" Command="{Binding ScanCommand}" />
       </Grid>
     </StackPanel>
+    </ScrollViewer>
 
     <Grid DockPanel.Dock="Bottom" ColumnDefinitions="*,Auto,Auto,Auto,Auto" ColumnSpacing="8" Margin="0,8,0,0"
           IsEnabled="{Binding !IsShuttingDown}">

@@ -1,11 +1,13 @@
 using System;
 using System.Linq;
+using System.Threading;
 using Xunit;
 using Avalonia;
 using Avalonia.Controls;
 using Avalonia.Headless.XUnit;
 using Avalonia.VisualTree;
 using LamSims.App.ViewModels;
+using LamSims.Core.Unlocking;
 
 namespace LamSims.App.ViewTests;
 
@@ -23,11 +25,13 @@ public class WindowLayoutTests
     }
 
     /// <summary>
-    /// The settings block: the StackPanel docked to the top of the window's DockPanel, holding the
-    /// game folder, the catalog box, both expanders, the banners and the Scan row.
+    /// The settings block: the StackPanel holding the game folder, the catalog box, both
+    /// expanders, the banners and the Scan row. Found through the scroller docked to the top of
+    /// the window's DockPanel, which bounds the region's share of the window.
     /// </summary>
     private static StackPanel SettingsRegion(ViewHost host) =>
-        ViewHost.Find<DockPanel>(host.Window).Children.OfType<StackPanel>().First();
+        (StackPanel)ViewHost.Find<DockPanel>(host.Window).Children
+            .OfType<ScrollViewer>().First().Content!;
 
     /// <summary>
     /// Fluent's Expander theme leaves HorizontalAlignment at Left, which makes an expander size to
@@ -265,4 +269,92 @@ public class WindowLayoutTests
         Assert.True(panel.Children.IndexOf(empty) > panel.Children.IndexOf(list),
             "the empty-state label must be declared after the ListBox or the list paints over it");
     }
+    /// <summary>
+    /// A supported backend with three targets, which is what a Linux machine with a couple of
+    /// launchers reports. ViewHost registers no backend by default, so the DLC Unlocker section
+    /// hides itself and every other test in this file measures a window that cannot show it - which
+    /// is why the region overflowing with that section open went uncaught.
+    /// </summary>
+    private static ViewHost ShowWithUnlocker()
+    {
+        var backend = new RecordingUnlockerBackend
+        {
+            Targets = Enumerable.Range(0, 3)
+                .Select(i => new UnlockerTarget(
+                    "test-backend", ClientKind.EaApp, $"/clients/ea{i}", $"EA app {i}"))
+                .ToArray(),
+        };
+
+        var host = ViewHost.Show([], new UnlockerService([backend]), new FakeUnlockerHost(),
+            new StubUnlockerAssets());
+
+        var refresh = host.ViewModel.Unlocker.RefreshAsync(CancellationToken.None);
+        Assert.True(ViewHost.PumpUntil(() => refresh.IsCompleted), "detection never finished");
+
+        return host;
+    }
+
+    /// <summary>
+    /// The settings region is docked to the top of a DockPanel, so it takes its full desired
+    /// height and the pack list and the log divide whatever is left. With the DLC Unlocker open
+    /// the region wants 429px at every window size, which left the two of them 69px each at the
+    /// declared 560 minimum and 149 at the 640 default - the log "on screen in name only" that
+    /// AssertTheLogIsOnScreen exists to reject.
+    ///
+    /// The scroller around the region caps it at a share of the window instead, so the content
+    /// below keeps a floor at every supported size.
+    ///
+    /// Driven at the MINIMUM rather than the default: the default is where the bug was reported,
+    /// but the minimum is the worst case the window promises to support, and a fix measured only at
+    /// 640 leaves 560 broken.
+    /// </summary>
+    [AvaloniaFact]
+    public void The_unlocker_section_cannot_crowd_out_the_pack_list_at_the_minimum_size()
+    {
+        using var host = ShowWithUnlocker();
+
+        host.Window.Width = host.Window.MinWidth;
+        host.Window.Height = host.Window.MinHeight;
+        ViewHost.Find<Expander>(host.Window, e => e.Name == "UnlockerSection").IsExpanded = true;
+        host.Pump();
+
+        AssertTheLogIsOnScreen(host);
+
+        // The pack list too, not only the log: they share the fill row, and a fix that rescued one
+        // by starving the other would pass an assertion naming just the log.
+        var list = ViewHost.Find<ListBox>(host.Window);
+        Assert.True(list.Bounds.Height > 100d,
+            $"the pack list was arranged {list.Bounds.Height}px tall with the unlocker open");
+
+        // The section is still reachable, which is what makes this a cap rather than a clip: its
+        // own controls scroll within the region instead of pushing the window's content out.
+        var scroller = ViewHost.Find<DockPanel>(host.Window).Children.OfType<ScrollViewer>().First();
+        Assert.True(scroller.Extent.Height > scroller.Viewport.Height,
+            "the region fits its cap, so this window never exercised the scroll");
+    }
+
+    /// <summary>
+    /// The cap is a share of the window, so it must stop binding once the window is tall enough to
+    /// hold the region outright. A literal MaxHeight could not: below the region's 429px it would
+    /// clip a section even where there is ample room.
+    /// </summary>
+    [AvaloniaFact]
+    public void A_tall_window_shows_the_whole_settings_region_unscrolled()
+    {
+        using var host = ShowWithUnlocker();
+
+        host.Window.Width = 900;
+        host.Window.Height = 1000;
+        ViewHost.Find<Expander>(host.Window, e => e.Name == "UnlockerSection").IsExpanded = true;
+        host.Pump();
+
+        var scroller = ViewHost.Find<DockPanel>(host.Window).Children.OfType<ScrollViewer>().First();
+
+        Assert.True(scroller.Extent.Height <= scroller.Viewport.Height,
+            $"the region wanted {scroller.Extent.Height}px inside a {scroller.Viewport.Height}px "
+            + "viewport, so it scrolls in a window with room to show it whole");
+
+        AssertTheLogIsOnScreen(host);
+    }
+
 }

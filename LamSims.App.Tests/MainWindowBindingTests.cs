@@ -1,4 +1,5 @@
 using System;
+using Avalonia;
 using System.Collections.Generic;
 using System.Linq;
 using Xunit;
@@ -223,6 +224,18 @@ public class MainWindowBindingTests
         // `{Binding}` binds the whole DataContext and names nothing to resolve.
         if (path is null) return;
 
+        // A $parent binding reaches one of two different things, and confusing them is the bug
+        // this branch exists to avoid. With `.DataContext.` in the path it walks to an ancestor's
+        // VIEW MODEL, which is resolved against `parent`. Without it, it reads a property of the
+        // ancestor CONTROL itself - $parent[Window].Bounds.Height - which is a control member and
+        // has no bearing on any view model.
+        if (path.StartsWith("$parent[", StringComparison.Ordinal)
+            && ParentPath(path) is null)
+        {
+            CheckControlPath(element, attribute, path, unresolved);
+            return;
+        }
+
         var (target, targetName) = path.StartsWith("$parent[", StringComparison.Ordinal)
             ? (parent, "the parent DataContext")
             : (context, context.Name);
@@ -236,6 +249,63 @@ public class MainWindowBindingTests
             unresolved.Add(
                 $"{element.Name.LocalName}.{attribute.Name.LocalName}={value}: "
                 + $"'{member}' is not a public member of {targetName}");
+        }
+    }
+
+    /// <summary>
+    /// A binding onto an ancestor CONTROL's own property, such as
+    /// <c>$parent[Window].Bounds.Height</c>. The control type named in the brackets must exist and
+    /// the property chain must resolve on it, so a typo in either fails here rather than binding
+    /// to null at runtime, which Avalonia reports nowhere.
+    /// </summary>
+    private static void CheckControlPath(
+        XElement element, XAttribute attribute, string path, List<string> unresolved)
+    {
+        var match = Regex.Match(path, @"^\$parent\[(?<type>[^\]]+)\]\.(?<chain>[A-Za-z_][A-Za-z0-9_.]*)$");
+
+        if (!match.Success)
+        {
+            unresolved.Add($"{element.Name.LocalName}.{attribute.Name.LocalName}={attribute.Value}: "
+                + "this $parent binding is in a form this sweep does not recognise");
+            return;
+        }
+
+        // Avalonia's own control types, looked up by the name the markup uses. Searched across the
+        // Avalonia assemblies rather than hard-coded, so this keeps working for any control.
+        var typeName = match.Groups["type"].Value;
+        var controlType = AppDomain.CurrentDomain.GetAssemblies()
+            .Where(a => a.GetName().Name?.StartsWith("Avalonia", StringComparison.Ordinal) == true)
+            .SelectMany(a => { try { return a.GetTypes(); } catch { return []; } })
+            .FirstOrDefault(t => t.Name == typeName && typeof(AvaloniaObject).IsAssignableFrom(t));
+
+        if (controlType is null)
+        {
+            unresolved.Add($"{element.Name.LocalName}.{attribute.Name.LocalName}={attribute.Value}: "
+                + $"'{typeName}' names no Avalonia control type");
+            return;
+        }
+
+        // Every step of the chain, not just the first: Bounds.Height is wrong in two different
+        // ways if either half is misspelled.
+        var current = controlType;
+
+        foreach (var step in match.Groups["chain"].Value.Split('.'))
+        {
+            var member = Member(current, step);
+
+            if (member is null)
+            {
+                unresolved.Add($"{element.Name.LocalName}.{attribute.Name.LocalName}={attribute.Value}: "
+                    + $"'{step}' is not a public member of {current.Name}");
+                return;
+            }
+
+            current = member switch
+            {
+                PropertyInfo property => property.PropertyType,
+                FieldInfo field => field.FieldType,
+                _ => current,
+            };
         }
     }
 
